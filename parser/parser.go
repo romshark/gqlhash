@@ -758,6 +758,7 @@ func ReadStringBlockAfterQuotes(s []byte) (value []byte, suffix []byte, err erro
 			if i+2 < len(s) && s[i+1] == '"' && s[i+2] == '"' {
 				return s[:i+3], s[i+3:], nil
 			}
+			i += 1
 		case '\\':
 			// EscapedCharacter (https://spec.graphql.org/October2021/#EscapedCharacter).
 			if i+1 >= len(s) {
