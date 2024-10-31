@@ -98,7 +98,7 @@ func TestReadDefinition(t *testing.T) {
 	f(t, suffix, nil, "{ anonymousOperation }"+suffix)
 	f(t, suffix, nil, `fragment UserInfo on User {
 		__typename
-		... on Admin { priviliges { id name } }
+		... on Admin { privileges { id name } }
 		... on Customer { id email }
 	}`+suffix)
 	f(t, suffix, nil, "mutation {likeStory(storyID: 12345) {story {likeCount}}}"+suffix)
