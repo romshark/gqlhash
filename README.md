@@ -44,25 +44,23 @@ However, the order and structure of the document must remain the same.
 
 ## Performance
 
-gqlhash with SHA1 has just about ~5x the performance overhead compared to direct SHA1.
+gqlhash with SHA1 has just about ~5x the performance overhead compared to direct SHA1
+and ~13x faster than parsing the query with
+[vektah/gqlparser/v2](https://github.com/vektah/gqlparser).
 See benchmark results below.
 
 <details>
 
 ```
-go test -bench BenchmarkReferenceSHA1 -benchmem -count 3
 goos: darwin
 goarch: arm64
 pkg: github.com/romshark/gqlhash
 cpu: Apple M1 Max
-BenchmarkReferenceSHA1/sha1_direct-10            6103970               178.1 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/sha1_direct-10            6706924               178.3 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/sha1_direct-10            6722865               178.0 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/sha1_gqlhash-10           1358607               883.8 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/sha1_gqlhash-10           1356372               886.0 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/sha1_gqlhash-10           1358155               884.5 ns/op             0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/direct-10                 6124714               178.4 ns/op             0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/gqlhash-10                1359817               882.4 ns/op             0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/vektah-10                   96661             12014 ns/op           13873 B/op        261 allocs/op
 PASS
-ok      github.com/romshark/gqlhash     10.522s
+ok      github.com/romshark/gqlhash     4.862s
 ```
 
 </details>
