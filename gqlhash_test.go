@@ -204,7 +204,7 @@ func TestHash(t *testing.T) {
 		t.Run(set.Name, func(t *testing.T) {
 			h := new(MockHash)
 			for _, input := range set.Inputs {
-				if _, err := gqlhash.AppendQueryHash(nil, h, input); err != nil {
+				if _, err := gqlhash.AppendQueryHash(nil, h, []byte(input)); err != nil {
 					t.Errorf("unexpected error: %v; input: %q", err, input)
 				}
 				if slices.Compare(set.ExpectRecords, h.Records) != 0 {
@@ -227,7 +227,7 @@ func MakeRecords(v ...any) []string {
 func TestCompare(t *testing.T) {
 	f := func(t *testing.T, expect error, a, b string) {
 		t.Helper()
-		received := gqlhash.Compare(sha1.New(), a, b)
+		received := gqlhash.Compare(sha1.New(), []byte(a), []byte(b))
 		if expect != received {
 			t.Errorf("expected %v; received: %v", expect, received)
 		}
@@ -239,41 +239,90 @@ func TestCompare(t *testing.T) {
 }
 
 func TestCompareErr(t *testing.T) {
-	received := gqlhash.Compare(sha1.New(), ``, `{x}`)
+	received := gqlhash.Compare(sha1.New(), []byte(``), []byte(`{x}`))
 	if received != gqlhash.ErrUnexpectedEOF {
 		t.Errorf("expected %v; received: %v", gqlhash.ErrUnexpectedEOF, received)
 	}
 
-	received = gqlhash.Compare(sha1.New(), `{x}`, ``)
+	received = gqlhash.Compare(sha1.New(), []byte(`{x}`), []byte(``))
 	if received != gqlhash.ErrUnexpectedEOF {
 		t.Errorf("expected %v; received: %v", gqlhash.ErrUnexpectedEOF, received)
 	}
 }
 
-func BenchmarkCompare(b *testing.B) {
-	varA := `
-		query {  # First comment.
-			x {
-				... on A {
-					a # Second comment.
-				}
-				...F
-				... @ include ( if : true ) {
-					i
-				}
+var benchQuery = `
+	query {  # First comment.
+		x {
+			bar
+			bazz
+			... on A {
+				a # Second comment.
+				withArgs(x: {
+					quiteALongArgumentName: "foo bar bazz"
+					unicode: "こんにちは"
+					escapedUnicodeBlockString: """\u3053\u3093\u306b\u3061\u306f"""
+				})
+			}
+			...F
+			... @ include ( if : true ) {
+				i
 			}
 		}
-		# Third comment.
-		fragment F on X @dir {
-			f
-		}
-	`
-	varB := `{x{...on A{a},...F,...@include(if:true){i}}},fragment F on X@dir{f}`
+	}
+	# Third comment.
+	fragment F on X @dir {
+		f
+	}
+`
+
+var benchQueryMinified = `{x{bar,bazz,...on A{a,withArgs(x:{` +
+	`quiteALongArgumentName:"foo bar bazz",unicode:"こんにちは",` +
+	`escapedUnicodeBlockString:"""\u3053\u3093\u306b\u3061\u306f"""})},` +
+	`...F,...@include(if:true){i}}},fragment F on X@dir{f}`
+
+func BenchmarkCompare(b *testing.B) {
+	varA := []byte(benchQuery)
+	varB := []byte(benchQueryMinified)
 	h := sha1.New()
 	b.ResetTimer()
-	for range b.N {
-		if err := gqlhash.Compare(h, varA, varB); err != nil {
-			b.Fatal(err)
+
+	b.Run("alloc_buffer", func(b *testing.B) {
+		for range b.N {
+			if err := gqlhash.Compare(h, varA, varB); err != nil {
+				b.Fatal(err)
+			}
 		}
-	}
+	})
+
+	b.Run("reuse_buffer", func(b *testing.B) {
+		buf := make([]byte, 0, h.Size()*2)
+		for range b.N {
+			if err := gqlhash.CompareWithBuffer(buf, h, varA, varB); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkReferenceSHA1(b *testing.B) {
+	q := []byte(benchQuery)
+	hashBuffer := make([]byte, 64)
+	h := sha1.New()
+	b.ResetTimer()
+
+	b.Run("sha1_direct", func(b *testing.B) {
+		for range b.N {
+			hashBuffer = hashBuffer[:0]
+			h.Reset()
+			_, _ = h.Write(q)
+			hashBuffer = h.Sum(hashBuffer)
+		}
+	})
+
+	b.Run("sha1_gqlhash", func(b *testing.B) {
+		for range b.N {
+			hashBuffer = hashBuffer[:0]
+			gqlhash.AppendQueryHash(hashBuffer, h, q)
+		}
+	})
 }

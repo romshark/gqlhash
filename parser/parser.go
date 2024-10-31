@@ -60,7 +60,7 @@ var (
 //
 //   - https://spec.graphql.org/October2021/#Document
 //   - https://spec.graphql.org/October2021/#ExecutableDefinition
-func ReadDocument[S string | []byte](h Hash, s S) (err error) {
+func ReadDocument(h Hash, s []byte) (err error) {
 	s = SkipIgnorables(s)
 	if err = ExpectNoEOF(s); err != nil {
 		return err
@@ -80,7 +80,7 @@ func ReadDocument[S string | []byte](h Hash, s S) (err error) {
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#Definition
-func ReadDefinition[S string | []byte](h Hash, s S) (suffix S, err error) {
+func ReadDefinition(h Hash, s []byte) (suffix []byte, err error) {
 	if err = ExpectNoEOF(s); err != nil {
 		return s, err
 	}
@@ -97,12 +97,12 @@ func ReadDefinition[S string | []byte](h Hash, s S) (suffix S, err error) {
 		s = SkipIgnorables(s)
 
 		// FragmentName (https://spec.graphql.org/October2021/#FragmentName).
-		var name S
+		var name []byte
 		if name, suffix, err = ReadName(s); err != nil {
 			return suffix, err
 		}
 		if string(name) == "on" {
-			return s, ErrUnexpectedToken // Return suffix as s.
+			return s, ErrUnexpectedToken // Return suffix as []byte.
 		}
 
 		// TypeCondition (https://spec.graphql.org/October2021/#TypeCondition).
@@ -111,7 +111,7 @@ func ReadDefinition[S string | []byte](h Hash, s S) (suffix S, err error) {
 			return suffix, err
 		}
 		suffix = SkipIgnorables(suffix)
-		var typeDec S
+		var typeDec []byte
 		if typeDec, suffix, err = ReadName(suffix); err != nil {
 			return suffix, err
 		}
@@ -138,7 +138,7 @@ func ReadDefinition[S string | []byte](h Hash, s S) (suffix S, err error) {
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#sec-Language.Operations
-func ReadOperationDefinition[S string | []byte](h Hash, s S) (suffix S, err error) {
+func ReadOperationDefinition(h Hash, s []byte) (suffix []byte, err error) {
 	if _, s, err = ReadOperationType(h, s); err != nil {
 		return s, err
 	}
@@ -149,7 +149,7 @@ func ReadOperationDefinition[S string | []byte](h Hash, s S) (suffix S, err erro
 
 	// Optional name.
 	if IsNameStart(s[0]) {
-		var name S
+		var name []byte
 		if name, s, err = ReadName(s); err != nil {
 			return s, err
 		}
@@ -186,7 +186,7 @@ func ReadOperationDefinition[S string | []byte](h Hash, s S) (suffix S, err erro
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#sec-Selection-Sets
-func ReadSelectionSet[S string | []byte](h Hash, s S) (suffix S, err error) {
+func ReadSelectionSet(h Hash, s []byte) (suffix []byte, err error) {
 	if s, err = ReadToken(s, "{"); err != nil {
 		return s, err
 	}
@@ -206,7 +206,7 @@ func ReadSelectionSet[S string | []byte](h Hash, s S) (suffix S, err error) {
 
 				// Type condition (https://spec.graphql.org/October2021/#TypeCondition).
 				s = SkipIgnorables(s[3:])
-				var typeName S
+				var typeName []byte
 				if typeName, s, err = ReadName(s); err != nil {
 					return s, err
 				}
@@ -230,7 +230,7 @@ func ReadSelectionSet[S string | []byte](h Hash, s S) (suffix S, err error) {
 				// Fragment spread (https://spec.graphql.org/October2021/#FragmentSpread).
 
 				// Fragment name (https://spec.graphql.org/October2021/#FragmentName).
-				var fragName S
+				var fragName []byte
 				if fragName, s, err = ReadName(s); err != nil {
 					return s, err
 				}
@@ -257,7 +257,7 @@ func ReadSelectionSet[S string | []byte](h Hash, s S) (suffix S, err error) {
 			}
 		} else {
 			// Field (https://spec.graphql.org/October2021/#Field).
-			var name S
+			var name []byte
 			if name, s, err = ReadName(s); err != nil { // Name or alias.
 				return s, err
 			}
@@ -271,7 +271,7 @@ func ReadSelectionSet[S string | []byte](h Hash, s S) (suffix S, err error) {
 			if s[0] == ':' {
 				// The name above was an alias.
 				s = SkipIgnorables(s[1:])
-				var aliased S
+				var aliased []byte
 				if aliased, s, err = ReadName(s); err != nil { // Actual field name.
 					return s, err
 				}
@@ -325,13 +325,13 @@ func ReadSelectionSet[S string | []byte](h Hash, s S) (suffix S, err error) {
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#VariableDefinitions
-func ReadVariableDefinitionsAfterParenthesis[S string | []byte](h Hash, s S) (suffix S, err error) {
+func ReadVariableDefinitionsAfterParenthesis(h Hash, s []byte) (suffix []byte, err error) {
 	for {
 		if s[0] != '$' {
 			return s, ErrUnexpectedToken
 		}
 		s = SkipIgnorables(s[1:])
-		var name S
+		var name []byte
 		if name, s, err = ReadName(s); err != nil {
 			return s, nil
 		}
@@ -345,7 +345,7 @@ func ReadVariableDefinitionsAfterParenthesis[S string | []byte](h Hash, s S) (su
 
 		// Type.
 		s = SkipIgnorables(s)
-		var typeDec S
+		var typeDec []byte
 		if typeDec, _, _, s, err = ReadType(s); err != nil {
 			return s, err
 		}
@@ -388,14 +388,14 @@ func ReadVariableDefinitionsAfterParenthesis[S string | []byte](h Hash, s S) (su
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#sec-Language.Directives
-func ReadDirectives[S string | []byte](h Hash, s S) (directives, suffix S, err error) {
+func ReadDirectives(h Hash, s []byte) (directives, suffix []byte, err error) {
 	suffix = s
 	for len(suffix) > 0 {
 		if suffix[0] != '@' {
 			break
 		}
 		suffix = SkipIgnorables(suffix[1:])
-		var name S
+		var name []byte
 		if name, suffix, err = ReadName(suffix); err != nil {
 			return directives, suffix, err
 		}
@@ -420,14 +420,14 @@ func ReadDirectives[S string | []byte](h Hash, s S) (directives, suffix S, err e
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#Arguments
-func ReadArguments[S string | []byte](h Hash, s S) (arguments, suffix S, err error) {
+func ReadArguments(h Hash, s []byte) (arguments, suffix []byte, err error) {
 	if suffix, err = ReadToken(s, "("); err != nil {
 		return arguments, suffix, err
 	}
 	suffix = s[1:]
 	suffix = SkipIgnorables(suffix)
 	for {
-		var name S
+		var name []byte
 		if name, suffix, err = ReadName(suffix); err != nil {
 			return arguments, suffix, err
 		}
@@ -456,8 +456,8 @@ func ReadArguments[S string | []byte](h Hash, s S) (arguments, suffix S, err err
 	return s[:len(s)-len(suffix)], suffix, nil
 }
 
-// ReadToken expects token to be prefix of s and returns s the token trimmed.
-func ReadToken[S string | []byte](s S, token string) (suffix S, err error) {
+// ReadToken expects token to be prefix of s and returns []byte the token trimmed.
+func ReadToken(s []byte, token string) (suffix []byte, err error) {
 	if err = ExpectNoEOF(s); err != nil {
 		return s, err
 	}
@@ -471,7 +471,7 @@ func ReadToken[S string | []byte](s S, token string) (suffix S, err error) {
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#Type
-func ReadType[S string | []byte](s S) (typeDef S, nullable, array bool, suffix S, err error) {
+func ReadType(s []byte) (typeDef []byte, nullable, array bool, suffix []byte, err error) {
 	suffix, nullable = s, true
 	if err = ExpectNoEOF(suffix); err != nil {
 		return typeDef, nullable, array, suffix, err
@@ -534,8 +534,8 @@ const (
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#Value
-func ReadValue[S string | []byte](h Hash, s S) (
-	value S, valueType ValueType, suffix S, err error,
+func ReadValue(h Hash, s []byte) (
+	value []byte, valueType ValueType, suffix []byte, err error,
 ) {
 	if err = ExpectNoEOF(s); err != nil {
 		return value, valueType, s, err
@@ -637,7 +637,7 @@ func ReadValue[S string | []byte](h Hash, s S) (
 		}
 		for len(suffix) > 0 {
 			// ObjectField (https://spec.graphql.org/October2021/#ObjectField).
-			var name S
+			var name []byte
 			if name, suffix, err = ReadName(suffix); err != nil {
 				return value, ValueTypeInputObject, suffix, err
 			}
@@ -687,7 +687,7 @@ func ReadValue[S string | []byte](h Hash, s S) (
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#IntValue
-func ReadIntValue[S string | []byte](s S) (value S, suffix S, err error) {
+func ReadIntValue(s []byte) (value []byte, suffix []byte, err error) {
 	suffix = s
 	if suffix[0] == '-' {
 		// Negative integer.
@@ -711,13 +711,8 @@ func ReadIntValue[S string | []byte](s S) (value S, suffix S, err error) {
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#sec-String-Value
-func ReadStringLineAfterQuotes[S string | []byte](s S) (value S, suffix S, err error) {
-	offset := 0
-	for i := range string(s) {
-		i := i + offset
-		if i >= len(s) {
-			break
-		}
+func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error) {
+	for i := 0; i < len(s); {
 		switch s[i] {
 		case '"': // End of string.
 			return s[:i], s[i+1:], nil
@@ -728,7 +723,7 @@ func ReadStringLineAfterQuotes[S string | []byte](s S) (value S, suffix S, err e
 			}
 			switch s[i+1] {
 			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
-				offset++
+				i += 2
 			case 'u':
 				// EscapedUnicode (https://spec.graphql.org/October2021/#EscapedUnicode).
 				if i+5 >= len(s) {
@@ -740,10 +735,12 @@ func ReadStringLineAfterQuotes[S string | []byte](s S) (value S, suffix S, err e
 					!IsHexByte(s[i+5]) {
 					return s[:i+1], s[i+1:], ErrUnexpectedToken
 				}
-				offset += 4
+				i += 5
 			default:
 				return s, s[i:], ErrUnexpectedToken
 			}
+		default:
+			i++
 		}
 	}
 	return s, suffix, ErrUnexpectedEOF
@@ -754,13 +751,8 @@ func ReadStringLineAfterQuotes[S string | []byte](s S) (value S, suffix S, err e
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#sec-String-Value
-func ReadStringBlockAfterQuotes[S string | []byte](s S) (value S, suffix S, err error) {
-	offset := 0
-	for i := range string(s) {
-		i := i + offset
-		if i >= len(s) {
-			break
-		}
+func ReadStringBlockAfterQuotes(s []byte) (value []byte, suffix []byte, err error) {
+	for i := 0; i < len(s); {
 		switch s[i] {
 		case '"': // End of string.
 			if i+2 < len(s) && s[i+1] == '"' && s[i+2] == '"' {
@@ -773,7 +765,7 @@ func ReadStringBlockAfterQuotes[S string | []byte](s S) (value S, suffix S, err 
 			}
 			switch s[i+1] {
 			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
-				offset++
+				i += 2
 			case 'u':
 				// EscapedUnicode (https://spec.graphql.org/October2021/#EscapedUnicode).
 				if i+5 >= len(s) {
@@ -785,10 +777,12 @@ func ReadStringBlockAfterQuotes[S string | []byte](s S) (value S, suffix S, err 
 					!IsHexByte(s[i+5]) {
 					return s[:i+1], s[i+1:], ErrUnexpectedToken
 				}
-				offset += 4
+				i += 5
 			default:
 				return s, s[i:], ErrUnexpectedToken
 			}
+		default:
+			i++
 		}
 	}
 	return s, suffix, ErrUnexpectedEOF
@@ -798,7 +792,7 @@ func ReadStringBlockAfterQuotes[S string | []byte](s S) (value S, suffix S, err 
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#sec-Float-Value
-func ReadFloatEnd[S string | []byte](s S) (value S, suffix S, err error) {
+func ReadFloatEnd(s []byte) (value []byte, suffix []byte, err error) {
 	// Fractional part.
 	if len(s) > 0 && (s[0] == 'e' || s[0] == 'E') {
 		return value, s, ErrUnexpectedToken
@@ -832,8 +826,8 @@ const (
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#OperationType
-func ReadOperationType[S string | []byte](h Hash, s S) (
-	operationType OperationType, suffix S, err error,
+func ReadOperationType(h Hash, s []byte) (
+	operationType OperationType, suffix []byte, err error,
 ) {
 	if HasPrefix(s, "query") || s[0] == '{' {
 		_, _ = h.Write(HPrefQuery)
@@ -848,14 +842,14 @@ func ReadOperationType[S string | []byte](h Hash, s S) (
 	return 0, s, ErrUnexpectedToken
 }
 
-// SkipIgnorables skips over any comments, spaces, tabs, line-breaks and
-// carriage-returns it encounters and returns the s suffix.
+// SkipIgnorables []bytekips over any comments, spaces, tabs, line-breaks and
+// carriage-returns it encounters and returns the s []byteuffix.
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#sec-Line-Terminators
 //   - https://spec.graphql.org/October2021/#sec-Comments
 //   - https://spec.graphql.org/October2021/#sec-White-Space
-func SkipIgnorables[S string | []byte](s S) S {
+func SkipIgnorables(s []byte) []byte {
 	for len(s) > 0 {
 		switch s[0] {
 		case ' ', ',', '\t', '\n', '\r':
@@ -874,7 +868,7 @@ func SkipIgnorables[S string | []byte](s S) S {
 
 // ExpectNoEOF returns ErrUnexpectedEOF if s is empty,
 // otherwise returns nil.
-func ExpectNoEOF[S string | []byte](s S) error {
+func ExpectNoEOF(s []byte) error {
 	if len(s) < 1 {
 		return ErrUnexpectedEOF
 	}
@@ -883,7 +877,7 @@ func ExpectNoEOF[S string | []byte](s S) error {
 
 // HasPrefix is equivalent to strings.HasPrefix and bytes.HasPrefix
 // except that it works for both string and []byte.
-func HasPrefix[S string | []byte](s S, prefix string) bool {
+func HasPrefix(s []byte, prefix string) bool {
 	return len(s) >= len(prefix) && string(s[0:len(prefix)]) == string(prefix)
 }
 
@@ -891,7 +885,7 @@ func HasPrefix[S string | []byte](s S, prefix string) bool {
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#sec-Names
-func ReadName[S string | []byte](s S) (name, suffix S, err error) {
+func ReadName(s []byte) (name, suffix []byte, err error) {
 	if len(s) < 1 {
 		return name, suffix, ErrUnexpectedEOF
 	}

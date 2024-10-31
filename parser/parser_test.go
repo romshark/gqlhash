@@ -20,8 +20,8 @@ var _ parser.Hash = NoopHash{}
 func TestSkipIgnorables(t *testing.T) {
 	f := func(t *testing.T, expect, input string) {
 		t.Helper()
-		a := parser.SkipIgnorables(input)
-		if expect != a {
+		a := parser.SkipIgnorables([]byte(input))
+		if expect != string(a) {
 			t.Errorf("expected %q; received: %q", expect, a)
 		}
 	}
@@ -43,7 +43,7 @@ func TestSkipIgnorables(t *testing.T) {
 func TestReadDocument(t *testing.T) {
 	f := func(t *testing.T, expectErr error, input string) {
 		t.Helper()
-		err := parser.ReadDocument(NoopHash{}, input)
+		err := parser.ReadDocument(NoopHash{}, []byte(input))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
@@ -82,11 +82,11 @@ func TestReadDocument(t *testing.T) {
 func TestReadDefinition(t *testing.T) {
 	f := func(t *testing.T, expectSuffix string, expectErr error, input string) {
 		t.Helper()
-		suffix, err := parser.ReadDefinition(NoopHash{}, input)
+		suffix, err := parser.ReadDefinition(NoopHash{}, []byte(input))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
-		if expectSuffix != suffix {
+		if expectSuffix != string(suffix) {
 			t.Errorf("expected %q; received: %q", expectSuffix, suffix)
 		}
 	}
@@ -109,11 +109,11 @@ func TestReadDefinition(t *testing.T) {
 func TestReadSelectionSet(t *testing.T) {
 	f := func(t *testing.T, expectSuffix string, expectErr error, input string) {
 		t.Helper()
-		suffix, err := parser.ReadSelectionSet(NoopHash{}, input)
+		suffix, err := parser.ReadSelectionSet(NoopHash{}, []byte(input))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
-		if expectSuffix != suffix {
+		if expectSuffix != string(suffix) {
 			t.Errorf("expected %q; received: %q", expectSuffix, suffix)
 		}
 	}
@@ -146,14 +146,14 @@ func TestReadSelectionSet(t *testing.T) {
 func TestReadArguments(t *testing.T) {
 	f := func(t *testing.T, expect, expectSuffix string, expectErr error, input string) {
 		t.Helper()
-		a, suffix, err := parser.ReadArguments(NoopHash{}, input)
+		a, suffix, err := parser.ReadArguments(NoopHash{}, []byte(input))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
-		if expectSuffix != suffix {
+		if expectSuffix != string(suffix) {
 			t.Errorf("expected %q; received: %q", expectSuffix, suffix)
 		}
-		if expect != a {
+		if expect != string(a) {
 			t.Errorf("expected %q; received: %q", expect, a)
 		}
 	}
@@ -170,14 +170,14 @@ func TestReadArguments(t *testing.T) {
 func TestReadDirectives(t *testing.T) {
 	f := func(t *testing.T, expect, expectSuffix string, expectErr error, input string) {
 		t.Helper()
-		a, suffix, err := parser.ReadDirectives(NoopHash{}, input)
+		a, suffix, err := parser.ReadDirectives(NoopHash{}, []byte(input))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
-		if expectSuffix != suffix {
+		if expectSuffix != string(suffix) {
 			t.Errorf("expected %q; received: %q", expectSuffix, suffix)
 		}
-		if expect != a {
+		if expect != string(a) {
 			t.Errorf("expected %q; received: %q", expect, a)
 		}
 	}
@@ -206,7 +206,7 @@ func TestReadDirectives(t *testing.T) {
 func TestHasPrefix(t *testing.T) {
 	f := func(t *testing.T, s, prefix string) {
 		t.Helper()
-		a, e := parser.HasPrefix(s, prefix), strings.HasPrefix(s, prefix)
+		a, e := parser.HasPrefix([]byte(s), prefix), strings.HasPrefix(s, prefix)
 		if a != e {
 			t.Errorf("expected %t; received: %t", e, a)
 		}
@@ -222,14 +222,14 @@ func TestHasPrefix(t *testing.T) {
 func TestReadName(t *testing.T) {
 	f := func(t *testing.T, expectName, expectSuffix string, expectErr error, s string) {
 		t.Helper()
-		name, suffix, err := parser.ReadName(s)
+		name, suffix, err := parser.ReadName([]byte(s))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
-		if expectName != name {
+		if expectName != string(name) {
 			t.Errorf("expected name: %q; received name: %q", expectName, name)
 		}
-		if expectSuffix != suffix {
+		if expectSuffix != string(suffix) {
 			t.Errorf("expected suffix: %q; received suffix: %q", expectSuffix, suffix)
 		}
 	}
@@ -275,11 +275,11 @@ func TestReadType(t *testing.T) {
 		s string,
 	) {
 		t.Helper()
-		raw, nullable, array, suffix, err := parser.ReadType(s)
+		raw, nullable, array, suffix, err := parser.ReadType([]byte(s))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
-		if expectRaw != raw {
+		if expectRaw != string(raw) {
 			t.Errorf("expected raw: %q; received raw: %q", expectRaw, raw)
 		}
 		if expectNullable != nullable {
@@ -288,7 +288,7 @@ func TestReadType(t *testing.T) {
 		if expectArray != array {
 			t.Errorf("expected array: %t", expectArray)
 		}
-		if expectSuffix != suffix {
+		if expectSuffix != string(suffix) {
 			t.Errorf("expected suffix: %q; received suffix: %q", expectSuffix, suffix)
 		}
 	}
@@ -336,17 +336,17 @@ func TestReadValue(t *testing.T) {
 		s string,
 	) {
 		t.Helper()
-		raw, valueType, suffix, err := parser.ReadValue(NoopHash{}, s)
+		raw, valueType, suffix, err := parser.ReadValue(NoopHash{}, []byte(s))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
-		if expectRaw != raw {
+		if expectRaw != string(raw) {
 			t.Errorf("expected raw: %q; received raw: %q", expectRaw, raw)
 		}
 		if expectType != valueType {
 			t.Errorf("expected valueType: %q; received valueType: %q", expectType, valueType)
 		}
-		if expectSuffix != suffix {
+		if expectSuffix != string(suffix) {
 			t.Errorf("expected suffix: %q; received suffix: %q", expectSuffix, suffix)
 		}
 	}
@@ -625,7 +625,7 @@ var testUnexpectedEOF = []string{
 func TestReadDocumentErrEOF(t *testing.T) {
 	for _, s := range testUnexpectedEOF {
 		t.Helper()
-		if err := parser.ReadDocument(NoopHash{}, s); err == nil {
+		if err := parser.ReadDocument(NoopHash{}, []byte(s)); err == nil {
 			t.Errorf("expected ErrUnexpectedEOF")
 		} else if !errors.Is(err, parser.ErrUnexpectedEOF) {
 			t.Errorf("expected ErrUnexpectedEOF; received: %v", err)
@@ -640,7 +640,7 @@ func TestReadDocumentErrEOF(t *testing.T) {
 			continue
 		}
 
-		err := parser.ReadDocument(NoopHash{}, s+"\n")
+		err := parser.ReadDocument(NoopHash{}, []byte(s+"\n"))
 		if !errors.Is(err, parser.ErrUnexpectedEOF) {
 			t.Errorf("(with ignorable suffix) expected EOF error; received: %v", err)
 		}
@@ -731,7 +731,7 @@ var testErrUnexpectedToken = []string{
 // TestReadDocumentErrUnexpectedToken tests all possible unexpected token situations.
 func TestReadDocumentErrUnexpectedToken(t *testing.T) {
 	for _, s := range testErrUnexpectedToken {
-		err := parser.ReadDocument(NoopHash{}, s)
+		err := parser.ReadDocument(NoopHash{}, []byte(s))
 		if !errors.Is(err, parser.ErrUnexpectedToken) {
 			t.Errorf("expected ErrUnexpectedToken; received: %v (input: %q)", err, s)
 		}

@@ -23,16 +23,29 @@ type Hash = parser.Hash
 // hashes while ignoring comments, spaces, tabs, line-breaks and carriage-returns.
 // Returns ErrQueriesDiffer if the queries are valid GraphQL but different.
 // The order of fields must be preserved, otherwise a difference will be observed.
-func Compare[S string | []byte](h hash.Hash, a, b S) error {
-	ha, err := AppendQueryHash(nil, h, a)
+func Compare(h hash.Hash, a, b []byte) error {
+	return CompareWithBuffer(nil, h, a, b)
+}
+
+// CompareWithBuffer is identical to Compare but allows reusing a buffer
+// to reduce dynamic memory allocation. Ideally, provide a buffer
+// with the capacity of `h.Size()*2`.
+func CompareWithBuffer(buffer []byte, h hash.Hash, a, b []byte) (err error) {
+	size := h.Size()
+	if buffer == nil {
+		buffer = make([]byte, 0, size*2)
+	} else {
+		buffer = buffer[:0]
+	}
+	buffer, err = AppendQueryHash(buffer, h, a)
 	if err != nil {
 		return err
 	}
-	hb, err := AppendQueryHash(nil, h, b)
+	buffer, err = AppendQueryHash(buffer, h, b)
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(ha, hb) {
+	if !bytes.Equal(buffer[:size], buffer[size:]) {
 		return ErrQueriesDiffer
 	}
 	return nil
@@ -40,7 +53,7 @@ func Compare[S string | []byte](h hash.Hash, a, b S) error {
 
 // AppendQueryHash parses s and appends its hash to buffer ignoring comments, spaces, tabs,
 // line-breaks and carriage-returns.
-func AppendQueryHash[S string | []byte](buffer []byte, h Hash, s S) ([]byte, error) {
+func AppendQueryHash(buffer []byte, h Hash, s []byte) ([]byte, error) {
 	h.Reset()
 	s = parser.SkipIgnorables(s)
 	if err := parser.ExpectNoEOF(s); err != nil {
