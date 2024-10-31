@@ -12,7 +12,7 @@
 
 Generates hashes from GraphQL
 [executable documents](https://spec.graphql.org/October2021/#sec-Executable-Definitions)
-without taking formatting into account to allow fast and robust comparisons.
+without taking formatting and comments into account to allow fast and robust comparisons.
 
 The following two documents will generate the same SHA1 hash:
 
@@ -21,16 +21,18 @@ The following two documents will generate the same SHA1 hash:
 ```
 
 ```graphql
-query {
+query { # Some comment
   object( x: 42 y: 1.0 ) {
     id
-    name
+    name # We will need this.
     description @translate(
-        lang: [DE EN]
+        lang: [DE EN] # Prefer German, if possible.
     )
   }
 }
 ```
+
+However, the order and structure of the document must remain the same.
 
 Fully compliant with the latest GraphQL specification of
 [October 2021](https://spec.graphql.org/October2021/)
