@@ -152,10 +152,10 @@ var hashTests = []HashTest{
 	{
 		Name: "spreads and inline fragments",
 		Inputs: []string{
-			`query {
+			`query {  # First comment.
 				x {
 					... on A {
-						a
+						a # Second comment.
 					}
 					...F
 					... @ include ( if : true ) {
@@ -163,6 +163,7 @@ var hashTests = []HashTest{
 					}
 				}
 			}
+			# Third comment.
 			fragment F on X @dir {
 				f
 			}`,
@@ -246,5 +247,33 @@ func TestCompareErr(t *testing.T) {
 	received = gqlhash.Compare(sha1.New(), `{x}`, ``)
 	if received != gqlhash.ErrUnexpectedEOF {
 		t.Errorf("expected %v; received: %v", gqlhash.ErrUnexpectedEOF, received)
+	}
+}
+
+func BenchmarkCompare(b *testing.B) {
+	varA := `
+		query {  # First comment.
+			x {
+				... on A {
+					a # Second comment.
+				}
+				...F
+				... @ include ( if : true ) {
+					i
+				}
+			}
+		}
+		# Third comment.
+		fragment F on X @dir {
+			f
+		}
+	`
+	varB := `{x{...on A{a},...F,...@include(if:true){i}}},fragment F on X@dir{f}`
+	h := sha1.New()
+	b.ResetTimer()
+	for range b.N {
+		if err := gqlhash.Compare(h, varA, varB); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
