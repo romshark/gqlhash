@@ -8,6 +8,9 @@ import (
 
 	"github.com/romshark/gqlhash"
 	"github.com/romshark/gqlhash/parser"
+
+	vektah "github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // MockHash is a mock hasher that's recording all writes for testing purposes.
@@ -250,7 +253,46 @@ func TestCompareErr(t *testing.T) {
 	}
 }
 
-var benchQuery = `
+const benchSchema = `
+type Query {
+	x: I
+}
+
+interface I {
+	a: String
+	bar: String
+	bazz: String
+	i: String
+	f: Int
+}
+
+type X implements I {
+	a: String
+	bar: String
+	bazz: String
+	i: String
+	f: Int
+}
+
+type A implements I {
+	a: String
+	bar: String
+	bazz: String
+	i: String
+	f: Int
+	withArgs(x: WithArgsInput): String
+}
+
+input WithArgsInput {
+	quiteALongArgumentName: String
+	unicode: String
+	escapedUnicodeBlockString: String
+}
+
+directive @dir on FRAGMENT_DEFINITION
+`
+
+const benchQuery = `
 	query {  # First comment.
 		x {
 			bar
@@ -275,7 +317,7 @@ var benchQuery = `
 	}
 `
 
-var benchQueryMinified = `{x{bar,bazz,...on A{a,withArgs(x:{` +
+const benchQueryMinified = `{x{bar,bazz,...on A{a,withArgs(x:{` +
 	`quiteALongArgumentName:"foo bar bazz",unicode:"こんにちは",` +
 	`escapedUnicodeBlockString:"""\u3053\u3093\u306b\u3061\u306f"""})},` +
 	`...F,...@include(if:true){i}}},fragment F on X@dir{f}`
@@ -305,12 +347,21 @@ func BenchmarkCompare(b *testing.B) {
 }
 
 func BenchmarkReferenceSHA1(b *testing.B) {
+	// Prepare vektah schema
+	schema, err := vektah.LoadSchema(&ast.Source{Input: benchSchema})
+	if err != nil {
+		b.Fatalf("parsing schema: %v", err)
+	}
+	if _, errs := vektah.LoadQuery(schema, benchQuery); errs != nil {
+		b.Fatalf("parsing query: %v", errs)
+	}
+
 	q := []byte(benchQuery)
 	hashBuffer := make([]byte, 64)
 	h := sha1.New()
 	b.ResetTimer()
 
-	b.Run("sha1_direct", func(b *testing.B) {
+	b.Run("direct", func(b *testing.B) {
 		for range b.N {
 			hashBuffer = hashBuffer[:0]
 			h.Reset()
@@ -319,10 +370,18 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 		}
 	})
 
-	b.Run("sha1_gqlhash", func(b *testing.B) {
+	b.Run("gqlhash", func(b *testing.B) {
 		for range b.N {
 			hashBuffer = hashBuffer[:0]
 			gqlhash.AppendQueryHash(hashBuffer, h, q)
+		}
+	})
+
+	b.Run("vektah", func(b *testing.B) {
+		for range b.N {
+			if _, errs := vektah.LoadQuery(schema, benchQuery); errs != nil {
+				b.Fatal(errs)
+			}
 		}
 	})
 }
