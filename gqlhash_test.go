@@ -373,7 +373,10 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 	b.Run("gqlhash", func(b *testing.B) {
 		for range b.N {
 			hashBuffer = hashBuffer[:0]
-			gqlhash.AppendQueryHash(hashBuffer, h, q)
+			var err error
+			if hashBuffer, err = gqlhash.AppendQueryHash(hashBuffer, h, q); err != nil {
+				b.Fatal(err)
+			}
 		}
 	})
 
