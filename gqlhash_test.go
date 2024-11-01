@@ -234,10 +234,35 @@ func TestCompare(t *testing.T) {
 		if expect != received {
 			t.Errorf("expected %v; received: %v", expect, received)
 		}
+
+		// Provide nil buffer.
+		received = gqlhash.CompareWithBuffer(nil, sha1.New(), []byte(a), []byte(b))
+		if expect != received {
+			t.Errorf("expected %v; received: %v", expect, received)
+		}
+
+		// Provide buffer that's too small in len.
+		received = gqlhash.CompareWithBuffer(
+			make([]byte, 1), sha1.New(), []byte(a), []byte(b),
+		)
+		if expect != received {
+			t.Errorf("expected %v; received: %v", expect, received)
+		}
+
+		// Provide buffer with len 0 and some capacity.
+		received = gqlhash.CompareWithBuffer(
+			make([]byte, 0, 1), sha1.New(), []byte(a), []byte(b),
+		)
+		if expect != received {
+			t.Errorf("expected %v; received: %v", expect, received)
+		}
 	}
 
 	f(t, nil, `{foo bar}`, `{foo bar}`)
-
+	f(t, nil, `
+		# comment
+		{ foo, bar }
+	`, `{foo bar}`)
 	f(t, gqlhash.ErrQueriesDiffer, `{foo bar}`, `{foobar}`)
 }
 
