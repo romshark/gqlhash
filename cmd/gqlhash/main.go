@@ -26,8 +26,8 @@ func main() {
 	)
 	flag.Parse()
 
-	if strings.EqualFold(*fFormat, "hex") ||
-		strings.EqualFold(*fFormat, "base64") {
+	if !strings.EqualFold(*fFormat, "hex") &&
+		!strings.EqualFold(*fFormat, "base64") {
 		fmt.Fprint(os.Stderr, "unsupported format, use any of: hex, base64")
 		os.Exit(1)
 	}
