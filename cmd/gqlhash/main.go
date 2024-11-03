@@ -2,16 +2,20 @@ package main
 
 import (
 	"crypto/sha1"
+	"debug/buildinfo"
 	"encoding/base64"
 	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/romshark/gqlhash"
 )
+
+const Version = `1.0.0`
 
 func main() {
 	fFile := flag.String(
@@ -24,7 +28,16 @@ func main() {
 		"hex",
 		`Hash format (hex, base64)`,
 	)
+	fVersion := flag.Bool(
+		"version",
+		false,
+		`Print version to stdout and exit`,
+	)
 	flag.Parse()
+
+	if *fVersion {
+		PrintVersionInfoAndExit()
+	}
 
 	if !strings.EqualFold(*fFormat, "hex") &&
 		!strings.EqualFold(*fFormat, "base64") {
@@ -64,4 +77,30 @@ func main() {
 		sumStr = base64.StdEncoding.EncodeToString(sum)
 	}
 	fmt.Fprint(os.Stdout, sumStr)
+}
+
+func PrintVersionInfoAndExit() {
+	p, err := exec.LookPath(os.Args[0])
+	if err != nil {
+		fmt.Printf("resolving executable file path: %v\n", err)
+		os.Exit(1)
+	}
+
+	f, err := os.Open(p)
+	if err != nil {
+		fmt.Printf("opening executable file %q: %v\n", os.Args[0], err)
+		os.Exit(1)
+	}
+
+	info, err := buildinfo.Read(f)
+	if err != nil {
+		fmt.Printf("Reading build information: %v\n", err)
+	}
+
+	fmt.Printf("gqlhash v%s\n\n", Version)
+	fmt.Println("MIT License")
+	fmt.Print("Copyright (c) 2024 Roman Sharkov\n\n")
+	fmt.Printf("%v\n", info)
+
+	os.Exit(0)
 }
