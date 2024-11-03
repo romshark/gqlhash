@@ -191,7 +191,7 @@ ok      github.com/romshark/gqlhash     34.615s
 
 ## Known Limitations
 
-### Order of Selections and Arguments
+### Order of Operations, Selections and Arguments
 
 gqlhash ignores **irrelevant differences** between documents such as formatting
 and comments, but it will return different hashes for queries with different
