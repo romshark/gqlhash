@@ -1,0 +1,62 @@
+type Query {
+  x: I
+}
+
+type Mutation {
+  mutationOne(
+    firstArgumentInt: Int!
+    secondArgumentInput: InputObject!
+    thirdArgumentInput: InputObject!
+  ): I!
+}
+
+input InputObject {
+  fieldString: String!
+  fieldFloatOptional: Float
+  fieldBooleanOptional: Boolean
+  fieldBoolean: Boolean!
+  fieldList: [String!]!
+  fieldListRecursive: [InputObject]!
+}
+
+interface I {
+  a: String
+  bar: String
+  bazz: String
+  i: String
+  f: Int
+}
+
+type X implements I {
+  a: String
+  bar: String
+  bazz: String
+  i: String
+  f: Int
+}
+
+type A implements I {
+  a: String
+  bar: String
+  bazz: String
+  i: String
+  f: Int
+  withArgs(x: WithArgsInput): String
+}
+
+input WithArgsInput {
+  quiteALongArgumentName: String
+  unicode: String
+  escapedUnicodeBlockString: String
+}
+
+enum Animals {
+  Kenguru
+  Wombat
+  Zebra
+  Elephant
+  Tiger
+}
+
+directive @dir on FRAGMENT_DEFINITION
+directive @scalarDirective on SCALAR

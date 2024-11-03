@@ -1,0 +1,27 @@
+query {
+  # First comment.
+  x {
+    bar
+    bazz
+    ... on A {
+      a # Second comment.
+      withArgs(
+        x: {
+          quiteALongArgumentName: "foo bar bazz"
+          unicode: "こんにちは"
+          escapedUnicodeBlockString: """
+          \u3053\u3093\u306b\u3061\u306f
+          """
+        }
+      )
+    }
+    ...F
+    ... @include(if: true) {
+      i
+    }
+  }
+}
+# Third comment.
+fragment F on X @dir {
+  f
+}

@@ -1,0 +1,112 @@
+query QueryVariantBig($includeI: Boolean = true, $includeI2: Boolean!) {
+  # First comment.
+  x {
+    __typename
+    barAlias_1: bar
+    barAlias_2: bar
+    bazzAlias_1: bazz
+    bazzAlias_2: bazz
+    ... on A {
+      __typename
+      a # Second comment.
+      withArgsAlias_1: withArgs(
+        x: {
+          quiteALongArgumentName: "foo bar bazz"
+          unicode: "こんにちは"
+          escapedUnicodeBlockString: """
+          \u3053\u3093\u306b\u3061\u306f
+          """
+        }
+      )
+      withArgsAlias_2: withArgs(
+        x: {
+          quiteALongArgumentName: ""
+          unicode: ""
+          escapedUnicodeBlockString: """
+          """
+        }
+      )
+    }
+    ...F
+    ... @include(if: $includeI) {
+      __typename
+      i
+    }
+    ... @include(if: $includeI2) {
+      __typename
+      i2: i
+    }
+  }
+}
+
+# MutationVariantBig is marvelously pointless!
+mutation MutationVariantBig(
+  $firstArgumentInt: Int! = 42
+  $secondArgumentInput: InputObject!
+  $thirdArgumentObjectFieldString: String!
+  $thirdArgumentObjectFieldFloatOptional: Float = 3.14159265358979323846264338
+  $thirdArgumentObjectFieldBooleanOptional: Boolean
+  $thirdArgumentObjectFieldBoolean: Boolean!
+  $thirdArgumentObjectFieldList: [String!]!
+) {
+  mutationOne(
+    firstArgumentInt: $firstArgumentInt
+    secondArgumentInput: $secondArgumentInput
+    thirdArgumentInput: {
+      fieldString: $thirdArgumentObjectFieldString
+      fieldFloatOptional: $thirdArgumentObjectFieldFloatOptional
+      fieldBooleanOptional: $thirdArgumentObjectFieldBooleanOptional
+      fieldBoolean: $thirdArgumentObjectFieldBoolean
+      fieldList: $thirdArgumentObjectFieldList
+      fieldListRecursive: {
+        fieldString: $thirdArgumentObjectFieldString
+        fieldFloatOptional: $thirdArgumentObjectFieldFloatOptional
+        fieldBooleanOptional: $thirdArgumentObjectFieldBooleanOptional
+        fieldBoolean: $thirdArgumentObjectFieldBoolean
+        fieldList: $thirdArgumentObjectFieldList
+        fieldListRecursive: []
+      }
+    }
+  ) {
+    ...F
+    ...FBig
+  }
+}
+
+# A long example comment about the reusable fragment below accompanied
+# by a second line of pointless # "this is tree"-style comment.
+fragment F on X @dir {
+  __typename
+  f_alias_1: f
+  f_alias_2: f
+}
+
+# Another fragment definition.
+fragment FBig on I {
+  __typename
+  barAlias_1: bar
+  barAlias_2: bar
+  bazzAlias_1: bazz
+  bazzAlias_2: bazz
+  ... on A {
+    __typename
+    a # Second comment.
+    withArgsAlias_1: withArgs(
+      x: {
+        quiteALongArgumentName: "foo bar bazz"
+        unicode: "こんにちは"
+        escapedUnicodeBlockString: """
+        \u3053\u3093\u306b\u3061\u306f
+        """
+      }
+    )
+    withArgsAlias_2: withArgs(
+      x: {
+        quiteALongArgumentName: ""
+        unicode: ""
+        escapedUnicodeBlockString: """
+        """
+      }
+    )
+  }
+}

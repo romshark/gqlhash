@@ -3,8 +3,10 @@
 package parser
 
 import (
+	"bytes"
 	"errors"
 	"hash"
+	"iter"
 )
 
 var (
@@ -50,10 +52,9 @@ var (
 	HPrefValueFloat            = []byte("/4")
 	HPrefValueEnum             = []byte("/5")
 	HPrefValueString           = []byte("/6")
-	HPrefValueStringBlock      = []byte("/7")
-	HPrefValueList             = []byte("/8")
-	HPrefValueListEnd          = []byte("/9")
-	HPrefValueVariable         = []byte("/v")
+	HPrefValueList             = []byte("/7")
+	HPrefValueListEnd          = []byte("/8")
+	HPrefValueVariable         = []byte("/9")
 )
 
 // ReadDocument reads one or many ExecutableDefinitions
@@ -587,18 +588,27 @@ func ReadValue(h Hash, s []byte) (
 
 	case s[0] == '"': // String or block string.
 		if HasPrefix(s, `"""`) { // Block string.
-			if _, suffix, err = ReadStringBlockAfterQuotes(s[3:]); err != nil {
+			var prefixLen int
+			value, prefixLen, suffix, err = ReadStringBlockAfterQuotes(s[3:])
+			if err != nil {
 				return value, ValueTypeStringBlock, suffix, err
 			}
-			value = s[:len(s)-len(suffix)]
-			_, _ = h.Write(HPrefValueStringBlock)
-			_, _ = h.Write([]byte(value))
+			if value != nil {
+				value = s[3 : len(s)-len(suffix)-3]
+				value = TrimEmptyLinesSuffix(value)
+			}
+
+			_, _ = h.Write(HPrefValueString)
+			for line := range IterateBlockStringLines(value, prefixLen) {
+				_, _ = h.Write(line)
+			}
+
 			return value, ValueTypeStringBlock, suffix, nil
 		} else { // String.
 			if _, suffix, err = ReadStringLineAfterQuotes(s[1:]); err != nil {
 				return value, ValueTypeString, suffix, err
 			}
-			value = s[:len(s)-len(suffix)]
+			value = s[1 : len(s)-len(suffix)-1]
 			_, _ = h.Write(HPrefValueString)
 			_, _ = h.Write([]byte(value))
 			return value, ValueTypeString, suffix, nil
@@ -751,42 +761,71 @@ func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#sec-String-Value
-func ReadStringBlockAfterQuotes(s []byte) (value []byte, suffix []byte, err error) {
-	for i := 0; i < len(s); {
-		switch s[i] {
-		case '"': // End of string.
-			if i+2 < len(s) && s[i+1] == '"' && s[i+2] == '"' {
-				return s[:i+3], s[i+3:], nil
-			}
-			i += 1
-		case '\\':
-			// EscapedCharacter (https://spec.graphql.org/October2021/#EscapedCharacter).
-			if i+1 >= len(s) {
-				return s[:i], s[i:], ErrUnexpectedEOF
-			}
-			switch s[i+1] {
-			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
-				i += 2
-			case 'u':
-				// EscapedUnicode (https://spec.graphql.org/October2021/#EscapedUnicode).
-				if i+5 >= len(s) {
-					return s[:i+1], s[i+1:], ErrUnexpectedEOF
-				}
-				if !IsHexByte(s[i+2]) ||
-					!IsHexByte(s[i+3]) ||
-					!IsHexByte(s[i+4]) ||
-					!IsHexByte(s[i+5]) {
-					return s[:i+1], s[i+1:], ErrUnexpectedToken
-				}
-				i += 5
-			default:
-				return s, s[i:], ErrUnexpectedToken
-			}
-		default:
-			i++
+func ReadStringBlockAfterQuotes(s []byte) (
+	value []byte, prefixLen int, suffix []byte, err error,
+) {
+	prefixLenSet := false
+	// firstNonWhiteSpaceAndNewLine stores the index of the last byte that's not
+	// a tab, whitespace, or a line-break.
+	firstNonWhiteSpaceAndNewLineFound := false
+	firstNonWhiteSpaceAndNewLine := 0
+	setNWSNL := func(i int) {
+		if !firstNonWhiteSpaceAndNewLineFound {
+			firstNonWhiteSpaceAndNewLine = i
+			firstNonWhiteSpaceAndNewLineFound = true
 		}
 	}
-	return s, suffix, ErrUnexpectedEOF
+	for i := 0; i < len(s); {
+		switch s[i] {
+		case '"':
+			if i+2 < len(s) && s[i+1] == '"' && s[i+2] == '"' {
+				// End of the block string found.
+				if firstNonWhiteSpaceAndNewLineFound &&
+					firstNonWhiteSpaceAndNewLine != i {
+					// The block not filled with just whitespace and line-breaks only.
+					value = s[:i+3]
+
+					// Trim empty suffix.
+				}
+				return value, prefixLen, s[i+3:], nil
+			}
+			// Just a quote, not the end of the block string yet.
+			setNWSNL(i)
+		case '\\':
+			setNWSNL(i)
+			if i+3 < len(s) && s[i+1] == '"' && s[i+2] == '"' && s[i+3] == '"' {
+				// Escaped `\"""`.
+				i += 4
+				continue
+			}
+		case '\n':
+			// Skip any WhiteSpace (https://spec.graphql.org/October2021/#WhiteSpace).
+			c := 0
+			for i++; i < len(s) && IsWhiteSpace(s[i]); i, c = i+1, c+1 {
+			}
+
+			if i < len(s) && !IsWhiteSpace(s[i]) && s[i] != '\n' {
+				setNWSNL(i)
+			}
+
+			isLastLine := i+2 < len(s) && s[i+1] == '"' && s[i+2] == '"'
+			if !isLastLine {
+				if prefixLenSet {
+					prefixLen = min(prefixLen, c)
+				} else {
+					prefixLen, prefixLenSet = c, true
+				}
+			}
+			continue
+		case ' ', '\t':
+			// Ignore WhiteSpace bytes.
+		default:
+			// Don't ignore non-WhiteSpace bytes.
+			setNWSNL(i)
+		}
+		i++
+	}
+	return nil, prefixLen, suffix, ErrUnexpectedEOF
 }
 
 // ReadFloatEnd reads the part of the FloatValue that comes after the first IntegerPart.
@@ -902,6 +941,12 @@ func ReadName(s []byte) (name, suffix []byte, err error) {
 	}
 	return s[:len(s)-len(suffix)], suffix, nil
 }
+
+// IsWhiteSpace returns true if b is a WhiteSpace.
+// Reference:
+//
+//   - https://spec.graphql.org/October2021/#WhiteSpace
+func IsWhiteSpace(b byte) bool { return b == ' ' || b == '\t' }
 
 // IsIgnorableByte returns true if b is ignorable.
 // Reference:
@@ -1037,4 +1082,72 @@ var lutHex = [256]bool{
 	'D': true,
 	'E': true,
 	'F': true,
+}
+
+// IterateBlockStringLines iterates over individual lines of a GraphQL block string.
+// Expects s to be the content of the string without the surrounding `"""`.
+func IterateBlockStringLines(s []byte, prefixLen int) iter.Seq[[]byte] {
+	return func(yield func([]byte) bool) {
+		// First line no prefix.
+		i, firstLineIsEmpty := 0, true
+		for ; i < len(s) && s[i] != '\n'; i++ {
+			if s[i] != ' ' && s[i] != '\t' {
+				firstLineIsEmpty = false
+			}
+		}
+		if !firstLineIsEmpty {
+			var firstLine []byte
+			if i < len(s) && s[i] == '\n' {
+				firstLine = s[:i+1]
+			} else {
+				firstLine = s[:i]
+			}
+			if !yield(firstLine) {
+				return
+			}
+		}
+		for i++; i < len(s); i++ {
+			start, skipped := i, 0
+			for i < len(s) && skipped < prefixLen && IsWhiteSpace(s[i]) {
+				skipped, i = skipped+1, i+1
+			}
+			// Skip everything until next line break.
+			for ; i < len(s) && s[i] != '\n'; i++ {
+			}
+			if i >= start+prefixLen {
+				var line []byte
+				if i < len(s) && s[i] == '\n' {
+					line = s[start+prefixLen : i+1]
+				} else {
+					line = s[start+prefixLen : i]
+				}
+
+				if !yield(line) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// TrimEmptyLinesSuffix removes any trailing empty lines from the s.
+// An empty line is defined as a line that contains only whitespace characters.
+func TrimEmptyLinesSuffix(s []byte) []byte {
+	e := len(s)
+	for i := e - 1; i >= 0; i-- {
+		if s[i] == '\n' {
+			line := s[i+1 : e]
+			if len(bytes.TrimSpace(line)) != 0 {
+				break // Line is not empty, stop trimming.
+			}
+			e = i // Remove empty line.
+		} else if i == 0 {
+			line := s[i:e]
+			if len(bytes.TrimSpace(line)) != 0 {
+				break
+			}
+			e = i // Remove empty line.
+		}
+	}
+	return s[:e]
 }

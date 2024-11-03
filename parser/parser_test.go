@@ -2,6 +2,7 @@ package parser_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -441,76 +442,127 @@ func TestReadValue(t *testing.T) {
 		f(t, "", parser.ValueTypeString, `\k"`+suffix, parser.ErrUnexpectedToken,
 			`"\k"`+suffix)
 
-		f(t, `""`, parser.ValueTypeString, suffix, nil, `""`+suffix)
-		f(t, `"\""`, parser.ValueTypeString, suffix, nil, `"\""`+suffix)
-		f(t, `"\\"`, parser.ValueTypeString, suffix, nil, `"\\"`+suffix)
-		f(t, `"\b"`, parser.ValueTypeString, suffix, nil, `"\b"`+suffix)
-		f(t, `"\f"`, parser.ValueTypeString, suffix, nil, `"\f"`+suffix)
-		f(t, `"\n"`, parser.ValueTypeString, suffix, nil, `"\n"`+suffix)
-		f(t, `"\r"`, parser.ValueTypeString, suffix, nil, `"\r"`+suffix)
-		f(t, `"\t"`, parser.ValueTypeString, suffix, nil, `"\t"`+suffix)
-		f(t, `"\uabcd"`, parser.ValueTypeString, suffix, nil, `"\uabcd"`+suffix)
-		f(t, `"\uABCD"`, parser.ValueTypeString, suffix, nil, `"\uABCD"`+suffix)
-		f(t, `"\u1234"`, parser.ValueTypeString, suffix, nil, `"\u1234"`+suffix)
-		f(t, `"\u5678"`, parser.ValueTypeString, suffix, nil, `"\u5678"`+suffix)
-		f(t, `"\u90aA"`, parser.ValueTypeString, suffix, nil, `"\u90aA"`+suffix)
-		f(t, `"\u3053\u3093\u306b\u3061\u306f"`, parser.ValueTypeString, suffix, nil,
+		f(t, ``, parser.ValueTypeString, suffix, nil, `""`+suffix)
+		f(t, `\"`, parser.ValueTypeString, suffix, nil, `"\""`+suffix)
+		f(t, `\\`, parser.ValueTypeString, suffix, nil, `"\\"`+suffix)
+		f(t, `\b`, parser.ValueTypeString, suffix, nil, `"\b"`+suffix)
+		f(t, `\f`, parser.ValueTypeString, suffix, nil, `"\f"`+suffix)
+		f(t, `\n`, parser.ValueTypeString, suffix, nil, `"\n"`+suffix)
+		f(t, `\r`, parser.ValueTypeString, suffix, nil, `"\r"`+suffix)
+		f(t, `\t`, parser.ValueTypeString, suffix, nil, `"\t"`+suffix)
+		f(t, `\uabcd`, parser.ValueTypeString, suffix, nil, `"\uabcd"`+suffix)
+		f(t, `\uABCD`, parser.ValueTypeString, suffix, nil, `"\uABCD"`+suffix)
+		f(t, `\u1234`, parser.ValueTypeString, suffix, nil, `"\u1234"`+suffix)
+		f(t, `\u5678`, parser.ValueTypeString, suffix, nil, `"\u5678"`+suffix)
+		f(t, `\u90aA`, parser.ValueTypeString, suffix, nil, `"\u90aA"`+suffix)
+		f(t, `\u3053\u3093\u306b\u3061\u306f`, parser.ValueTypeString, suffix, nil,
 			`"\u3053\u3093\u306b\u3061\u306f"`+suffix)
-		f(t, `"ok"`, parser.ValueTypeString, suffix, nil, `"ok"`+suffix)
-		f(t, `"one two\t\nthree 123"`, parser.ValueTypeString, suffix, nil,
+		f(t, `ok`, parser.ValueTypeString, suffix, nil, `"ok"`+suffix)
+		f(t, `one two\t\nthree 123`, parser.ValueTypeString, suffix, nil,
 			`"one two\t\nthree 123"`+suffix)
-		f(t, `"ツ"`, parser.ValueTypeString, suffix, nil,
+		f(t, `ツ`, parser.ValueTypeString, suffix, nil,
 			`"ツ"`+suffix)
-		f(t, `"ツ\n"`, parser.ValueTypeString, suffix, nil,
+		f(t, `ツ\n`, parser.ValueTypeString, suffix, nil,
 			`"ツ\n"`+suffix)
-		f(t, `"ツ ёж ïх жэ こんにちは\n"`, parser.ValueTypeString, suffix, nil,
+		f(t, `ツ ёж ïх жэ こんにちは\n`, parser.ValueTypeString, suffix, nil,
 			`"ツ ёж ïх жэ こんにちは\n"`+suffix)
 	}
 
 	{ // Block strings (https://spec.graphql.org/October2021/#sec-String-Value).
-		f(t, ``, parser.ValueTypeStringBlock, `uGGGG"""`+suffix, parser.ErrUnexpectedToken,
-			`"""\uGGGG"""`+suffix)
-		f(t, "", parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF, `"""\"""`)
-		f(t, "", parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF, `"""`)
-
-		f(t, `""""""`, parser.ValueTypeStringBlock, suffix, nil,
-			`""""""`+suffix)
-		f(t, `"""\""""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, ``, parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF, `"""`)
+		f(t, ``, parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF,
+			`"""\"""`+suffix)
+		f(t, ``, parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF,
 			`"""\""""`+suffix)
-		f(t, `"""\\"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, ``, parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF,
 			`"""\\"""`+suffix)
-		f(t, `"""\b"""`, parser.ValueTypeStringBlock, suffix, nil,
+
+		// Empty block string.
+		f(t, ``, parser.ValueTypeStringBlock, suffix, nil,
+			`""""""`+suffix)
+
+		// Empty block string filled with just tabs, spaces and line-breaks.
+		f(t, "", parser.ValueTypeStringBlock, suffix, nil,
+			`"""`+"\n"+`"""`+suffix)
+		f(t, "", parser.ValueTypeStringBlock, suffix, nil,
+			`"""`+"\n \t\n \t\n"+`"""`+suffix)
+		f(t, "", parser.ValueTypeStringBlock, suffix, nil,
+			`"""    """`+suffix)
+
+		// Empty block string because prefix is stripped.
+		f(t, "", parser.ValueTypeStringBlock, suffix, nil,
+			`"""`+"\n   "+`"""`+suffix)
+
+		// Empty block string because prefix is stripped.
+		f(t, "", parser.ValueTypeStringBlock, suffix, nil,
+			`"""`+"\n\t"+`"""`+suffix)
+
+		// Empty block string followed by unclosed string.
+		f(t, "", parser.ValueTypeStringBlock, `"`+suffix, nil,
+			`"""""""`+suffix)
+
+		// Empty block string followed by string.
+		f(t, "", parser.ValueTypeStringBlock, `""`+suffix, nil,
+			`""""""""`+suffix)
+
+		// Empty block string followed by unclosed block string.
+		f(t, "", parser.ValueTypeStringBlock, `""`+suffix, nil,
+			`""""""""`+suffix)
+
+		// Terminators
+		f(t, "line1\nline2", parser.ValueTypeStringBlock, suffix, nil,
+			`"""`+"line1\nline2\n"+`"""`+suffix)
+
+		f(t, `\uGGGG`, parser.ValueTypeStringBlock, suffix, nil,
+			`"""\uGGGG"""`+suffix)
+		f(t, "\n\\\"", parser.ValueTypeStringBlock, suffix, nil,
+			`"""`+"\n\\\"\n"+`"""`+suffix)
+		f(t, `\\`, parser.ValueTypeStringBlock, suffix, nil,
+			`"""\\`+"\n"+`"""`+suffix)
+		f(t, `\b`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\b"""`+suffix)
-		f(t, `"""\f"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `\f`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\f"""`+suffix)
-		f(t, `"""\n"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `\n`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\n"""`+suffix)
-		f(t, `"""\r"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `\r`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\r"""`+suffix)
-		f(t, `"""\t"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `\t`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\t"""`+suffix)
-		f(t, `"""\uabcd"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `\uabcd`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\uabcd"""`+suffix)
-		f(t, `"""\uABCD"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `\uABCD`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\uABCD"""`+suffix)
-		f(t, `"""\u1234"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `\u1234`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\u1234"""`+suffix)
-		f(t, `"""\u5678"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `\u5678`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\u5678"""`+suffix)
-		f(t, `"""\u90aA"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `\u90aA`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\u90aA"""`+suffix)
-		f(t, `"""\u3053\u3093\u306b\u3061\u306f"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `\u3053\u3093\u306b\u3061\u306f`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\u3053\u3093\u306b\u3061\u306f"""`+suffix)
-		f(t, `"""ok"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `ok`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""ok"""`+suffix)
-		f(t, `"""one two\t\nthree 123"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `one two\t\nthree 123`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""one two\t\nthree 123"""`+suffix)
-		f(t, `"""ツ"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `ツ`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""ツ"""`+suffix)
-		f(t, `"""ツ\n"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `ツ\n`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""ツ\n"""`+suffix)
-		f(t, `"""ツ ёж ïх жэ こんにちは\n"""`, parser.ValueTypeStringBlock, suffix, nil,
+		f(t, `ツ ёж ïх жэ こんにちは\n`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""ツ ёж ïх жэ こんにちは\n"""`+suffix)
+
+		// Empty line suffix.
+		f(t, "foo",
+			parser.ValueTypeStringBlock, suffix, nil,
+			`"""`+"foo\n\n\t\n  \n\n  "+`"""`+suffix)
+		f(t, "foo  ",
+			parser.ValueTypeStringBlock, suffix, nil,
+			`"""`+"foo  \n\n\t\n  \n\n  "+`"""`+suffix)
+
+		f(t, "line one.\n\t\t\t\t\tline two.\n\t\t\t\tline three.",
+			parser.ValueTypeStringBlock, suffix, nil,
+			`"""`+"line one.\n\t\t\t\t\tline two.\n\t\t\t\tline three.\n"+`"""`+suffix)
 	}
 
 	{ // ListValue (https://spec.graphql.org/October2021/#sec-List-Value).
@@ -685,9 +737,7 @@ var testErrUnexpectedToken = []string{
 	"query Foo($d:[T]!=?",
 	"query Foo($d:[T]=2?",
 	`query Foo($d:[T]="\?`,
-	`query Foo($d:[T]="""\?`,
 	// `query Foo($d:[T]="\u?`, // This Produces ErrUnexpectedEOF
-	// `query Foo($d:[T]="""\u?`, // This Produces ErrUnexpectedEOF
 	"query Foo @?",
 	"query Foo @dir?",
 	"query Foo @dir(?",
@@ -736,4 +786,100 @@ func TestReadDocumentErrUnexpectedToken(t *testing.T) {
 			t.Errorf("expected ErrUnexpectedToken; received: %v (input: %q)", err, s)
 		}
 	}
+}
+
+func TestIterateBlockStringLines(t *testing.T) {
+	f := func(t *testing.T, expect []string, input string, prefixLen int) {
+		t.Helper()
+		var r []string
+		for s := range parser.IterateBlockStringLines([]byte(input), prefixLen) {
+			r = append(r, string(s))
+		}
+		if !slices.Equal(expect, r) {
+			t.Errorf("expected: %#v; received: %#v", expect, r)
+		}
+	}
+
+	f(t, nil, "", 0)
+	f(t, []string{"abc"}, "abc", 0)
+	f(t, []string{"abc def"}, "abc def", 0)
+	f(t, []string{"abc\n", " def"}, "abc\n def", 0)
+	f(t, []string{"abc\n", "\n", " def"}, "abc\n\n def", 0)
+	f(t, []string{"abc\n", " \n", " def"}, "abc\n \n def", 0)
+	f(t, []string{"abc\n", " \n", " def"}, "\nabc\n \n def", 0)
+
+	// First line no prefix.
+	f(t, []string{" abc\n", "\n", "def"}, " abc\n \n def", 1)
+	f(t, []string{" abc\n", " \n", "def"}, " abc\n  \n def", 1)
+	f(t, []string{"\tabc\n", "\t\n", "def"}, "\tabc\n\t\t\n\tdef", 1)
+
+	// Empty (this should be handled by the parser func,
+	// because the parser func needs to return ""/nil for this input).
+	// f(t, nil, "\n \n \n ", 1)
+	// f(t, nil, "\n\t \n\t \n\t ", 2)
+
+	// Trailing whitespace (again, parser func needs to return no trailing empty lines).
+	// f(t, []string{"x\n"}, "x\n", 0)
+
+	f(t, []string{"ж\n", "ツ\n", "\\"}, "\nж\nツ\n\\", 0)
+	f(t, []string{"ж\n", "ツ\n", "\\"}, "\n ж\n ツ\n \\", 1)
+	f(t, []string{"ж\n", "ツ\n", "\\"}, "\n  ж\n  ツ\n  \\", 2)
+	f(t, []string{"ж\n", "ツ\n", "\\"}, "\n   ж\n   ツ\n   \\", 3)
+	f(t, []string{"ж\n", "ツ\n", "\\"}, "\n\t\t\tж\n\t\t\tツ\n\t\t\t\\", 3)
+	f(t, []string{"line one.\n", "\tline two.\n", "line three."},
+		"line one.\n\t\t\t\t\tline two.\n\t\t\t\tline three.", 4)
+
+	t.Run("break", func(t *testing.T) {
+		var r []string
+		for s := range parser.IterateBlockStringLines([]byte("foo\nbar"), 0) {
+			r = append(r, string(s))
+			break
+		}
+		if !slices.Equal([]string{"foo\n"}, r) {
+			t.Errorf("expected only foo, received: %#v", r)
+		}
+	})
+
+	t.Run("break2", func(t *testing.T) {
+		var r []string
+		for s := range parser.IterateBlockStringLines([]byte("foo\nbar"), 0) {
+			if len(r) == 1 {
+				break
+			}
+			r = append(r, string(s))
+		}
+		if !slices.Equal([]string{"foo\n"}, r) {
+			t.Errorf("expected only foo, received: %#v", r)
+		}
+	})
+}
+
+func TestTrimEmptyLinesSuffix(t *testing.T) {
+	f := func(t *testing.T, expect, input string) {
+		t.Helper()
+		a := parser.TrimEmptyLinesSuffix([]byte(input))
+		if expect != string(a) {
+			t.Errorf("expected: %q; received: %q", expect, string(a))
+		}
+	}
+
+	f(t, "", "")
+	f(t, "", "   \n  \n")
+	f(t, "", " \t\t  \n\t  \n \t")
+	f(t, "foo", "foo")
+	f(t, "foo", "foo\n")
+	f(t, "foo", "foo\n  ")
+	f(t, "foo", "foo\n  \t\n\n  ")
+	f(t, "foo  ", "foo  \n  ")
+	f(t, "foo\t \t", "foo\t \t\n  ")
+	f(t, "foo\t \t", "foo\t \t\n  \n   \n\t\n")
+
+	// Unicode.
+	f(t, "ツ ж", "ツ ж")
+	f(t, "ツ ж", "ツ ж\n")
+	f(t, "ツ ж", "ツ ж\n  ")
+	f(t, "ツ ж", "ツ ж\n  \t\n\n  ")
+	f(t, "ツ ж  ", "ツ ж  \n  ")
+	f(t, "ツ ж\t \t", "ツ ж\t \t\n  ")
+	f(t, "ツ ж\t \t", "ツ ж\t \t\n  \n   \n\t\n")
 }

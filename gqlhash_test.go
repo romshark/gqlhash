@@ -2,6 +2,7 @@ package gqlhash_test
 
 import (
 	"crypto/sha1"
+	_ "embed"
 	"fmt"
 	"slices"
 	"testing"
@@ -68,10 +69,27 @@ var hashTests = []HashTest{
 		),
 	},
 	{
-		Name: "mutation with args",
+		Name: "block strings",
 		Inputs: []string{
-			`mutation GQL { addStandard ( name : "GraphQL" )  }`,
-			`mutation GQL{addStandard(name:"GraphQL")}`,
+			`mutation GQL { addStandard ( name : "GraphQL" description:"""
+				line one.
+					line two.
+				line three.
+			""")  }`,
+			`mutation GQL { addStandard ( name : "GraphQL" description:"""line one.
+					line two.
+				line three.""")  }`,
+			`mutation GQL{addStandard(name:"GraphQL",description:"""line one.
+					line two.
+				line three.""")}`,
+			`mutation GQL{addStandard(name:"GraphQL",description:"""
+	line one.
+		line two.
+	line three.""")}`,
+			`mutation GQL{addStandard(name:"GraphQL",description:"""
+  line one.
+  	line two.
+  line three.""")}`,
 		},
 		ExpectRecords: MakeRecords(
 			parser.HPrefMutation,
@@ -79,7 +97,9 @@ var hashTests = []HashTest{
 			parser.HPrefSelectionSet,
 			parser.HPrefField, "addStandard",
 			parser.HPrefArgument, "name",
-			parser.HPrefValueString, `"GraphQL"`,
+			parser.HPrefValueString, "GraphQL",
+			parser.HPrefArgument, "description",
+			parser.HPrefValueString, "line one.\n", "\tline two.\n", "line three.",
 			parser.HPrefSelectionSetEnd,
 		),
 	},
@@ -103,7 +123,7 @@ var hashTests = []HashTest{
 			"Updates",
 			parser.HPrefVariableDefinition, "x",
 			parser.HPrefType, "T",
-			parser.HPrefValueString, `"жツ"`,
+			parser.HPrefValueString, "жツ",
 			parser.HPrefDirective, "ok",
 			parser.HPrefSelectionSet,
 			parser.HPrefField, "updates",
@@ -278,138 +298,167 @@ func TestCompareErr(t *testing.T) {
 	}
 }
 
-const benchSchema = `
-type Query {
-	x: I
-}
+//go:embed "testdata/schema.graphqls"
+var benchSchema string
 
-interface I {
-	a: String
-	bar: String
-	bazz: String
-	i: String
-	f: Int
-}
+//go:embed "testdata/medium.graphql"
+var benchQueryMedium string
 
-type X implements I {
-	a: String
-	bar: String
-	bazz: String
-	i: String
-	f: Int
-}
+//go:embed "testdata/medium.min.graphql"
+var benchQueryMediumMinified string
 
-type A implements I {
-	a: String
-	bar: String
-	bazz: String
-	i: String
-	f: Int
-	withArgs(x: WithArgsInput): String
-}
+//go:embed "testdata/big.graphql"
+var benchQueryBig string
 
-input WithArgsInput {
-	quiteALongArgumentName: String
-	unicode: String
-	escapedUnicodeBlockString: String
-}
+//go:embed "testdata/big.min.graphql"
+var benchQueryBigMinified string
 
-directive @dir on FRAGMENT_DEFINITION
-`
-
-const benchQuery = `
-	query {  # First comment.
-		x {
-			bar
-			bazz
-			... on A {
-				a # Second comment.
-				withArgs(x: {
-					quiteALongArgumentName: "foo bar bazz"
-					unicode: "こんにちは"
-					escapedUnicodeBlockString: """\u3053\u3093\u306b\u3061\u306f"""
-				})
+var benchQueries = []struct {
+	Name      string
+	Schema    string
+	Formatted string
+	Minified  string
+}{
+	{
+		Name:   "blockstring",
+		Schema: benchSchema,
+		Formatted: `{x{... on A{
+  withArgs(x:{
+    escapedUnicodeBlockString: """
+      \u3053\u3093\u306b\u3061\u306f
+    """
+  })
+}}}`,
+		Minified: `{x{... on A{` +
+			`withArgs(x:{escapedUnicodeBlockString: ` +
+			`"""\u3053\u3093\u306b\u3061\u306f"""` +
+			`})}}}`,
+	},
+	{
+		Name:   "tiny",
+		Schema: benchSchema,
+		Formatted: `{
+			x {
+				bar
+				bazz
 			}
-			...F
-			... @ include ( if : true ) {
-				i
-			}
-		}
-	}
-	# Third comment.
-	fragment F on X @dir {
-		f
-	}
-`
-
-const benchQueryMinified = `{x{bar,bazz,...on A{a,withArgs(x:{` +
-	`quiteALongArgumentName:"foo bar bazz",unicode:"こんにちは",` +
-	`escapedUnicodeBlockString:"""\u3053\u3093\u306b\u3061\u306f"""})},` +
-	`...F,...@include(if:true){i}}},fragment F on X@dir{f}`
+		}`,
+		Minified: `{x{bar,bazz}}`,
+	},
+	{
+		Name:      "medium",
+		Schema:    benchSchema,
+		Formatted: benchQueryMedium,
+		Minified:  benchQueryMediumMinified,
+	},
+	{
+		Name:      "big",
+		Schema:    benchSchema,
+		Formatted: benchQueryBig,
+		Minified:  benchQueryBigMinified,
+	},
+}
 
 func BenchmarkCompare(b *testing.B) {
-	varA := []byte(benchQuery)
-	varB := []byte(benchQueryMinified)
-	h := sha1.New()
-	b.ResetTimer()
+	for _, q := range benchQueries {
+		b.Run(q.Name, func(b *testing.B) {
+			varForm, varMin := []byte(q.Formatted), []byte(q.Minified)
+			h := sha1.New()
+			b.ResetTimer()
 
-	b.Run("alloc_buffer", func(b *testing.B) {
-		for range b.N {
-			if err := gqlhash.Compare(h, varA, varB); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
+			b.Run("alloc_buffer", func(b *testing.B) {
+				for range b.N {
+					if err := gqlhash.Compare(h, varForm, varMin); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
 
-	b.Run("reuse_buffer", func(b *testing.B) {
-		buf := make([]byte, 0, h.Size()*2)
-		for range b.N {
-			if err := gqlhash.CompareWithBuffer(buf, h, varA, varB); err != nil {
-				b.Fatal(err)
+			b.Run("reuse_buffer", func(b *testing.B) {
+				buf := make([]byte, 0, h.Size()*2)
+				for range b.N {
+					err := gqlhash.CompareWithBuffer(buf, h, varForm, varMin)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestBenchQueries(t *testing.T) {
+	for _, q := range benchQueries {
+		t.Run(q.Name, func(t *testing.T) {
+			// Prepare vektah schema
+			schema, err := vektah.LoadSchema(&ast.Source{Input: q.Schema})
+			if err != nil {
+				t.Fatalf("parsing schema: %v", err)
 			}
-		}
-	})
+			// fmt.Printf("FORMATTED: %q", q.Formatted)
+			if _, errs := vektah.LoadQuery(schema, q.Formatted); errs != nil {
+				t.Errorf("parsing formatted query: %v", errs)
+			}
+			if _, errs := vektah.LoadQuery(schema, q.Minified); errs != nil {
+				t.Errorf("parsing minified query: %v", errs)
+			}
+
+			err = gqlhash.Compare(sha1.New(), []byte(q.Formatted), []byte(q.Minified))
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
 }
 
 func BenchmarkReferenceSHA1(b *testing.B) {
-	// Prepare vektah schema
-	schema, err := vektah.LoadSchema(&ast.Source{Input: benchSchema})
-	if err != nil {
-		b.Fatalf("parsing schema: %v", err)
-	}
-	if _, errs := vektah.LoadQuery(schema, benchQuery); errs != nil {
-		b.Fatalf("parsing query: %v", errs)
-	}
-
-	q := []byte(benchQuery)
-	hashBuffer := make([]byte, 64)
-	h := sha1.New()
-	b.ResetTimer()
-
-	b.Run("direct", func(b *testing.B) {
-		for range b.N {
-			hashBuffer = hashBuffer[:0]
-			h.Reset()
-			_, _ = h.Write(q)
-			hashBuffer = h.Sum(hashBuffer)
-		}
-	})
-
-	b.Run("gqlhash", func(b *testing.B) {
-		for range b.N {
-			hashBuffer = hashBuffer[:0]
-			var err error
-			if hashBuffer, err = gqlhash.AppendQueryHash(hashBuffer, h, q); err != nil {
-				b.Fatal(err)
+	for _, q := range benchQueries {
+		b.Run(q.Name, func(b *testing.B) {
+			// Prepare vektah schema
+			schema, err := vektah.LoadSchema(&ast.Source{Input: q.Schema})
+			if err != nil {
+				b.Fatalf("parsing schema: %v", err)
 			}
-		}
-	})
+			hashBuffer := make([]byte, 64)
+			h := sha1.New()
+			b.ResetTimer()
 
-	b.Run("vektah", func(b *testing.B) {
-		for range b.N {
-			if _, errs := vektah.LoadQuery(schema, benchQuery); errs != nil {
-				b.Fatal(errs)
+			run := func(name string, b *testing.B, input string) {
+				inputBytes := []byte(input)
+				b.Run(name+"/direct", func(b *testing.B) {
+					for range b.N {
+						hashBuffer = hashBuffer[:0]
+						h.Reset()
+						_, _ = h.Write(inputBytes)
+						hashBuffer = h.Sum(hashBuffer)
+					}
+				})
+
+				b.Run(name+"/gqlhash", func(b *testing.B) {
+					for range b.N {
+						hashBuffer = hashBuffer[:0]
+						var err error
+						hashBuffer, err = gqlhash.AppendQueryHash(
+							hashBuffer, h, inputBytes,
+						)
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+
+				b.Run(name+"/vektah", func(b *testing.B) {
+					for range b.N {
+						_, errs := vektah.LoadQuery(schema, input)
+						if errs != nil {
+							b.Fatal(errs)
+						}
+					}
+				})
 			}
-		}
-	})
+
+			run("minified", b, q.Minified)
+			run("formatted", b, q.Formatted)
+		})
+	}
 }
