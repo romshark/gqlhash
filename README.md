@@ -168,7 +168,7 @@ ok      github.com/romshark/gqlhash     34.615s
 
 gqlhash ignores **irrelevant differences** between documents such as formatting
 and comments, but it will return different hashes for queries with different
-order of selections and arguments despite being identical in content.
+order of operations, selections and arguments despite them being identical in content.
 **This is by design** to allow for fast hashing and reduced code complexity.
 
 ### Strings & Block Strings
