@@ -16,7 +16,7 @@ without taking formatting and comments into account to allow fast and robust com
 
 gqlhash is [significantly faster](#performance) ⚡ than parsing query documents and
 comparing the ASTs or comparing documents after minification.
-It can be used to efficiently check whether a GraphQL query is in a set of 
+It can be used to efficiently check whether a GraphQL query is in a set of
 [trusted documents](https://benjie.dev/graphql/trusted-documents) by hash.
 
 The following two documents will generate the same SHA1 hash despite the
@@ -56,7 +56,6 @@ query {
 
 gqlhash is fully compliant with the latest GraphQL specification of
 [October 2021](https://spec.graphql.org/October2021/).
-
 
 ## Installation
 
@@ -99,12 +98,38 @@ gqlhash -file ./executable_document.graphql
 
 ### Output Format
 
-A different output format can be specified with `-format` and
-accepts `hex` and `base64`:
+gqlhash currently supports two output formats:
+
+- `hex` (hexadecimal string)
+- `base64` (base64 encoding as defined in
+  [RFC 4648](https://datatracker.ietf.org/doc/html/rfc4648))
+
+By default `hex` is used. Use `-format` to specify a different hash function:
 
 ```sh
 # prints: +o65hy+DX8NvieIOdiUWUQYiq6g=
 echo '{foo bar}' | gqlhash -format base64
+```
+
+### Hash Function
+
+gqlhash supports multiple common hash functions:
+
+- `sha1`
+- `sha2` (SHA-256)
+- `sha3` (SHA3-512)
+- `md5`
+- `blake2b` (unkeyed)
+- `blake2s` (unkeyed)
+- `fnv`
+- `crc32` (IEEE polynomial)
+- `crc64` (ISO polynomial, defined in ISO 3309)
+
+By default `sha1` is used. Use `-hash` to specify a different hash function:
+
+```sh
+# prints: t2XWfakQNusOObQfnS09PT3NOgfVqFOyizwqxYzxn4k=
+echo '{foo bar}' | gqlhash -hash sha2 -format base64
 ```
 
 ## Performance
