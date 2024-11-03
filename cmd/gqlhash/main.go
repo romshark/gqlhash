@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	Version                = `1.1.0`
+	Version                = `1.1.1`
 	SupportedHashFunctions = "sha1, sha2, sha3, md5, blake2b, blake2s, " +
 		"fnv, crc32, crc64"
 	SupportedOutputFormats = "hex, base64"
@@ -135,7 +135,8 @@ func main() {
 
 	sum, err := gqlhash.AppendQueryHash(nil, hasher, input)
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "syntax error: %v\n", err.Error())
+		os.Exit(1)
 	}
 
 	var sumStr string
