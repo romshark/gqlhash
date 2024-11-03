@@ -70,8 +70,6 @@ go install github.com/romshark/gqlhash@latest
 You can also download one of the compiled libraries from
 [GitHub Releases](https://github.com/romshark/gqlhash/releases).
 
-However, the order and structure of the document must remain the same.
-
 ## Usage
 
 gqlhash can read the GraphQL query from stdin until EOF and
