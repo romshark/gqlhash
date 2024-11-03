@@ -10,11 +10,15 @@
 
 # gqlhash
 
-Generates hashes from GraphQL
+Generates SHA1 hashes from GraphQL
 [executable documents](https://spec.graphql.org/October2021/#sec-Executable-Definitions)
 without taking formatting and comments into account to allow fast and robust comparisons.
 
-The following two documents will generate the same SHA1 hash:
+gqlhash can be used to efficiently check whether a GraphQL query is in a set of 
+[trusted documents](https://benjie.dev/graphql/trusted-documents) by hash.
+
+The following two documents will generate the same SHA1 hash despite the
+difference in formatting and comments:
 
 ```graphql
 {
@@ -48,10 +52,57 @@ query {
 }
 ```
 
+## Installation
+
+### Go install
+
+```sh
+go install github.com/romshark/gqlhash@latest
+```
+
+### Compiled Binary
+
+You can also download one of the compiled libraries from
+[GitHub Releases](https://github.com/romshark/gqlhash/releases).
+
 However, the order and structure of the document must remain the same.
 
 Fully compliant with the latest GraphQL specification of
 [October 2021](https://spec.graphql.org/October2021/)
+
+## Usage
+
+gqlhash can read the GraphQL query from stdin until EOF and
+print the resulting SHA1 hash as hexadecimal string to stdout:
+
+```sh
+# prints: fa8eb9872f835fc36f89e20e762516510622aba8
+echo '{foo bar}' | gqlhash
+```
+
+To print the version of gqlhash, use:
+
+```sh
+gqlhash -version
+```
+
+### File Input
+
+gqlhash can also read from a file provided via `-file` if necessary:
+
+```sh
+gqlhash -file ./executable_document.graphql
+```
+
+### Output Format
+
+A different output format can be specified with `-format` and
+accepts `hex` and `base64`:
+
+```sh
+# prints: +o65hy+DX8NvieIOdiUWUQYiq6g=
+echo '{foo bar}' | gqlhash -format base64
+```
 
 ## Performance
 
@@ -110,7 +161,16 @@ ok      github.com/romshark/gqlhash     34.615s
 
 </details>
 
-# Known Limitations
+## Known Limitations
+
+### Order of Selections and Arguments
+
+gqlhash ignores **irrelevant differences** between documents such as formatting
+and comments, but it will return different hashes for queries with different
+order of selections and arguments despite being identical in content.
+**This is by design** to allow for fast hashing and reduced code complexity.
+
+### Strings & Block Strings
 
 In theory you'd assume the following two queries should result in the same hash:
 
@@ -133,5 +193,11 @@ In theory you'd assume the following two queries should result in the same hash:
 }
 ```
 
-But they won't. Whether they really should be is up for debate and should
-probably be configurable via CLI flag.
+But they won't because even though the string values are identical, the former uses
+a block string while the latter isn't.
+In the case when gqlhash is used for query allowlisting
+(a.k.a. [Trusted Documents](https://benjie.dev/graphql/trusted-documents))
+we usually don't want variantions to be allowed, instead we just want the irrelevant
+formatting and comments to be ignored.
+Whether strings and block strings with equal value should result in the same hash
+is up for debate and should probably be configurable via CLI flag.
