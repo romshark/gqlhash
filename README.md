@@ -1,12 +1,10 @@
-<a href="https://pkg.go.dev/github.com/romshark/gqlhash">
-    <img src="https://godoc.org/github.com/romshark/gqlhash?status.svg" alt="GoDoc">
-</a>
-<a href="https://goreportcard.com/report/github.com/romshark/gqlhash">
-    <img src="https://goreportcard.com/badge/github.com/romshark/gqlhash" alt="GoReportCard">
-</a>
-<a href='https://coveralls.io/github/romshark/gqlhash?branch=main'>
-    <img src='https://coveralls.io/repos/github/romshark/gqlhash/badge.svg?branch=main' alt='Coverage Status' />
-</a>
+[![GoReportCard](https://goreportcard.com/badge/github.com/romshark/gqlhash)](https://goreportcard.com/report/github.com/romshark/gqlhash)
+[![Coverage Status](https://coveralls.io/repos/github/romshark/gqlhash/badge.svg?branch=main)](https://coveralls.io/github/romshark/gqlhash?branch=main)
+![License](https://img.shields.io/github/license/romshark/gqlhash)
+
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/romshark/gqlhash)
+[![Awesome GraphQL](https://img.shields.io/badge/Awesome-GraphQL-%23e535ab?logo=graphql&logoColor=white)](https://github.com/chentsulin/awesome-graphql?tab=readme-ov-file#tools---miscellaneous)
+[![GoDoc](https://godoc.org/github.com/romshark/gqlhash?status.svg)](https://pkg.go.dev/github.com/romshark/gqlhash)
 
 # gqlhash
 
