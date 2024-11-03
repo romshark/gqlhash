@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"debug/buildinfo"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"flag"
@@ -26,10 +27,10 @@ import (
 )
 
 const (
-	Version                = `1.1.1`
+	Version                = `1.2.0`
 	SupportedHashFunctions = "sha1, sha2, sha3, md5, blake2b, blake2s, " +
 		"fnv, crc32, crc64"
-	SupportedOutputFormats = "hex, base64"
+	SupportedOutputFormats = "hex, base32, base64"
 )
 
 func main() {
@@ -66,7 +67,8 @@ func main() {
 		PrintVersionInfoAndExit()
 	}
 
-	if !isValidOutputFormatName(*fFormat) {
+	outputFormat := parseFormat(*fFormat)
+	if outputFormat == 0 {
 		fmt.Fprintf(
 			os.Stderr, "unsupported format %q, use any of: "+
 				SupportedOutputFormats+"\n",
@@ -74,7 +76,9 @@ func main() {
 		)
 		os.Exit(1)
 	}
-	if !isValidHashFuncName(*fHashFunction) {
+
+	hashFunc := parseHashFunction(*fHashFunction)
+	if hashFunc == 0 {
 		fmt.Fprintf(
 			os.Stderr, "unsupported hash function %q, use any of: "+
 				SupportedHashFunctions+"\n",
@@ -104,33 +108,33 @@ func main() {
 	}
 
 	var hasher hash.Hash
-	switch name := *fHashFunction; {
-	case strings.EqualFold(name, "sha1"):
+	switch hashFunc {
+	case HashFunctionSHA1:
 		hasher = sha1.New()
-	case strings.EqualFold(name, "sha2"):
+	case HashFunctionSHA2:
 		hasher = sha256.New()
-	case strings.EqualFold(name, "sha3"):
+	case HashFunctionSHA3:
 		hasher = sha3.New512()
-	case strings.EqualFold(name, "md5"):
+	case HashFunctionMD5:
 		hasher = md5.New()
-	case strings.EqualFold(name, "blake2b"):
+	case HashFunctionBLAKE2B:
 		hasher, err = blake2b.New256(nil)
 		if err != nil {
 			panic(fmt.Errorf("initializing blake2b hasher: %w", err))
 		}
-	case strings.EqualFold(name, "blake2s"):
+	case HashFunctionBLAKE2S:
 		hasher, err = blake2s.New256(nil)
 		if err != nil {
 			panic(fmt.Errorf("initializing blake2s hasher: %w", err))
 		}
-	case strings.EqualFold(name, "fnv"):
+	case HashFunctionFNV:
 		hasher = fnv.New64()
-	case strings.EqualFold(name, "crc32"):
+	case HashFunctionCRC32:
 		hasher = crc32.NewIEEE()
-	case strings.EqualFold(name, "crc64"):
+	case HashFunctionCRC64:
 		hasher = crc64.New(crc64.MakeTable(crc64.ISO))
 	default:
-		panic(fmt.Errorf("unsupported hash function: %q", name))
+		panic(fmt.Errorf("unsupported hash function: %q", *fHashFunction))
 	}
 
 	sum, err := gqlhash.AppendQueryHash(nil, hasher, input)
@@ -139,13 +143,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	var sumStr string
-	if strings.EqualFold(*fFormat, "hex") {
-		sumStr = hex.EncodeToString(sum)
-	} else if strings.EqualFold(*fFormat, "base64") {
-		sumStr = base64.StdEncoding.EncodeToString(sum)
+	switch outputFormat {
+	case FormatHex:
+		if _, err = hex.NewEncoder(os.Stdout).Write(sum); err != nil {
+			panic(fmt.Errorf("encoding hex to stdout: %w", err))
+		}
+	case FormatBase32:
+		if _, err = base32.NewEncoder(
+			base32.StdEncoding, os.Stdout,
+		).Write(sum); err != nil {
+			panic(fmt.Errorf("encoding base32 to stdout: %w", err))
+		}
+	case FormatBase64:
+		if _, err = base64.NewEncoder(
+			base64.StdEncoding, os.Stdout,
+		).Write(sum); err != nil {
+			panic(fmt.Errorf("encoding base64 to stdout: %w", err))
+		}
+	default:
+		panic(fmt.Errorf("unsupported output format: %q", *fFormat))
 	}
-	fmt.Fprint(os.Stdout, sumStr)
 }
 
 func PrintVersionInfoAndExit() {
@@ -174,19 +191,62 @@ func PrintVersionInfoAndExit() {
 	os.Exit(0)
 }
 
-func isValidOutputFormatName(s string) bool {
-	return strings.EqualFold(s, "hex") ||
-		strings.EqualFold(s, "base64")
+func parseFormat(s string) Format {
+	switch {
+	case strings.EqualFold(s, "hex"):
+		return FormatHex
+	case strings.EqualFold(s, "base32"):
+		return FormatBase32
+	case strings.EqualFold(s, "base64"):
+		return FormatBase64
+	}
+	return 0
 }
 
-func isValidHashFuncName(s string) bool {
-	return strings.EqualFold(s, "sha1") ||
-		strings.EqualFold(s, "sha2") ||
-		strings.EqualFold(s, "sha3") ||
-		strings.EqualFold(s, "md5") ||
-		strings.EqualFold(s, "blake2b") ||
-		strings.EqualFold(s, "blake2s") ||
-		strings.EqualFold(s, "fnv") ||
-		strings.EqualFold(s, "crc32") ||
-		strings.EqualFold(s, "crc64")
+func parseHashFunction(s string) HashFunction {
+	switch {
+	case strings.EqualFold(s, "sha1"):
+		return HashFunctionSHA1
+	case strings.EqualFold(s, "sha2"):
+		return HashFunctionSHA2
+	case strings.EqualFold(s, "sha3"):
+		return HashFunctionSHA3
+	case strings.EqualFold(s, "md5"):
+		return HashFunctionMD5
+	case strings.EqualFold(s, "blake2b"):
+		return HashFunctionBLAKE2B
+	case strings.EqualFold(s, "blake2s"):
+		return HashFunctionBLAKE2S
+	case strings.EqualFold(s, "fnv"):
+		return HashFunctionFNV
+	case strings.EqualFold(s, "crc32"):
+		return HashFunctionCRC32
+	case strings.EqualFold(s, "crc64"):
+		return HashFunctionCRC64
+	}
+	return 0
 }
+
+type Format int8
+
+const (
+	_ Format = iota
+	FormatHex
+	FormatBase32
+	FormatBase64
+)
+
+type HashFunction int8
+
+const (
+	_ HashFunction = iota
+	HashFunctionSHA1
+	HashFunctionSHA2
+	HashFunctionSHA3
+	HashFunctionMD5
+	HashFunctionBLAKE2B
+	HashFunctionBLAKE2S
+	HashFunctionFNV
+	HashFunctionCRC32
+	HashFunctionCRC64
+)

@@ -96,9 +96,11 @@ gqlhash -file ./executable_document.graphql
 
 ### Output Format
 
-gqlhash currently supports two output formats:
+gqlhash supports the following output formats:
 
 - `hex` (hexadecimal string)
+- `base32` (base32 encoding as defined in
+  [RFC 4648](https://datatracker.ietf.org/doc/html/rfc4648))
 - `base64` (base64 encoding as defined in
   [RFC 4648](https://datatracker.ietf.org/doc/html/rfc4648))
 
@@ -136,7 +138,7 @@ echo '{foo bar}' | gqlhash -hash sha2 -format base64
   on average across benchmarks (min: ~3x, max: ~7x).
 - Compared to parsing the queries into AST with
   [vektah/gqlparser/v2](https://github.com/vektah/gqlparser).
-  gqlhash shows a significant advantage of **~15x** 
+  gqlhash shows a significant advantage of **~15x**
   on average across benchmarks (min: ~10x; max: ~25x).
   Also, gqlhash **doesn't allocate memory** dynamically at all, compared to
   hundrets of allocations for the same queries by gqlparser.
