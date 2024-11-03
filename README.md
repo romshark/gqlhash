@@ -59,16 +59,25 @@ gqlhash is fully compliant with the latest GraphQL specification of
 
 ## Installation
 
-### Go install
+### Homebrew 🍺
+
+```sh
+brew tap romshark/tools
+brew install gqlhash
+```
+
+### Compiled Binary
+
+Download one of the compiled binaries from
+[GitHub Releases](https://github.com/romshark/gqlhash/releases).
+
+### From Source
 
 ```sh
 go install github.com/romshark/gqlhash@latest
 ```
 
-### Compiled Binary
-
-You can also download one of the compiled libraries from
-[GitHub Releases](https://github.com/romshark/gqlhash/releases).
+This requires the latest version of [Go](https://go.dev) to be installed.
 
 ## Usage
 
