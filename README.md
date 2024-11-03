@@ -10,9 +10,9 @@
 
 # gqlhash
 
-Generates SHA1 hashes from GraphQL
+Generates SHA1 ([and other](#hash-function)) hashes from GraphQL
 [executable documents](https://spec.graphql.org/October2021/#sec-Executable-Definitions)
-without taking formatting and comments into account to allow fast and robust comparisons.
+ignoring formatting and comment diffs to enable fast and robust hash-based comparisons.
 
 gqlhash is [significantly faster](#performance) ⚡ than parsing query documents and
 comparing the ASTs or comparing documents after minification.
