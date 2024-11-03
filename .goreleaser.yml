@@ -16,7 +16,7 @@ before:
 builds:
   - id: gqlhash
     binary: gqlhash
-    main: .
+    main: ./cmd/gqlhash
     env:
       - CGO_ENABLED=0
     goos:
