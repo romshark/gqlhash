@@ -52,6 +52,10 @@ query {
 }
 ```
 
+gqlhash is fully compliant with the latest GraphQL specification of
+[October 2021](https://spec.graphql.org/October2021/).
+
+
 ## Installation
 
 ### Go install
@@ -66,9 +70,6 @@ You can also download one of the compiled libraries from
 [GitHub Releases](https://github.com/romshark/gqlhash/releases).
 
 However, the order and structure of the document must remain the same.
-
-Fully compliant with the latest GraphQL specification of
-[October 2021](https://spec.graphql.org/October2021/)
 
 ## Usage
 
