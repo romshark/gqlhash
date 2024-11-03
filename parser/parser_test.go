@@ -6,17 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/romshark/gqlhash/internal"
 	"github.com/romshark/gqlhash/parser"
 )
-
-// NoopHash is a no-op hasher for testing purposes.
-type NoopHash struct{}
-
-func (NoopHash) Write(d []byte) (int, error) { return len(d), nil }
-func (NoopHash) Reset()                      { panic("not expected to be called.") }
-func (NoopHash) Sum([]byte) []byte           { panic("not expected to be called.") }
-
-var _ parser.Hash = NoopHash{}
 
 func TestSkipIgnorables(t *testing.T) {
 	f := func(t *testing.T, expect, input string) {
@@ -44,7 +36,7 @@ func TestSkipIgnorables(t *testing.T) {
 func TestReadDocument(t *testing.T) {
 	f := func(t *testing.T, expectErr error, input string) {
 		t.Helper()
-		err := parser.ReadDocument(NoopHash{}, []byte(input))
+		err := parser.ReadDocument(internal.NoopHash{}, []byte(input))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
@@ -83,7 +75,7 @@ func TestReadDocument(t *testing.T) {
 func TestReadDefinition(t *testing.T) {
 	f := func(t *testing.T, expectSuffix string, expectErr error, input string) {
 		t.Helper()
-		suffix, err := parser.ReadDefinition(NoopHash{}, []byte(input))
+		suffix, err := parser.ReadDefinition(internal.NoopHash{}, []byte(input))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
@@ -110,7 +102,7 @@ func TestReadDefinition(t *testing.T) {
 func TestReadSelectionSet(t *testing.T) {
 	f := func(t *testing.T, expectSuffix string, expectErr error, input string) {
 		t.Helper()
-		suffix, err := parser.ReadSelectionSet(NoopHash{}, []byte(input))
+		suffix, err := parser.ReadSelectionSet(internal.NoopHash{}, []byte(input))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
@@ -147,7 +139,7 @@ func TestReadSelectionSet(t *testing.T) {
 func TestReadArguments(t *testing.T) {
 	f := func(t *testing.T, expect, expectSuffix string, expectErr error, input string) {
 		t.Helper()
-		a, suffix, err := parser.ReadArguments(NoopHash{}, []byte(input))
+		a, suffix, err := parser.ReadArguments(internal.NoopHash{}, []byte(input))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
@@ -171,7 +163,7 @@ func TestReadArguments(t *testing.T) {
 func TestReadDirectives(t *testing.T) {
 	f := func(t *testing.T, expect, expectSuffix string, expectErr error, input string) {
 		t.Helper()
-		a, suffix, err := parser.ReadDirectives(NoopHash{}, []byte(input))
+		a, suffix, err := parser.ReadDirectives(internal.NoopHash{}, []byte(input))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
@@ -337,7 +329,7 @@ func TestReadValue(t *testing.T) {
 		s string,
 	) {
 		t.Helper()
-		raw, valueType, suffix, err := parser.ReadValue(NoopHash{}, []byte(s))
+		raw, valueType, suffix, err := parser.ReadValue(internal.NoopHash{}, []byte(s))
 		if expectErr != err {
 			t.Errorf("expected err: %v; received err: %v", expectErr, err)
 		}
@@ -596,88 +588,11 @@ func TestReadValue(t *testing.T) {
 	}
 }
 
-var testUnexpectedEOF = []string{
-	"",
-	"{",
-	"query",
-	"mutation",
-	"subscription",
-	"fragment",
-	"fragment F",
-	"fragment F on",
-	"fragment F on X",
-	"fragment F on X @",
-	"fragment F on X @dir",
-	"fragment F on X @dir {",
-	"query Foo",
-	"query Foo (",
-	"query Foo ($",
-	"query Foo ($v",
-	"query Foo ($v:",
-	"query Foo ($v:T",
-	"query Foo ($v:T@",
-	"query Foo ($v:T@dir",
-	"query Foo ($v:T@dir(",
-	"query Foo ($v:T@dir(x",
-	"query Foo ($v:T@dir(x:",
-	"query Foo ($v:T=",
-	`query Foo ($v:T="`,
-	`query Foo ($v:T="\`,
-	`query Foo ($v:T="\u`,
-	`query Foo ($v:T=""`,
-	`query Foo ($v:T="""`,
-	`query Foo ($v:T="""\`,
-	`query Foo ($v:T="""\u`,
-	"query Foo ($v:T=[",
-	"query Foo ($v:T=[1",
-	"query Foo ($v:T={",
-	"query Foo ($v:T={x",
-	"query Foo ($v:T={x:",
-	"query Foo ($v:T={x:1",
-	"query Foo ($v:T=-",
-	"query Foo ($v:T=12",
-	"query Foo ($v:T=12.",
-	"query Foo ($v:T=12.3e",
-	"query Foo ($v:T=12.3E",
-	"query Foo ($v:T=12.3E+",
-	"query Foo ($v:T=12.3E-",
-	"query Foo ($v:T=12.3E-4",
-	"query Foo ($v:[",
-	"query Foo ($v:[T",
-	"query Foo ($v:[T]",
-	"query Foo ($v:[T]!",
-	"query Foo ($v:[T]! $v2",
-	"query Foo ($v:[T]!)",
-	"query Foo ($v:[T]!) {",
-	"{ ",
-	"{ foo",
-	"{ foo: ",
-	"{ foo: bar",
-	"{ foo(",
-	"{ foo(v",
-	"{ foo(v:",
-	"{ foo(v:$",
-	"{ foo(v:$v",
-	"{ foo(v:$v)",
-	"{ foo(v:$v) {",
-	"{ foo(v:$v) {...",
-	"{ foo(v:$v) {...on",
-	"{ foo(v:$v) {...on T",
-	"{ foo(v:$v) {...T",
-	"{ foo @",
-	"{ foo @dir",
-	"{ foo @dir(",
-	"{ foo @dir(x",
-	"{ foo @dir(x:",
-	"{ foo @dir(x:3",
-	"{ foo @dir(x:3)",
-}
-
 // TestReadDocumentErrEOF tests all possible EOF situations.
 func TestReadDocumentErrEOF(t *testing.T) {
-	for _, s := range testUnexpectedEOF {
+	for _, s := range internal.TestUnexpectedEOF {
 		t.Helper()
-		if err := parser.ReadDocument(NoopHash{}, []byte(s)); err == nil {
+		if err := parser.ReadDocument(internal.NoopHash{}, []byte(s)); err == nil {
 			t.Errorf("expected ErrUnexpectedEOF")
 		} else if !errors.Is(err, parser.ErrUnexpectedEOF) {
 			t.Errorf("expected ErrUnexpectedEOF; received: %v", err)
@@ -692,96 +607,17 @@ func TestReadDocumentErrEOF(t *testing.T) {
 			continue
 		}
 
-		err := parser.ReadDocument(NoopHash{}, []byte(s+"\n"))
+		err := parser.ReadDocument(internal.NoopHash{}, []byte(s+"\n"))
 		if !errors.Is(err, parser.ErrUnexpectedEOF) {
 			t.Errorf("(with ignorable suffix) expected EOF error; received: %v", err)
 		}
 	}
 }
 
-var testErrUnexpectedToken = []string{
-	"?",
-	"{?",
-	"{x?",
-	"{x:?",
-	"{x: ?",
-	"{x:y}?",
-	"query?",
-	"query ?",
-	"mutation ?",
-	"subscription ?",
-	"fragment on",
-	"fragment ?",
-	"fragment F?",
-	"fragment F ?",
-	"fragment F on?",
-	"fragment F on T?",
-	"fragment F on [",
-	"fragment F on T @?",
-	"fragment F on T @dir?",
-	"fragment F on T @dir(?",
-	"query Foo?",
-	"query Foo(?",
-	"query Foo($?",
-	"query Foo($d?",
-	"query Foo($d:?",
-	"query Foo($d:[?",
-	"query Foo($d:[T?",
-	"query Foo($d:[T]@?",
-	"query Foo($d:[T]@dir?",
-	"query Foo($d:[T]@dir(?",
-	"query Foo($d:[T]@dir(x?",
-	"query Foo($d:[T]@dir(x:?",
-	"query Foo($d:[T]?",
-	"query Foo($d:[T]!?",
-	"query Foo($d:[T]!=?",
-	"query Foo($d:[T]=2?",
-	`query Foo($d:[T]="\?`,
-	// `query Foo($d:[T]="\u?`, // This Produces ErrUnexpectedEOF
-	"query Foo @?",
-	"query Foo @dir?",
-	"query Foo @dir(?",
-	"query Foo {?",
-	"query Foo {f?",
-	"query Foo {...?",
-	"query Foo {...[",
-	"query Foo {...T?",
-	"query Foo {...T@?",
-	"query Foo {...T@dir?",
-	"query Foo {...T@dir(?",
-	"query Foo {...T!?",
-	"query Foo {...on?",
-	"query Foo {...on ?",
-	"query Foo {...on T?",
-	"query Foo {...on T@?",
-	"query Foo {...on T@dir?",
-	"query Foo {...on T@dir(?",
-	"query Foo {...@?",
-	"query Foo {...@dir?",
-	"query Foo {...@dir(?",
-	"query Foo {...@dir(x?",
-	"query Foo {...@dir(x:?",
-	"query Foo {...@dir(x:-?",
-	"query Foo {...@dir(x:-1?",
-	"query Foo {...@dir(x:-1.?",
-	"query Foo {...@dir(x:-1.2?",
-	"query Foo {...@dir(x:-1.2?",
-	"query Foo {...@dir(x:-1.e",
-	"query Foo {...@dir(x:-1.E",
-	"query Foo {...@dir(x:-1.2e?",
-	"query Foo {...@dir(x:-1.2e-?",
-	"query Foo {...@dir(x:-1.2e-4?",
-	"query Foo {...@dir(x:[?",
-	"query Foo {...@dir(x:{?",
-	"query Foo {...@dir(x:{y?",
-	"query Foo {...@dir(x:{y:?",
-	"query Foo {...@dir(x:{y:{?",
-}
-
 // TestReadDocumentErrUnexpectedToken tests all possible unexpected token situations.
 func TestReadDocumentErrUnexpectedToken(t *testing.T) {
-	for _, s := range testErrUnexpectedToken {
-		err := parser.ReadDocument(NoopHash{}, []byte(s))
+	for _, s := range internal.TestErrUnexpectedToken {
+		err := parser.ReadDocument(internal.NoopHash{}, []byte(s))
 		if !errors.Is(err, parser.ErrUnexpectedToken) {
 			t.Errorf("expected ErrUnexpectedToken; received: %v (input: %q)", err, s)
 		}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/romshark/gqlhash"
+	"github.com/romshark/gqlhash/internal"
 	"github.com/romshark/gqlhash/parser"
 
 	vektah "github.com/vektah/gqlparser/v2"
@@ -461,4 +462,30 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 			run("formatted", b, q.Formatted)
 		})
 	}
+}
+
+// FuzzAppendQueryHash makes sure AppendQueryHash never panics.
+func FuzzAppendQueryHash(f *testing.F) {
+	// Invalid inputs.
+	for _, q := range internal.TestUnexpectedEOF {
+		f.Add(q)
+	}
+	for _, q := range internal.TestErrUnexpectedToken {
+		f.Add(q)
+	}
+
+	// Valid inputs.
+	for _, q := range benchQueries {
+		f.Add(q.Formatted)
+		f.Add(q.Minified)
+	}
+	for _, t := range hashTests {
+		for _, q := range t.Inputs {
+			f.Add(q)
+		}
+	}
+
+	f.Fuzz(func(t *testing.T, a string) {
+		_, _ = gqlhash.AppendQueryHash(nil, internal.NoopHash{}, []byte(a))
+	})
 }
