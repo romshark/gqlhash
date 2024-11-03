@@ -132,12 +132,12 @@ echo '{foo bar}' | gqlhash -hash sha2 -format base64
 
 ## Performance
 
-- Compared to plain SHA1 hashing gqlhash performance overhead on average
-  across benchmarks is just **~5x** on average (min: ~3x, max: ~7x).
+- Compared to plain SHA1 hashing gqlhash performance overhead is just **~5x**
+  on average across benchmarks (min: ~3x, max: ~7x).
 - Compared to parsing the queries into AST with
   [vektah/gqlparser/v2](https://github.com/vektah/gqlparser).
-  gqlhash shows siginificant advantage of **15x** (min: ~10x; max: ~25x)
-  on average across benchmarks.
+  gqlhash shows a significant advantage of **~15x** 
+  on average across benchmarks (min: ~10x; max: ~25x).
   Also, gqlhash **doesn't allocate memory** dynamically at all, compared to
   hundrets of allocations for the same queries by gqlparser.
 
