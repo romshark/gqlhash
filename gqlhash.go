@@ -1,5 +1,6 @@
 // Package gqlhash provides GraphQL query hashing functions for
 // the latest GraphQL specification: https://spec.graphql.org/October2021/
+// that ignore formatting differences.
 package gqlhash
 
 import (
@@ -51,8 +52,8 @@ func CompareWithBuffer(buffer []byte, h hash.Hash, a, b []byte) (err error) {
 	return nil
 }
 
-// AppendQueryHash parses s and appends its hash to buffer ignoring comments, spaces, tabs,
-// line-breaks and carriage-returns.
+// AppendQueryHash parses s and appends its hash to buffer ignoring
+// comments, spaces, tabs, line-breaks and carriage-returns.
 func AppendQueryHash(buffer []byte, h Hash, s []byte) ([]byte, error) {
 	h.Reset()
 	s = parser.SkipIgnorables(s)
