@@ -14,7 +14,9 @@ Generates SHA1 hashes from GraphQL
 [executable documents](https://spec.graphql.org/October2021/#sec-Executable-Definitions)
 without taking formatting and comments into account to allow fast and robust comparisons.
 
-gqlhash can be used to efficiently check whether a GraphQL query is in a set of 
+gqlhash is [significantly faster](#performance) ⚡ than parsing query documents and
+comparing the ASTs or comparing documents after minification.
+It can be used to efficiently check whether a GraphQL query is in a set of 
 [trusted documents](https://benjie.dev/graphql/trusted-documents) by hash.
 
 The following two documents will generate the same SHA1 hash despite the
