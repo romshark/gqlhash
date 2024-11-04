@@ -27,34 +27,36 @@ var _ Hash = hash.Hash(nil)
 // prevent tokens from collapsing into one if separators aren't written, for example:
 // query fields `{ foo bar }` might collapse into one field `{ foobar }`
 // producing the same hash for those two different queries.
+// 0x9, 0xA and 0xD cannot be used because they're valid bytes within string values
+// (https://spec.graphql.org/June2018/#SourceCharacter).
 var (
-	HPrefQuery                 = []byte("/q")
-	HPrefMutation              = []byte("/m")
-	HPrefSubscription          = []byte("/s")
-	HPrefFragmentDefinition    = []byte("/g")
-	HPrefVariableDefinition    = []byte("/r")
-	HPrefDirective             = []byte("/d")
-	HPrefField                 = []byte("/f")
-	HPrefType                  = []byte("/t")
-	HPrefFieldAliasedName      = []byte("/u") // The actual name of the aliased field.
-	HPrefFragmentSpread        = []byte("/p")
-	HPrefInlineFragment        = []byte("/i")
-	HPrefArgument              = []byte("/a")
-	HPrefSelectionSet          = []byte("/c")
-	HPrefSelectionSetEnd       = []byte("/e")
-	HPrefValueInputObject      = []byte("/b")
-	HPrefValueInputObjectField = []byte("/k")
-	HPrefInputObjectEnd        = []byte("/z")
-	HPrefValueNull             = []byte("/0")
-	HPrefValueTrue             = []byte("/1")
-	HPrefValueFalse            = []byte("/2")
-	HPrefValueInteger          = []byte("/3")
-	HPrefValueFloat            = []byte("/4")
-	HPrefValueEnum             = []byte("/5")
-	HPrefValueString           = []byte("/6")
-	HPrefValueList             = []byte("/7")
-	HPrefValueListEnd          = []byte("/8")
-	HPrefValueVariable         = []byte("/9")
+	HPrefQuery                 = []byte{0x1}
+	HPrefMutation              = []byte{0x2}
+	HPrefSubscription          = []byte{0x3}
+	HPrefFragmentDefinition    = []byte{0x4}
+	HPrefVariableDefinition    = []byte{0x5}
+	HPrefDirective             = []byte{0x6}
+	HPrefField                 = []byte{0x7}
+	HPrefType                  = []byte{0x8}
+	HPrefFieldAliasedName      = []byte{0xb} // The actual name of the aliased field.
+	HPrefFragmentSpread        = []byte{0xc}
+	HPrefInlineFragment        = []byte{0xe}
+	HPrefArgument              = []byte{0xf}
+	HPrefSelectionSet          = []byte{0x11}
+	HPrefSelectionSetEnd       = []byte{0x12}
+	HPrefValueInputObject      = []byte{0x13}
+	HPrefValueInputObjectField = []byte{0x14}
+	HPrefInputObjectEnd        = []byte{0x15}
+	HPrefValueNull             = []byte{0x16}
+	HPrefValueTrue             = []byte{0x17}
+	HPrefValueFalse            = []byte{0x18}
+	HPrefValueInteger          = []byte{0x19}
+	HPrefValueFloat            = []byte{0x1a}
+	HPrefValueEnum             = []byte{0x1b}
+	HPrefValueString           = []byte{0x1c}
+	HPrefValueList             = []byte{0x1d}
+	HPrefValueListEnd          = []byte{0x1e}
+	HPrefValueVariable         = []byte{0x1f}
 )
 
 // ReadDocument reads one or many ExecutableDefinitions
@@ -750,6 +752,10 @@ func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error
 				return s, s[i:], ErrUnexpectedToken
 			}
 		default:
+			if s[i] < 0x20 {
+				// Illegal control character in string value.
+				return s, suffix, ErrUnexpectedToken
+			}
 			i++
 		}
 	}
@@ -820,6 +826,10 @@ func ReadStringBlockAfterQuotes(s []byte) (
 		case ' ', '\t':
 			// Ignore WhiteSpace bytes.
 		default:
+			if s[i] < 0x20 {
+				// Illegal control character in string value.
+				return nil, prefixLen, suffix, ErrUnexpectedToken
+			}
 			// Don't ignore non-WhiteSpace bytes.
 			setNWSNL(i)
 		}

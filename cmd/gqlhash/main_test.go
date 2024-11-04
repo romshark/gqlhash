@@ -44,39 +44,39 @@ func TestRun(t *testing.T) {
 	}
 
 	// OK
-	f(t, 0, nil, stdout(`2d73057de8d557231e49afab76d4a8f1f6fee4f6`),
+	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
 		args(), "{foo}")
-	f(t, 0, nil, stdout(`2d73057de8d557231e49afab76d4a8f1f6fee4f6`),
+	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
 		args(), "\n{\n\tfoo\n}\n")
-	f(t, 0, nil, stdout(`2d73057de8d557231e49afab76d4a8f1f6fee4f6`),
+	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
 		args(`-format`, `hex`), "{foo}")
 
-	f(t, 0, nil, stdout(`LXMFfejVVyMeSa+rdtSo8fb+`),
+	f(t, 0, nil, stdout(`AHkKRN2e94HSt+VtPHke6Cl6`),
 		args(`-format`, `base64`), "{foo}")
-	f(t, 0, nil, stdout(`FVZQK7PI2VLSGHSJV6VXNVFI6H3P5ZHW`),
+	f(t, 0, nil, stdout(`AB4QURG5T33YDUVX4VWTY6I65AUXUMVP`),
 		args(`-format`, `base32`), "{foo}")
 
-	f(t, 0, nil, stdout(`ec302dda203507b68c0e67788e27a992`+
-		`bc392ae52f5a53b1687b2c05d036de2b`),
+	f(t, 0, nil, stdout(`bb73ddf48baecb383eab5085e72eb325`+
+		`adf990b204b3ae84b0fe82ac77d4704d`),
 		args(`-format`, `hex`, `-hash`, `sha2`), "{foo}")
-	f(t, 0, nil, stdout(`8fb70f49c8113eed544a9db07d279e3f`+
-		`42aa2e7891db9e210c06daa6d892fa82`+
-		`2b5e9e80af399295d1793978f619e0e7`+
-		`50d2f59d38f8b7c69c183e11391ed2ad`),
+	f(t, 0, nil, stdout(`249c1537af1305b6c33818b23758df6d`+
+		`1d42942959cc03f3703a86838c2e71d1`+
+		`b1666eb5f4d28371d78cd5064cf5f453`+
+		`2f163c5bd4a5c11903c1a365897e9a04`),
 		args(`-format`, `hex`, `-hash`, `sha3`), "{foo}")
-	f(t, 0, nil, stdout(`6da8fb6da0232e6a3ff35462f8dbfcf3`),
+	f(t, 0, nil, stdout(`26bb7f5938c24756e3d9e5dac0577e6f`),
 		args(`-format`, `hex`, `-hash`, `md5`), "{foo}")
-	f(t, 0, nil, stdout(`777c1a4f616083cfeb327521199e137d`+
-		`82818ea624a784bc453177e499f5fac3`),
+	f(t, 0, nil, stdout(`b976303832871433b162dae14fb6504f`+
+		`b593391b297bfc0204166750c1f945e0`),
 		args(`-format`, `hex`, `-hash`, `blake2b`), "{foo}")
-	f(t, 0, nil, stdout(`1cc14e924dee9c0111c54cbbf7bd3691`+
-		`17b64209ffcbd39e901bebc7fdd7c784`),
+	f(t, 0, nil, stdout(`1311412899a149a732286d27f460b6d1`+
+		`71c5a6c0ebf128bb8258c85017204af5`),
 		args(`-format`, `hex`, `-hash`, `blake2s`), "{foo}")
-	f(t, 0, nil, stdout(`a0ff20a63ae62338`),
+	f(t, 0, nil, stdout(`cdd3df8c52548af0`),
 		args(`-format`, `hex`, `-hash`, `fnv`), "{foo}")
-	f(t, 0, nil, stdout(`9a642f5c`),
+	f(t, 0, nil, stdout(`0dabfb06`),
 		args(`-format`, `hex`, `-hash`, `crc32`), "{foo}")
-	f(t, 0, nil, stdout(`298fed3c30006037`),
+	f(t, 0, nil, stdout(`77cc3c305bf54e20`),
 		args(`-format`, `hex`, `-hash`, `crc64`), "{foo}")
 
 	// Err arguments
@@ -101,7 +101,7 @@ func TestRun(t *testing.T) {
 	if err := os.WriteFile(testInputGraphQL, []byte(`{ foo }`), 0o644); err != nil {
 		t.Fatalf("writing test input file: %v", err)
 	}
-	f(t, 0, nil, stdout(`2d73057de8d557231e49afab76d4a8f1f6fee4f6`),
+	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
 		args(`-file`, testInputGraphQL), "this must not be read")
 
 	// Input file doesn't exist

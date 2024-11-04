@@ -593,9 +593,9 @@ func TestReadDocumentErrEOF(t *testing.T) {
 	for _, s := range internal.TestUnexpectedEOF {
 		t.Helper()
 		if err := parser.ReadDocument(internal.NoopHash{}, []byte(s)); err == nil {
-			t.Errorf("expected ErrUnexpectedEOF")
+			t.Errorf("expected %v", parser.ErrUnexpectedEOF)
 		} else if !errors.Is(err, parser.ErrUnexpectedEOF) {
-			t.Errorf("expected ErrUnexpectedEOF; received: %v", err)
+			t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, err)
 		}
 
 		// The queries that end with a string with an unfinished escape sequence
@@ -607,9 +607,13 @@ func TestReadDocumentErrEOF(t *testing.T) {
 			continue
 		}
 
-		err := parser.ReadDocument(internal.NoopHash{}, []byte(s+"\n"))
+		in := s + "\n"
+		err := parser.ReadDocument(internal.NoopHash{}, []byte(in))
 		if !errors.Is(err, parser.ErrUnexpectedEOF) {
-			t.Errorf("(with ignorable suffix) expected EOF error; received: %v", err)
+			t.Errorf(
+				"(with ignorable suffix) expected %v; received: %v in %q",
+				parser.ErrUnexpectedEOF, err, in,
+			)
 		}
 	}
 }
@@ -718,4 +722,78 @@ func TestTrimEmptyLinesSuffix(t *testing.T) {
 	f(t, "ツ ж  ", "ツ ж  \n  ")
 	f(t, "ツ ж\t \t", "ツ ж\t \t\n  ")
 	f(t, "ツ ж\t \t", "ツ ж\t \t\n  \n   \n\t\n")
+}
+
+// TestHPrefInStringValue makes sure none of the parser.HPref separators
+// can appear in string values without resulting in ErrUnexpectedToken
+func TestHPrefInStringValue(t *testing.T) {
+	f := func(t *testing.T, hpref []byte) {
+		t.Helper()
+		{
+			s := `{f(a:"` + string(hpref) + `")}`
+
+			if expectLen := len(`{f(a:"`) + 1 + len(`")}`); len(s) != expectLen {
+				t.Fatalf(
+					"expected string value slice len: %d; received: %d",
+					expectLen, len(s),
+				)
+			}
+
+			err := parser.ReadDocument(internal.NoopHash{}, []byte(s))
+			if err != parser.ErrUnexpectedToken {
+				t.Errorf(
+					"hpref %v must not be valid within a string value: %q; "+
+						"expected: %v; received: %v",
+					hpref, s, parser.ErrUnexpectedToken, err,
+				)
+			}
+		}
+		{
+			s := `{f(a:"""` + string(hpref) + `""")}`
+
+			if expectLen := len(`{f(a:"""`) + 1 + len(`""")}`); len(s) != expectLen {
+				t.Fatalf(
+					"expected block string value slice len: %d; received: %d",
+					expectLen, len(s),
+				)
+			}
+
+			err := parser.ReadDocument(internal.NoopHash{}, []byte(s))
+			if err != parser.ErrUnexpectedToken {
+				t.Errorf(
+					"hpref %v must not be valid within a block string value: %q; "+
+						"expected: %v; received: %v",
+					hpref, s, parser.ErrUnexpectedToken, err,
+				)
+			}
+		}
+	}
+
+	f(t, parser.HPrefQuery)
+	f(t, parser.HPrefMutation)
+	f(t, parser.HPrefSubscription)
+	f(t, parser.HPrefFragmentDefinition)
+	f(t, parser.HPrefVariableDefinition)
+	f(t, parser.HPrefDirective)
+	f(t, parser.HPrefField)
+	f(t, parser.HPrefType)
+	f(t, parser.HPrefFieldAliasedName)
+	f(t, parser.HPrefFragmentSpread)
+	f(t, parser.HPrefInlineFragment)
+	f(t, parser.HPrefArgument)
+	f(t, parser.HPrefSelectionSet)
+	f(t, parser.HPrefSelectionSetEnd)
+	f(t, parser.HPrefValueInputObject)
+	f(t, parser.HPrefValueInputObjectField)
+	f(t, parser.HPrefInputObjectEnd)
+	f(t, parser.HPrefValueNull)
+	f(t, parser.HPrefValueTrue)
+	f(t, parser.HPrefValueFalse)
+	f(t, parser.HPrefValueInteger)
+	f(t, parser.HPrefValueFloat)
+	f(t, parser.HPrefValueEnum)
+	f(t, parser.HPrefValueString)
+	f(t, parser.HPrefValueList)
+	f(t, parser.HPrefValueListEnd)
+	f(t, parser.HPrefValueVariable)
 }

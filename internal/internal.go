@@ -36,7 +36,6 @@ var TestUnexpectedEOF = []string{
 	"query Foo ($v:T@dir(x",
 	"query Foo ($v:T@dir(x:",
 	"query Foo ($v:T=",
-	`query Foo ($v:T="`,
 	`query Foo ($v:T="\`,
 	`query Foo ($v:T="\u`,
 	`query Foo ($v:T=""`,
@@ -126,6 +125,9 @@ var TestErrUnexpectedToken = []string{
 	"query Foo($d:[T]!=?",
 	"query Foo($d:[T]=2?",
 	`query Foo($d:[T]="\?`,
+	`query Foo ($s:ID="` + "\u0000",
+	`query Foo ($s:ID="` + "\u0001",
+	`query Foo ($s:ID="` + "\u000b",
 	// `query Foo($d:[T]="\u?`, // This Produces ErrUnexpectedEOF
 	"query Foo @?",
 	"query Foo @dir?",
