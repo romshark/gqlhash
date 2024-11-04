@@ -34,17 +34,26 @@ const (
 )
 
 func main() {
-	fFile := flag.String(
+	os.Exit(run(os.Args, os.Stdout, os.Stderr, os.Stdin))
+}
+
+func run(
+	args []string,
+	stdout, stderr io.Writer,
+	stdin io.Reader,
+) (exitCode int) {
+	cli := flag.NewFlagSet(args[0], flag.ExitOnError)
+	fFile := cli.String(
 		"file",
 		"",
 		"Path to GraphQL file containing executable operations",
 	)
-	fFormat := flag.String(
+	fFormat := cli.String(
 		"format",
 		"hex",
 		"Hash format ("+SupportedOutputFormats+")",
 	)
-	fHashFunction := flag.String(
+	fHashFunction := cli.String(
 		"hash",
 		"sha1",
 		"Selects the hash function "+
@@ -56,55 +65,57 @@ func main() {
 			"crc32 uses the IEEE polynomial.\n"+
 			"crc64 uses ISO polynomial, defined in ISO 3309 and used in HDLC.",
 	)
-	fVersion := flag.Bool(
+	fVersion := cli.Bool(
 		"version",
 		false,
 		`Print version to stdout and exit`,
 	)
-	flag.Parse()
+	if err := cli.Parse(args[1:]); err != nil {
+		panic(fmt.Errorf("parsing CLI arguments: %w", err))
+	}
 
 	if *fVersion {
-		PrintVersionInfoAndExit()
+		return printVersionInfoAndExit(args[0], stdout)
 	}
 
 	outputFormat := parseFormat(*fFormat)
 	if outputFormat == 0 {
 		fmt.Fprintf(
-			os.Stderr, "unsupported format %q, use any of: "+
+			stderr, "unsupported format %q, use any of: "+
 				SupportedOutputFormats+"\n",
 			*fFormat,
 		)
-		os.Exit(1)
+		return 2
 	}
 
 	hashFunc := parseHashFunction(*fHashFunction)
 	if hashFunc == 0 {
 		fmt.Fprintf(
-			os.Stderr, "unsupported hash function %q, use any of: "+
+			stderr, "unsupported hash function %q, use any of: "+
 				SupportedHashFunctions+"\n",
 			*fHashFunction,
 		)
-		os.Exit(1)
+		return 2
 	}
 
 	var input []byte
 	var err error
 	if *fFile != "" {
 		if input, err = os.ReadFile(*fFile); err != nil {
-			fmt.Fprintf(os.Stderr, "error reading file %q: %v\n", *fFile, err)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "error reading file %q: %v\n", *fFile, err)
+			return 1
 		}
 	} else {
-		input, err = io.ReadAll(os.Stdin)
+		input, err = io.ReadAll(stdin)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error reading stdin: %v\n", err)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "error reading stdin: %v\n", err)
+			return 1
 		}
 	}
 
 	if len(input) < 1 {
-		fmt.Fprintln(os.Stderr, "no input")
-		os.Exit(1)
+		fmt.Fprintln(stderr, "no input")
+		return 1
 	}
 
 	var hasher hash.Hash
@@ -139,56 +150,57 @@ func main() {
 
 	sum, err := gqlhash.AppendQueryHash(nil, hasher, input)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "syntax error: %v\n", err.Error())
-		os.Exit(1)
+		fmt.Fprintf(stderr, "syntax error: %v\n", err.Error())
+		return 1
 	}
 
 	switch outputFormat {
 	case FormatHex:
-		if _, err = hex.NewEncoder(os.Stdout).Write(sum); err != nil {
+		if _, err = hex.NewEncoder(stdout).Write(sum); err != nil {
 			panic(fmt.Errorf("encoding hex to stdout: %w", err))
 		}
 	case FormatBase32:
 		if _, err = base32.NewEncoder(
-			base32.StdEncoding, os.Stdout,
+			base32.StdEncoding, stdout,
 		).Write(sum); err != nil {
 			panic(fmt.Errorf("encoding base32 to stdout: %w", err))
 		}
 	case FormatBase64:
 		if _, err = base64.NewEncoder(
-			base64.StdEncoding, os.Stdout,
+			base64.StdEncoding, stdout,
 		).Write(sum); err != nil {
 			panic(fmt.Errorf("encoding base64 to stdout: %w", err))
 		}
 	default:
 		panic(fmt.Errorf("unsupported output format: %q", *fFormat))
 	}
+	return 0
 }
 
-func PrintVersionInfoAndExit() {
-	p, err := exec.LookPath(os.Args[0])
+func printVersionInfoAndExit(executableName string, w io.Writer) (exitCode int) {
+	p, err := exec.LookPath(executableName)
 	if err != nil {
-		fmt.Printf("resolving executable file path: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(w, "resolving executable file path: %v\n", err)
+		return 1
 	}
 
 	f, err := os.Open(p)
 	if err != nil {
-		fmt.Printf("opening executable file %q: %v\n", os.Args[0], err)
-		os.Exit(1)
+		fmt.Fprintf(w, "opening executable file %q: %v\n", os.Args[0], err)
+		return 1
 	}
 
 	info, err := buildinfo.Read(f)
 	if err != nil {
-		fmt.Printf("Reading build information: %v\n", err)
+		fmt.Fprintf(w, "Reading build information: %v\n", err)
 	}
 
-	fmt.Printf("gqlhash v%s\n\n", Version)
-	fmt.Println("MIT License")
-	fmt.Print("Copyright (c) 2024 Roman Scharkov (github.com/romshark)\n\n")
-	fmt.Printf("%v\n", info)
+	fmt.Fprintf(w, "gqlhash v%s\n\n", Version)
+	fmt.Fprintln(w, "MIT License")
+	fmt.Fprint(w, "Copyright (c) 2024 Roman Scharkov (github.com/romshark)\n\n")
+	fmt.Fprintf(w, "%v\n", info)
 
-	os.Exit(0)
+	return 0
 }
 
 func parseFormat(s string) Format {
