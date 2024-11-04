@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	Version                = `1.2.0`
+	Version                = `1.2.1`
 	SupportedHashFunctions = "sha1, sha2, sha3, md5, blake2b, blake2s, " +
 		"fnv, crc32, crc64"
 	SupportedOutputFormats = "hex, base32, base64"
