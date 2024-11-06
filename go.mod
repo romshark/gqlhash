@@ -8,6 +8,6 @@ require (
 )
 
 require (
-	github.com/agnivade/levenshtein v1.1.1 // indirect
+	github.com/agnivade/levenshtein v1.2.0 // indirect
 	golang.org/x/sys v0.26.0 // indirect
 )
