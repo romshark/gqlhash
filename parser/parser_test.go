@@ -412,6 +412,9 @@ func TestReadValue(t *testing.T) {
 			"-10000000000000000000000000.0"+suffix)
 		f(t, "0.1e1234567890", parser.ValueTypeFloat, suffix, nil,
 			"0.1e1234567890"+suffix)
+
+		f(t, "0.1e1234567890", parser.ValueTypeFloat, suffix, nil,
+			"0.1e1234567890"+suffix)
 		f(t, "0.1e+1234567890", parser.ValueTypeFloat, suffix, nil,
 			"0.1e+1234567890"+suffix)
 		f(t, "0.1e-1234567890", parser.ValueTypeFloat, suffix, nil,
@@ -420,6 +423,18 @@ func TestReadValue(t *testing.T) {
 			"0.1E+1234567890"+suffix)
 		f(t, "0.1E-1234567890", parser.ValueTypeFloat, suffix, nil,
 			"0.1E-1234567890"+suffix)
+
+		f(t, "1e1234567890", parser.ValueTypeFloat, suffix, nil,
+			"1e1234567890"+suffix)
+		f(t, "1e+1234567890", parser.ValueTypeFloat, suffix, nil,
+			"1e+1234567890"+suffix)
+		f(t, "1e-1234567890", parser.ValueTypeFloat, suffix, nil,
+			"1e-1234567890"+suffix)
+		f(t, "1E+1234567890", parser.ValueTypeFloat, suffix, nil,
+			"1E+1234567890"+suffix)
+		f(t, "1E-1234567890", parser.ValueTypeFloat, suffix, nil,
+			"1E-1234567890"+suffix)
+
 		f(t, "10000000000000000000000000.0e+23", parser.ValueTypeFloat, suffix, nil,
 			"10000000000000000000000000.0e+23"+suffix)
 		f(t, "-10000000000000000000000000.0E+23", parser.ValueTypeFloat, suffix, nil,

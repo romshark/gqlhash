@@ -574,8 +574,8 @@ func ReadValue(h Hash, s []byte) (
 		if value, suffix, err = ReadIntValue(s); err != nil {
 			return value, ValueTypeInt, suffix, err
 		}
-		if len(suffix) > 0 && suffix[0] == '.' {
-			if _, suffix, err = ReadFloatEnd(suffix[1:]); err != nil {
+		if len(suffix) > 0 && (suffix[0] == '.' || suffix[0] == 'e' || suffix[0] == 'E') {
+			if _, suffix, err = ReadFloatAfterInteger(suffix); err != nil {
 				return value, ValueTypeFloat, suffix, err
 			}
 			// FloatValue (https://spec.graphql.org/October2021/#sec-Float-Value).
@@ -838,17 +838,23 @@ func ReadStringBlockAfterQuotes(s []byte) (
 	return nil, prefixLen, suffix, ErrUnexpectedEOF
 }
 
-// ReadFloatEnd reads the part of the FloatValue that comes after the first IntegerPart.
+// ReadFloatAfterInteger reads the part of the FloatValue that
+// comes after the first IntegerPart.
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#sec-Float-Value
-func ReadFloatEnd(s []byte) (value []byte, suffix []byte, err error) {
+func ReadFloatAfterInteger(s []byte) (value []byte, suffix []byte, err error) {
 	// Fractional part.
-	if len(s) > 0 && (s[0] == 'e' || s[0] == 'E') {
-		return value, s, ErrUnexpectedToken
-	}
 	suffix = s
-	for ; len(suffix) > 0 && IsDigit(suffix[0]); suffix = suffix[1:] {
+	if len(s) > 0 && (s[0] == '.') {
+		suffix = suffix[1:]
+		before := suffix
+		for ; len(suffix) > 0 && IsDigit(suffix[0]); suffix = suffix[1:] {
+		}
+		if len(before) == len(suffix) {
+			// No digits after dot
+			return nil, suffix, ErrUnexpectedToken
+		}
 	}
 	if len(suffix) > 0 && (suffix[0] == 'e' || suffix[0] == 'E') {
 		// Exponential part.
@@ -892,8 +898,8 @@ func ReadOperationType(h Hash, s []byte) (
 	return 0, s, ErrUnexpectedToken
 }
 
-// SkipIgnorables []bytekips over any comments, spaces, tabs, line-breaks and
-// carriage-returns it encounters and returns the s []byteuffix.
+// SkipIgnorables skips over any comments, spaces, tabs, line-breaks and
+// carriage-returns it encounters and returns the s suffix.
 // Reference:
 //
 //   - https://spec.graphql.org/October2021/#sec-Line-Terminators
