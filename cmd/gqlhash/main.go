@@ -4,7 +4,7 @@ import (
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
-	"debug/buildinfo"
+	"crypto/sha3"
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
@@ -16,18 +16,20 @@ import (
 	"hash/fnv"
 	"io"
 	"os"
-	"os/exec"
+	"runtime/debug"
 	"strings"
 
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/blake2s"
-	"golang.org/x/crypto/sha3"
 
 	"github.com/romshark/gqlhash"
 )
 
+// Version is the release version, injected at build time by GoReleaser
+// via -ldflags "-X main.Version=...". Defaults to "dev" for local builds.
+var Version = "dev"
+
 const (
-	Version                = `1.2.5`
 	SupportedHashFunctions = "sha1, sha2, sha3, md5, blake2b, blake2s, " +
 		"fnv, crc32, crc64"
 	SupportedOutputFormats = "hex, base32, base64"
@@ -75,12 +77,12 @@ func run(
 	}
 
 	if *fVersion {
-		return printVersionInfoAndExit(args[0], stdout)
+		return printVersionInfoAndExit(stdout)
 	}
 
 	outputFormat := parseFormat(*fFormat)
 	if outputFormat == 0 {
-		fmt.Fprintf(
+		_, _ = fmt.Fprintf(
 			stderr, "unsupported format %q, use any of: "+
 				SupportedOutputFormats+"\n",
 			*fFormat,
@@ -90,7 +92,7 @@ func run(
 
 	hashFunc := parseHashFunction(*fHashFunction)
 	if hashFunc == 0 {
-		fmt.Fprintf(
+		_, _ = fmt.Fprintf(
 			stderr, "unsupported hash function %q, use any of: "+
 				SupportedHashFunctions+"\n",
 			*fHashFunction,
@@ -102,19 +104,19 @@ func run(
 	var err error
 	if *fFile != "" {
 		if input, err = os.ReadFile(*fFile); err != nil {
-			fmt.Fprintf(stderr, "error reading file %q: %v\n", *fFile, err)
+			_, _ = fmt.Fprintf(stderr, "error reading file %q: %v\n", *fFile, err)
 			return 1
 		}
 	} else {
 		input, err = io.ReadAll(stdin)
 		if err != nil {
-			fmt.Fprintf(stderr, "error reading stdin: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "error reading stdin: %v\n", err)
 			return 1
 		}
 	}
 
 	if len(input) < 1 {
-		fmt.Fprintln(stderr, "no input")
+		_, _ = fmt.Fprintln(stderr, "no input")
 		return 1
 	}
 
@@ -150,7 +152,7 @@ func run(
 
 	sum, err := gqlhash.AppendQueryHash(nil, hasher, input)
 	if err != nil {
-		fmt.Fprintf(stderr, "syntax error: %v\n", err.Error())
+		_, _ = fmt.Fprintf(stderr, "syntax error: %v\n", err.Error())
 		return 1
 	}
 
@@ -177,28 +179,14 @@ func run(
 	return 0
 }
 
-func printVersionInfoAndExit(executableName string, w io.Writer) (exitCode int) {
-	p, err := exec.LookPath(executableName)
-	if err != nil {
-		fmt.Fprintf(w, "resolving executable file path: %v\n", err)
-		return 1
-	}
+func printVersionInfoAndExit(w io.Writer) (exitCode int) {
+	_, _ = fmt.Fprintf(w, "gqlhash v%s\n\n", Version)
+	_, _ = fmt.Fprintln(w, "MIT License")
+	_, _ = fmt.Fprint(w, "Copyright (c) 2024 Roman Scharkov (github.com/romshark)\n\n")
 
-	f, err := os.Open(p)
-	if err != nil {
-		fmt.Fprintf(w, "opening executable file %q: %v\n", os.Args[0], err)
-		return 1
+	if info, ok := debug.ReadBuildInfo(); ok {
+		_, _ = fmt.Fprintf(w, "%v\n", info)
 	}
-
-	info, err := buildinfo.Read(f)
-	if err != nil {
-		fmt.Fprintf(w, "Reading build information: %v\n", err)
-	}
-
-	fmt.Fprintf(w, "gqlhash v%s\n\n", Version)
-	fmt.Fprintln(w, "MIT License")
-	fmt.Fprint(w, "Copyright (c) 2024 Roman Scharkov (github.com/romshark)\n\n")
-	fmt.Fprintf(w, "%v\n", info)
 
 	return 0
 }

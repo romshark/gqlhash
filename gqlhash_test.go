@@ -13,6 +13,7 @@ import (
 
 	vektah "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/validator/rules"
 )
 
 // MockHash is a mock hasher that's recording all writes for testing purposes.
@@ -396,11 +397,14 @@ func TestBenchQueries(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parsing schema: %v", err)
 			}
-			// fmt.Printf("FORMATTED: %q", q.Formatted)
-			if _, errs := vektah.LoadQuery(schema, q.Formatted); errs != nil {
+			if _, errs := vektah.LoadQueryWithRules(
+				schema, q.Formatted, nil,
+			); errs != nil {
 				t.Errorf("parsing formatted query: %v", errs)
 			}
-			if _, errs := vektah.LoadQuery(schema, q.Minified); errs != nil {
+			if _, errs := vektah.LoadQueryWithRules(
+				schema, q.Minified, nil,
+			); errs != nil {
 				t.Errorf("parsing minified query: %v", errs)
 			}
 
@@ -420,6 +424,9 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 			if err != nil {
 				b.Fatalf("parsing schema: %v", err)
 			}
+			// Construct the validation rules once, mirroring real-world
+			// vektah usage instead of rebuilding them on every parse.
+			vektahRules := rules.NewDefaultRules()
 			hashBuffer := make([]byte, 64)
 			h := sha1.New()
 			b.ResetTimer()
@@ -450,7 +457,7 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 
 				b.Run(name+"/vektah", func(b *testing.B) {
 					for range b.N {
-						_, errs := vektah.LoadQuery(schema, input)
+						_, errs := vektah.LoadQueryWithRules(schema, input, vektahRules)
 						if errs != nil {
 							b.Fatal(errs)
 						}

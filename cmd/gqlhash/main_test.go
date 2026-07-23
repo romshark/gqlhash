@@ -133,7 +133,11 @@ func TestRunVersion(t *testing.T) {
 		}
 	}
 
-	f(t, 0, []string{"gqlhash v" + Version}, args("-version"))
+	original := Version
+	t.Cleanup(func() { Version = original })
+	Version = "1.2.3-test"
+
+	f(t, 0, []string{"gqlhash v1.2.3-test"}, args("-version"))
 }
 
 func TestParseFormat(t *testing.T) {

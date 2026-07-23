@@ -337,7 +337,8 @@ func TestReadValue(t *testing.T) {
 			t.Errorf("expected raw: %q; received raw: %q", expectRaw, raw)
 		}
 		if expectType != valueType {
-			t.Errorf("expected valueType: %q; received valueType: %q", expectType, valueType)
+			t.Errorf("expected valueType: %v; received valueType: %v",
+				expectType, valueType)
 		}
 		if expectSuffix != string(suffix) {
 			t.Errorf("expected suffix: %q; received suffix: %q", expectSuffix, suffix)
