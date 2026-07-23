@@ -9,7 +9,7 @@
 # gqlhash
 
 Generates SHA1 ([and other](#hash-function)) hashes from GraphQL
-[executable documents](https://spec.graphql.org/October2021/#sec-Executable-Definitions)
+[executable documents](https://spec.graphql.org/September2025/#sec-Executable-Definitions)
 ignoring formatting and comment diffs to enable fast and robust hash-based comparisons.
 
 gqlhash is [significantly faster](#performance) ⚡ than parsing query documents and
@@ -53,7 +53,7 @@ query {
 ```
 
 gqlhash is fully compliant with the latest GraphQL specification of
-[October 2021](https://spec.graphql.org/October2021/).
+[September 2025](https://spec.graphql.org/September2025/).
 
 ## Installation
 

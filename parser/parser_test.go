@@ -345,6 +345,17 @@ func TestReadValue(t *testing.T) {
 		}
 	}
 
+	// fErr asserts only the returned error, used for malformed inputs where the
+	// exact raw/suffix of the error recovery isn't specified by the grammar.
+	fErr := func(t *testing.T, expectErr error, s string) {
+		t.Helper()
+		_, _, _, err := parser.ReadValue(internal.NoopHash{}, []byte(s))
+		if expectErr != err {
+			t.Errorf("expected err: %v; received err: %v; input: %q",
+				expectErr, err, s)
+		}
+	}
+
 	// Errors (always nullable by default).
 	f(t, "", 0, "", parser.ErrUnexpectedEOF, "")
 	f(t, "", 0, "(", parser.ErrUnexpectedToken, "(")
@@ -364,16 +375,23 @@ func TestReadValue(t *testing.T) {
 
 	const suffix = " suffix"
 
-	{ // NullValue (https://spec.graphql.org/October2021/#sec-Null-Value).
+	// Supplementary-plane (astral) characters (https://www.unicode.org/roadmaps/smp),
+	// each a 4-byte UTF-8 sequence:
+	// U+1F4A9 PILE OF POO and U+1D11E MUSICAL SYMBOL G CLEF.
+	// Used to exercise the full Unicode SourceCharacter range
+	// (https://spec.graphql.org/September2025/#SourceCharacter).
+	astral1, astral2 := string(rune(0x1F4A9)), string(rune(0x1D11E))
+
+	{ // NullValue (https://spec.graphql.org/September2025/#sec-Null-Value).
 		f(t, "null", parser.ValueTypeNull, suffix, nil, "null"+suffix)
 	}
 
-	{ // BooleanValue (https://spec.graphql.org/October2021/#sec-Boolean-Value).
+	{ // BooleanValue (https://spec.graphql.org/September2025/#sec-Boolean-Value).
 		f(t, "true", parser.ValueTypeBooleanTrue, suffix, nil, "true"+suffix)
 		f(t, "false", parser.ValueTypeBooleanFalse, suffix, nil, "false"+suffix)
 	}
 
-	{ // EnumValue (https://spec.graphql.org/October2021/#sec-Enum-Value).
+	{ // EnumValue (https://spec.graphql.org/September2025/#sec-Enum-Value).
 		f(t, "x", parser.ValueTypeEnum, suffix, nil, "x"+suffix)
 		f(t, "foo", parser.ValueTypeEnum, suffix, nil, "foo"+suffix)
 		f(t, "Bar", parser.ValueTypeEnum, suffix, nil, "Bar"+suffix)
@@ -381,7 +399,7 @@ func TestReadValue(t *testing.T) {
 		f(t, "_0", parser.ValueTypeEnum, suffix, nil, "_0"+suffix)
 	}
 
-	{ // IntValue (https://spec.graphql.org/October2021/#sec-Int-Value).
+	{ // IntValue (https://spec.graphql.org/September2025/#sec-Int-Value).
 		f(t, "0", parser.ValueTypeInt, suffix, nil, "0"+suffix)
 		f(t, "-0", parser.ValueTypeInt, suffix, nil, "-0"+suffix)
 		f(t, "42", parser.ValueTypeInt, suffix, nil, "42"+suffix)
@@ -394,7 +412,7 @@ func TestReadValue(t *testing.T) {
 			"-10000000000000000000000000"+suffix)
 	}
 
-	{ // FloatValue (https://spec.graphql.org/October2021/#sec-Float-Value).
+	{ // FloatValue (https://spec.graphql.org/September2025/#sec-Float-Value).
 		f(t, "0.1", parser.ValueTypeFloat, suffix, nil,
 			"0.1"+suffix)
 		f(t, "-0.1", parser.ValueTypeFloat, suffix, nil,
@@ -442,7 +460,7 @@ func TestReadValue(t *testing.T) {
 			"-10000000000000000000000000.0E+23"+suffix)
 	}
 
-	{ // Single-line strings (https://spec.graphql.org/October2021/#sec-String-Value).
+	{ // Single-line strings (https://spec.graphql.org/September2025/#sec-String-Value).
 		f(t, ``, parser.ValueTypeString, `uGGGG"`+suffix, parser.ErrUnexpectedToken,
 			`"\uGGGG"`+suffix)
 		f(t, "", parser.ValueTypeString, "", parser.ErrUnexpectedEOF, `"\"`)
@@ -465,6 +483,39 @@ func TestReadValue(t *testing.T) {
 		f(t, `\u90aA`, parser.ValueTypeString, suffix, nil, `"\u90aA"`+suffix)
 		f(t, `\u3053\u3093\u306b\u3061\u306f`, parser.ValueTypeString, suffix, nil,
 			`"\u3053\u3093\u306b\u3061\u306f"`+suffix)
+
+		// Variable-width Unicode escape sequence `\u{HexDigit+}`, according to
+		// September 2025 spec (https://spec.graphql.org/September2025/#EscapedUnicode).
+		f(t, `\u{0}`, parser.ValueTypeString, suffix, nil, `"\u{0}"`+suffix)
+		f(t, `\u{41}`, parser.ValueTypeString, suffix, nil, `"\u{41}"`+suffix)
+		f(t, `\u{1F4A9}`, parser.ValueTypeString, suffix, nil, `"\u{1F4A9}"`+suffix)
+		f(t, `\u{1f4a9}`, parser.ValueTypeString, suffix, nil, `"\u{1f4a9}"`+suffix)
+		f(t, `\u{10FFFF}`, parser.ValueTypeString, suffix, nil, `"\u{10FFFF}"`+suffix)
+		f(t, `a\u{1F600}b`, parser.ValueTypeString, suffix, nil, `"a\u{1F600}b"`+suffix)
+
+		// gqlhash does not validate Unicode scalar values, just like it doesn't
+		// for the fixed-width `\uXXXX` form (which also accepts lone surrogates
+		// such as `\uD800`), so grammatically valid but out-of-range or surrogate
+		// escapes are still accepted.
+		f(t, `\u{110000}`, parser.ValueTypeString, suffix, nil, `"\u{110000}"`+suffix)
+		f(t, `\u{D800}`, parser.ValueTypeString, suffix, nil, `"\u{D800}"`+suffix)
+
+		// Malformed variable-width escapes must be rejected (September 2025).
+		fErr(t, parser.ErrUnexpectedToken, `"\u{}"`+suffix)     // No hex digits.
+		fErr(t, parser.ErrUnexpectedToken, `"\u{G}"`+suffix)    // Non-hex digit.
+		fErr(t, parser.ErrUnexpectedToken, `"\u{1F4A9"`+suffix) // Missing closing brace.
+		fErr(t, parser.ErrUnexpectedEOF, `"\u{1F4A9`)           // Unterminated at EOF.
+
+		// Fixed-width escape truncated by EOF before four hex digits.
+		fErr(t, parser.ErrUnexpectedEOF, `"\uAB`)
+
+		// Literal supplementary-plane (astral, 4-byte UTF-8) characters.
+		// SourceCharacter spans the full Unicode range (September 2025); gqlhash
+		// handles them since it operates on raw UTF-8 bytes.
+		f(t, astral1, parser.ValueTypeString, suffix, nil, `"`+astral1+`"`+suffix)
+		f(t, "a"+astral2+"b", parser.ValueTypeString, suffix, nil,
+			`"a`+astral2+`b"`+suffix)
+
 		f(t, `ok`, parser.ValueTypeString, suffix, nil, `"ok"`+suffix)
 		f(t, `one two\t\nthree 123`, parser.ValueTypeString, suffix, nil,
 			`"one two\t\nthree 123"`+suffix)
@@ -476,7 +527,7 @@ func TestReadValue(t *testing.T) {
 			`"ツ ёж ïх жэ こんにちは\n"`+suffix)
 	}
 
-	{ // Block strings (https://spec.graphql.org/October2021/#sec-String-Value).
+	{ // Block strings (https://spec.graphql.org/September2025/#sec-String-Value).
 		f(t, ``, parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF, `"""`)
 		f(t, ``, parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF,
 			`"""\"""`+suffix)
@@ -549,6 +600,15 @@ func TestReadValue(t *testing.T) {
 			`"""\u90aA"""`+suffix)
 		f(t, `\u3053\u3093\u306b\u3061\u306f`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""\u3053\u3093\u306b\u3061\u306f"""`+suffix)
+
+		// Escape sequences are not interpreted in block strings, so the
+		// variable-width `\u{...}` form is just literal characters and parses unchanged.
+		// Literal astral characters are handled as raw UTF-8 bytes.
+		f(t, `\u{1F4A9}`, parser.ValueTypeStringBlock, suffix, nil,
+			`"""\u{1F4A9}"""`+suffix)
+		f(t, astral1, parser.ValueTypeStringBlock, suffix, nil,
+			`"""`+astral1+`"""`+suffix)
+
 		f(t, `ok`, parser.ValueTypeStringBlock, suffix, nil,
 			`"""ok"""`+suffix)
 		f(t, `one two\t\nthree 123`, parser.ValueTypeStringBlock, suffix, nil,
@@ -573,7 +633,7 @@ func TestReadValue(t *testing.T) {
 			`"""`+"line one.\n\t\t\t\t\tline two.\n\t\t\t\tline three.\n"+`"""`+suffix)
 	}
 
-	{ // ListValue (https://spec.graphql.org/October2021/#sec-List-Value).
+	{ // ListValue (https://spec.graphql.org/September2025/#sec-List-Value).
 		f(t, "[]", parser.ValueTypeList, suffix, nil, "[]"+suffix)
 		f(t, "[ ]", parser.ValueTypeList, suffix, nil, "[ ]"+suffix)
 		f(t, "[,]", parser.ValueTypeList, suffix, nil, "[,]"+suffix)
@@ -585,7 +645,7 @@ func TestReadValue(t *testing.T) {
 			`["text" 1 EnumVal ,,,]`+suffix)
 	}
 
-	{ // InputObject (https://spec.graphql.org/October2021/#sec-Input-Object-Values).
+	{ // InputObject (https://spec.graphql.org/September2025/#sec-Input-Object-Values).
 		f(t, "{}", parser.ValueTypeInputObject, suffix, nil, "{}"+suffix)
 		f(t, "{ }", parser.ValueTypeInputObject, suffix, nil, "{ }"+suffix)
 		f(t, "{,}", parser.ValueTypeInputObject, suffix, nil, "{,}"+suffix)

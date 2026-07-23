@@ -1,5 +1,5 @@
 // Package gqlhash provides GraphQL query hashing functions for
-// the latest GraphQL specification: https://spec.graphql.org/October2021/
+// the latest GraphQL specification: https://spec.graphql.org/September2025/
 // that ignore formatting differences.
 package gqlhash
 
