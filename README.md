@@ -106,6 +106,15 @@ This requires the latest version of [Go](https://go.dev) to be installed.
 
 ## Usage
 
+> [!IMPORTANT]
+> The CLI spawns a process per invocation, so it's meant for scripts, CI
+> pipelines and local use. Don't call it per request on a hot GraphQL request
+> handling path. A Go server can use the functions
+> ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash#Compare),
+> [CompareWithBuffer](https://pkg.go.dev/github.com/romshark/gqlhash#CompareWithBuffer)
+> and [AppendQueryHash](https://pkg.go.dev/github.com/romshark/gqlhash#AppendQueryHash)).
+
+
 gqlhash can read the GraphQL query from stdin until EOF and
 print the resulting SHA1 hash as hexadecimal string to stdout:
 
