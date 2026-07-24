@@ -164,6 +164,7 @@ gqlhash supports multiple common hash functions:
 - `md5`
 - `blake2b` (unkeyed)
 - `blake2s` (unkeyed)
+- `blake3` (unkeyed, 256 bits)
 - `fnv` (FNV-1, 64 bits)
 - `fnv1a` (FNV-1a, 64 bits)
 - `xxh64` (XXH64, unseeded)
@@ -182,19 +183,20 @@ echo '{foo bar}' | gqlhash -hash sha2 -format base64
 
 Hashing `testdata/big.graphql` (2854 bytes), sorted fastest first.
 
-| `-hash`    | time      | throughput |
-| ---------- | --------- | ---------- |
-| `fnv`      | 4.50 µs   | 605 MiB/s  |
-| `xxh64` | 4.59 µs   | 594 MiB/s  |
-| `fnv1a`    | 4.60 µs   | 592 MiB/s  |
-| `sha2`     | 5.28 µs   | 515 MiB/s  |
-| `blake2b`  | 5.79 µs   | 470 MiB/s  |
-| `sha1`     | 5.90 µs   | 462 MiB/s  |
-| `crc32`    | 5.97 µs   | 456 MiB/s  |
-| `blake2s`  | 6.25 µs   | 436 MiB/s  |
-| `md5`      | 6.27 µs   | 434 MiB/s  |
-| `crc64`    | 6.58 µs   | 414 MiB/s  |
-| `sha3`     | 12.81 µs  | 213 MiB/s  |
+| `-hash`   | time     | throughput |
+| --------- | -------- | ---------- |
+| `xxh64`   | 4.35 µs  | 627 MiB/s  |
+| `fnv1a`   | 4.75 µs  | 573 MiB/s  |
+| `fnv`     | 4.77 µs  | 571 MiB/s  |
+| `sha2`    | 5.19 µs  | 524 MiB/s  |
+| `blake2b` | 5.58 µs  | 488 MiB/s  |
+| `crc32`   | 5.59 µs  | 487 MiB/s  |
+| `sha1`    | 5.78 µs  | 471 MiB/s  |
+| `blake2s` | 6.15 µs  | 442 MiB/s  |
+| `md5`     | 6.21 µs  | 438 MiB/s  |
+| `crc64`   | 6.27 µs  | 435 MiB/s  |
+| `blake3`  | 6.32 µs  | 431 MiB/s  |
+| `sha3`    | 12.82 µs | 212 MiB/s  |
 
 Measured with `go test ./cmd/gqlhash -bench BenchmarkHashFunctions` on an Intel
 Xeon w5-2455X, Go 1.26.5, `GOMAXPROCS=1`, over 8 runs.

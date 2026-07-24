@@ -76,6 +76,9 @@ func TestRun(t *testing.T) {
 	f(t, 0, nil, stdout(`1311412899a149a732286d27f460b6d1`+
 		`71c5a6c0ebf128bb8258c85017204af5`),
 		args(`-format`, `hex`, `-hash`, `blake2s`), "{foo}")
+	f(t, 0, nil, stdout(`3e988d618ad5cc152e791e683b5ece5b`+
+		`74aea4c4b14c68b6f436f142ee252b28`),
+		args(`-format`, `hex`, `-hash`, `blake3`), "{foo}")
 	f(t, 0, nil, stdout(`cdd3df8c52548af0`),
 		args(`-format`, `hex`, `-hash`, `fnv`), "{foo}")
 	f(t, 0, nil, stdout(`370dd5d549c14f5e`),
@@ -269,6 +272,9 @@ func TestParseHashFunction(t *testing.T) {
 	f(t, HashFunctionBLAKE2S, "Blake2S")
 	f(t, HashFunctionBLAKE2S, "Blake2s")
 	f(t, HashFunctionBLAKE2S, "BLAKE2S")
+	f(t, HashFunctionBLAKE3, "blake3")
+	f(t, HashFunctionBLAKE3, "Blake3")
+	f(t, HashFunctionBLAKE3, "BLAKE3")
 	f(t, HashFunctionFNV, "fnv")
 	f(t, HashFunctionFNV, "Fnv")
 	f(t, HashFunctionFNV, "FNV")

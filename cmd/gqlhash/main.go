@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/zeebo/blake3"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/blake2s"
 
@@ -32,7 +33,7 @@ var Version = "dev"
 
 const (
 	SupportedHashFunctions = "sha1, sha2, sha3, md5, blake2b, blake2s, " +
-		"fnv, fnv1a, xxh64, crc32, crc64"
+		"blake3, fnv, fnv1a, xxh64, crc32, crc64"
 	SupportedOutputFormats = "hex, base32, base64"
 )
 
@@ -65,6 +66,7 @@ func run(
 			"sha3 is SHA3-512.\n"+
 			"blake2b is unkeyed.\n"+
 			"blake2s is unkeyed.\n"+
+			"blake3 is unkeyed, 256 bits wide.\n"+
 			"fnv is FNV-1, 64 bits wide.\n"+
 			"fnv1a is FNV-1a, 64 bits wide.\n"+
 			"xxh64 is XXH64, unseeded.\n"+
@@ -202,6 +204,8 @@ func newHasher(f HashFunction) hash.Hash {
 			panic(fmt.Errorf("initializing blake2s hasher: %w", err))
 		}
 		return h
+	case HashFunctionBLAKE3:
+		return blake3.New()
 	case HashFunctionFNV:
 		return fnv.New64()
 	case HashFunctionFNV1A:
@@ -242,6 +246,8 @@ func parseHashFunction(s string) HashFunction {
 		return HashFunctionBLAKE2B
 	case strings.EqualFold(s, "blake2s"):
 		return HashFunctionBLAKE2S
+	case strings.EqualFold(s, "blake3"):
+		return HashFunctionBLAKE3
 	case strings.EqualFold(s, "fnv"):
 		return HashFunctionFNV
 	case strings.EqualFold(s, "fnv1a"):
@@ -275,6 +281,7 @@ const (
 	HashFunctionMD5
 	HashFunctionBLAKE2B
 	HashFunctionBLAKE2S
+	HashFunctionBLAKE3
 	HashFunctionFNV
 	HashFunctionFNV1A
 	HashFunctionXXH64

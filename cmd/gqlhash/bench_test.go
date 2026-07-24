@@ -19,6 +19,7 @@ var benchHashFunctions = []struct {
 	{"md5", HashFunctionMD5},
 	{"blake2b", HashFunctionBLAKE2B},
 	{"blake2s", HashFunctionBLAKE2S},
+	{"blake3", HashFunctionBLAKE3},
 	{"fnv", HashFunctionFNV},
 	{"fnv1a", HashFunctionFNV1A},
 	{"xxh64", HashFunctionXXH64},
