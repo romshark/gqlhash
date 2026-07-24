@@ -67,6 +67,18 @@ func run(
 			"crc32 uses the IEEE polynomial.\n"+
 			"crc64 uses ISO polynomial, defined in ISO 3309 and used in HDLC.",
 	)
+	fIgnoreInputs := cli.Bool(
+		"ignore-inputs",
+		false,
+		"Ignore input values so queries differing only in argument and\n"+
+			"default values produce the same hash.",
+	)
+	fIgnoreVariables := cli.Bool(
+		"ignore-variables",
+		false,
+		"Ignore variables entirely (definitions and usages). Implies\n"+
+			"-ignore-inputs.",
+	)
 	fVersion := cli.Bool(
 		"version",
 		false,
@@ -150,7 +162,10 @@ func run(
 		panic(fmt.Errorf("unsupported hash function: %q", *fHashFunction))
 	}
 
-	sum, err := gqlhash.AppendQueryHash(nil, hasher, input)
+	sum, err := gqlhash.AppendQueryHashWithOptions(nil, hasher, gqlhash.Options{
+		IgnoreInputs:    *fIgnoreInputs,
+		IgnoreVariables: *fIgnoreVariables,
+	}, input)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "syntax error: %v\n", err.Error())
 		return 1

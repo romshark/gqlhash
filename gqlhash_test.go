@@ -300,6 +300,85 @@ func TestCompareErr(t *testing.T) {
 	}
 }
 
+func TestCompareWithOptions(t *testing.T) {
+	ignore := gqlhash.Options{IgnoreInputs: true}
+	f := func(t *testing.T, expect error, a, b string) {
+		t.Helper()
+		if got := gqlhash.CompareWithOptions(
+			nil, sha1.New(), ignore, []byte(a), []byte(b),
+		); got != expect {
+			t.Errorf("expected %v; received %v", expect, got)
+		}
+		// Reused buffer must agree.
+		buf := make([]byte, 0, sha1.Size*2)
+		got := gqlhash.CompareWithOptions(buf, sha1.New(), ignore, []byte(a), []byte(b))
+		if got != expect {
+			t.Errorf("buffered: expected %v; received %v", expect, got)
+		}
+	}
+
+	// Same structure, different input values => equal.
+	f(t, nil,
+		`{ user(id: 1, name: "alice", role: ADMIN) { id posts(first: 10) { t } } }`,
+		`{ user(id: 9, name: "bob", role: GUEST) { id posts(first: 99) { t } } }`)
+
+	// Formatting/comment differences are ignored as usual.
+	f(t, nil,
+		"{ user(id: 1) { id } }",
+		"{\n\tuser(id: 999) {\n\t\t# comment\n\t\tid\n\t}\n}")
+
+	// Different structure => differ.
+	f(t, gqlhash.ErrQueriesDiffer,
+		`{ user(id: 1) { id name } }`,
+		`{ user(id: 1) { id email } }`)
+	f(t, gqlhash.ErrQueriesDiffer,
+		`{ user(id: 1) { id name } }`,
+		`{ user(id: 1) { name id } }`)
+
+	// Value types collapse too: `1` and `"1"` are both ignored inputs.
+	f(t, nil, `{ f(x: 1) }`, `{ f(x: "1") }`)
+	// A variable usage is ignored like any other value.
+	f(t, nil, `{ f(x: $v) }`, `{ f(x: 1) }`)
+	// The variable signature is kept, though: declaring a variable differs.
+	f(t, gqlhash.ErrQueriesDiffer, `query ($v: ID) { f(x: $v) }`, `{ f(x: 1) }`)
+
+	// Syntax errors still propagate.
+	f(t, gqlhash.ErrUnexpectedEOF, ``, `{x}`)
+}
+
+func TestAppendQueryHashWithOptions(t *testing.T) {
+	// Full hash distinguishes values; structure hash does not.
+	a := []byte(`{ f(x: 1, y: "a") }`)
+	b := []byte(`{ f(x: 2, y: "b") }`)
+
+	full := func(s []byte) string {
+		h, err := gqlhash.AppendQueryHash(nil, sha1.New(), s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(h)
+	}
+	structure := func(s []byte) string {
+		h, err := gqlhash.AppendQueryHashWithOptions(
+			nil, sha1.New(), gqlhash.Options{IgnoreInputs: true}, s,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(h)
+	}
+
+	if full(a) == full(b) {
+		t.Error("full hashes should differ for differing values")
+	}
+	if structure(a) != structure(b) {
+		t.Error("structure hashes should match for differing values")
+	}
+	if full(a) == structure(a) {
+		t.Error("full and structure hashes should differ when values are present")
+	}
+}
+
 //go:embed "testdata/schema.graphqls"
 var benchSchema string
 
@@ -471,8 +550,38 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 	}
 }
 
-// FuzzAppendQueryHash makes sure AppendQueryHash never panics.
-func FuzzAppendQueryHash(f *testing.F) {
+// BenchmarkOptions compares the hashing option modes. Structure modes hash
+// fewer bytes (skipped input values), so they should not be slower than full.
+func BenchmarkOptions(b *testing.B) {
+	modes := []struct {
+		name string
+		o    parser.Options
+	}{
+		{"full", parser.Options{}},
+		{"ignore_inputs", parser.Options{IgnoreInputs: true}},
+		{"ignore_variables", parser.Options{IgnoreVariables: true}},
+	}
+	for _, q := range benchQueries {
+		in := []byte(q.Formatted)
+		for _, m := range modes {
+			b.Run(q.Name+"/"+m.name, func(b *testing.B) {
+				h := sha1.New()
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					h.Reset()
+					if err := parser.ReadDocumentWithOptions(h, m.o, in); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// FuzzHashing makes sure hashing never panics, that all option modes agree on
+// an input's validity, and that a valid query never differs from itself.
+func FuzzHashing(f *testing.F) {
 	// Invalid inputs.
 	for _, q := range internal.TestUnexpectedEOF {
 		f.Add(q)
@@ -491,8 +600,48 @@ func FuzzAppendQueryHash(f *testing.F) {
 			f.Add(q)
 		}
 	}
+	// Inputs exercising variables, defaults and directives on definitions.
+	f.Add(`query Q($x: Int = 1 @dep, $y: [String!]) { f(a: $x, b: [$y, 2]) }`)
+	f.Add(`query ($v: ID = "x") { f(id: $v, list: {nested: $v}) }`)
 
+	// All option modes share the same parsing logic, so none may panic and they
+	// must agree on whether the input is valid (only the hashing differs).
+	opts := []parser.Options{
+		{},
+		{IgnoreInputs: true},
+		{IgnoreVariables: true},
+		{IgnoreInputs: true, IgnoreVariables: true},
+	}
 	f.Fuzz(func(t *testing.T, a string) {
-		_, _ = gqlhash.AppendQueryHash(nil, internal.NoopHash{}, []byte(a))
+		in := []byte(a)
+		h := internal.NoopHash{}
+
+		// Public wrappers must not panic.
+		_, _ = gqlhash.AppendQueryHash(nil, h, in)
+		_, _ = gqlhash.AppendQueryHashWithOptions(
+			nil, h, gqlhash.Options{IgnoreInputs: true}, in,
+		)
+
+		var first error
+		for i, o := range opts {
+			err := parser.ReadDocumentWithOptions(h, o, in)
+			if i == 0 {
+				first = err
+			} else if err != first {
+				t.Fatalf("options %+v returned %v; want %v", o, err, first)
+			}
+		}
+
+		// A valid query must never differ from itself, for any options. This
+		// exercises hashing determinism and buffer reuse and needs a real hash
+		// (NoopHash has a constant sum). Skip invalid inputs (first != nil).
+		if first == nil {
+			sh := sha1.New()
+			for _, o := range opts {
+				if err := gqlhash.CompareWithOptions(nil, sh, o, in, in); err != nil {
+					t.Fatalf("self-compare with %+v: %v", o, err)
+				}
+			}
+		}
 	})
 }

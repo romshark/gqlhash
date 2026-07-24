@@ -131,7 +131,7 @@ var TestErrUnexpectedToken = []string{
 	`query Foo ($s:ID="` + "\u0000",
 	`query Foo ($s:ID="` + "\u0001",
 	`query Foo ($s:ID="` + "\u000b",
-	// `query Foo($d:[T]="\u?`, // This Produces ErrUnexpectedEOF
+	// `query Foo($d:[T]="\u?`, // This Produces [parser.ErrUnexpectedEOF]
 	"query Foo @?",
 	"query Foo @dir?",
 	"query Foo @dir(?",

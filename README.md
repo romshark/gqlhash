@@ -1,4 +1,3 @@
-[![GoReportCard](https://goreportcard.com/badge/github.com/romshark/gqlhash)](https://goreportcard.com/report/github.com/romshark/gqlhash)
 [![Coverage Status](https://coveralls.io/repos/github/romshark/gqlhash/badge.svg?branch=main)](https://coveralls.io/github/romshark/gqlhash?branch=main)
 ![License](https://img.shields.io/github/license/romshark/gqlhash)
 
@@ -12,13 +11,16 @@ Generates SHA1 ([and other](#hash-function)) hashes from GraphQL
 [executable documents](https://spec.graphql.org/September2025/#sec-Executable-Definitions)
 ignoring formatting and comment diffs to enable fast and robust hash-based comparisons.
 
+Use it as a [CLI tool](#usage) in scripts and CI pipelines or programmatically via the [Compare](https://pkg.go.dev/github.com/romshark/gqlhash#Compare) and [CompareWithBuffer](https://pkg.go.dev/github.com/romshark/gqlhash#CompareWithBuffer) functions for high-throughput firewalls.
+
 gqlhash is [significantly faster](#performance) ⚡ than parsing query documents and
 comparing the ASTs or comparing documents after minification.
 It can be used to efficiently check whether a GraphQL query is in a set of
 [trusted documents](https://benjie.dev/graphql/trusted-documents) by hash.
 
-The following two documents will generate the same SHA1 hash despite the
-difference in formatting and comments:
+With [`-ignore-variables`](#ignoring-variables), the following two documents
+generate the same SHA1 hash despite their differences in formatting, comments,
+input values and variables:
 
 ```graphql
 {
@@ -33,27 +35,52 @@ difference in formatting and comments:
 ```
 
 ```graphql
-query {
+query (
+  $x: Int
+  $y: Float
+  $langs: [Language!] # Prefer German, if possible.
+  $text: String
+) {
   # Some comment
-  object(x: 42, y: 1.0) {
+  object(x: $x, y: $y) {
     id
     name # We will need this.
-    description
-      @translate(
-        lang: [DE, EN] # Prefer German, if possible.
-      )
-    blockstring(
-      s: """
-      gqlhash parses block string values
-      and doesn't care about formatting.
-      """
-    )
+    description @translate(lang: $langs)
+    blockstring(s: $text)
   }
 }
 ```
 
 gqlhash is fully compliant with the latest GraphQL specification of
 [September 2025](https://spec.graphql.org/September2025/).
+
+Optionally, gqlhash can ignore even more. With `-ignore-inputs`, input values are
+ignored, so the following two documents produce the same hash despite their
+different argument values (and even value types):
+
+```graphql
+{ object(x: 42, y: 1.0) { id } }
+```
+
+```graphql
+{ object(x: 7, y: "hello") { id } }
+```
+
+Both produce the same hex-encoded SHA1 hash `f298bdffe58cc1791fb9bc37b338d472641ab59c`.
+
+`-ignore-variables` does everything `-ignore-inputs` does and, on top of that,
+ignores variables entirely — both their definitions and their usages. So a
+parameterized document matches its inline-value equivalent:
+
+```graphql
+query ($x: Int) { object(x: $x) { id } }
+```
+
+```graphql
+{ object(x: 42) { id } }
+```
+
+Both produce the same hex-encoded SHA1 hash `b09f92659125366c58ec90c771eba361e921aa2f`.
 
 ## Installation
 
@@ -111,7 +138,7 @@ gqlhash supports the following output formats:
 - `base64` (base64 encoding as defined in
   [RFC 4648](https://datatracker.ietf.org/doc/html/rfc4648))
 
-By default `hex` is used. Use `-format` to specify a different hash function:
+By default `hex` is used. Use `-format` to specify a different output format:
 
 ```sh
 # prints: +o65hy+DX8NvieIOdiUWUQYiq6g=
@@ -139,14 +166,41 @@ By default `sha1` is used. Use `-hash` to specify a different hash function:
 echo '{foo bar}' | gqlhash -hash sha2 -format base64
 ```
 
+### Ignoring Input Values
+
+Use `-ignore-inputs` to ignore input values entirely, so documents that differ
+only in their argument or default values (regardless of value type) hash equally:
+
+```sh
+# Both print the same hash.
+echo '{ object(x: 42, y: 1.0) { id } }' | gqlhash -ignore-inputs
+echo '{ object(x: 7, y: "hello") { id } }' | gqlhash -ignore-inputs
+```
+
+Variable *usages* are ignored just like literals (`object(x: $v)` and
+`object(x: 1)` hash equally), but the variable *signature* is kept — a query
+declaring `query ($v: ID)` still differs from one that declares no variables.
+
+### Ignoring Variables
+
+Use `-ignore-variables` to ignore variables entirely — both definitions and
+usages — in addition to everything `-ignore-inputs` ignores. A parameterized
+document therefore matches its inline-value equivalent:
+
+```sh
+# Both print the same hash.
+echo 'query ($x: Int) { object(x: $x) { id } }' | gqlhash -ignore-variables
+echo '{ object(x: 42) { id } }' | gqlhash -ignore-variables
+```
+
 ## Performance
 
 - Compared to plain SHA1 hashing gqlhash performance overhead is just **~4x**
   on average across benchmarks (min: ~2x, max: ~6x).
 - Compared to parsing the queries into AST with
   [vektah/gqlparser/v2](https://github.com/vektah/gqlparser).
-  gqlhash shows a significant advantage of **~66x**
-  on average across benchmarks (min: ~19x; max: ~151x).
+  gqlhash shows a significant advantage of **~64x**
+  on average across benchmarks (min: ~18x; max: ~144x).
   The difference can mainly be explained by the fact that gqlhash **doesn't allocate**,
   compared to hundreds of memory allocations for the same queries by gqlparser/v2.
 
@@ -159,39 +213,39 @@ goos: linux
 goarch: amd64
 pkg: github.com/romshark/gqlhash
 cpu: Intel(R) Xeon(R) w5-2455X
-BenchmarkReferenceSHA1/blockstring/minified/direct-24           10923078                97.66 ns/op            0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/blockstring/minified/gqlhash-24           2913408               404.9 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/blockstring/minified/vektah-24             46718             25602 ns/op           10905 B/op        195 allocs/op
+BenchmarkReferenceSHA1/blockstring/minified/direct-24           11474282                96.73 ns/op            0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/blockstring/minified/gqlhash-24           2948920               399.6 ns/op             0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/blockstring/minified/vektah-24             44791             26185 ns/op           10905 B/op        195 allocs/op
 
-BenchmarkReferenceSHA1/blockstring/formatted/direct-24          11947243                96.40 ns/op            0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/blockstring/formatted/gqlhash-24          2685093               438.9 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/blockstring/formatted/vektah-24            47787             26984 ns/op           10953 B/op        195 allocs/op
+BenchmarkReferenceSHA1/blockstring/formatted/direct-24          12384094                94.37 ns/op            0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/blockstring/formatted/gqlhash-24          2730768               434.1 ns/op             0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/blockstring/formatted/vektah-24            43952             25329 ns/op           10953 B/op        195 allocs/op
 
-BenchmarkReferenceSHA1/tiny/minified/direct-24                  16543544                70.84 ns/op            0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/tiny/minified/gqlhash-24                  7444413               153.8 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/tiny/minified/vektah-24                    51908             23287 ns/op            9449 B/op        174 allocs/op
+BenchmarkReferenceSHA1/tiny/minified/direct-24                  17291330                71.16 ns/op            0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/tiny/minified/gqlhash-24                  7187283               154.9 ns/op             0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/tiny/minified/vektah-24                    55484             22294 ns/op            9449 B/op        174 allocs/op
 
-BenchmarkReferenceSHA1/tiny/formatted/direct-24                 15954482                69.19 ns/op            0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/tiny/formatted/gqlhash-24                 6663024               173.7 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/tiny/formatted/vektah-24                   53880             23137 ns/op            9449 B/op        174 allocs/op
+BenchmarkReferenceSHA1/tiny/formatted/direct-24                 16904895                68.23 ns/op            0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/tiny/formatted/gqlhash-24                6539211               178.3 ns/op             0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/tiny/formatted/vektah-24                   54963             22998 ns/op            9449 B/op        174 allocs/op
 
-BenchmarkReferenceSHA1/medium/minified/direct-24                 7753413               147.7 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/medium/minified/gqlhash-24                1312906               894.0 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/medium/minified/vektah-24                  32834             39554 ns/op           17361 B/op        285 allocs/op
+BenchmarkReferenceSHA1/medium/minified/direct-24                 7915527               147.7 ns/op             0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/medium/minified/gqlhash-24               1370991               885.0 ns/op             0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/medium/minified/vektah-24                 32888             37685 ns/op           17361 B/op        285 allocs/op
 
-BenchmarkReferenceSHA1/medium/formatted/direct-24                5087644               237.1 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/medium/formatted/gqlhash-24               1051874              1161 ns/op               0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/medium/formatted/vektah-24                32373             39461 ns/op           17977 B/op        300 allocs/op
+BenchmarkReferenceSHA1/medium/formatted/direct-24                5031510               231.2 ns/op             0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/medium/formatted/gqlhash-24              1043098              1171 ns/op               0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/medium/formatted/vektah-24               30879             39050 ns/op           17977 B/op        300 allocs/op
 
-BenchmarkReferenceSHA1/big/minified/direct-24                    1333972               904.3 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/big/minified/gqlhash-24                    222135              5101 ns/op               0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/big/minified/vektah-24                      10000            107211 ns/op           53360 B/op        839 allocs/op
+BenchmarkReferenceSHA1/big/minified/direct-24                    1307736               906.4 ns/op             0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/big/minified/gqlhash-24                   213897              5146 ns/op               0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/big/minified/vektah-24                     9511            106314 ns/op           53360 B/op        839 allocs/op
 
-BenchmarkReferenceSHA1/big/formatted/direct-24                    924752              1297 ns/op               0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/big/formatted/gqlhash-24                   190370              6081 ns/op               0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/big/formatted/vektah-24                     10000            113547 ns/op           54880 B/op        877 allocs/op
+BenchmarkReferenceSHA1/big/formatted/direct-24                    897585              1291 ns/op               0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/big/formatted/gqlhash-24                  186909              6148 ns/op               0 B/op          0 allocs/op
+BenchmarkReferenceSHA1/big/formatted/vektah-24                    11332            112696 ns/op           54880 B/op        877 allocs/op
 PASS
-ok      github.com/romshark/gqlhash     35.588s
+ok      github.com/romshark/gqlhash     36.408s
 ```
 
 </details>
@@ -201,9 +255,12 @@ ok      github.com/romshark/gqlhash     35.588s
 ### Order of Operations, Selections and Arguments
 
 gqlhash ignores **irrelevant differences** between documents such as formatting
-and comments, but it will return different hashes for queries with different
-order of operations, selections and arguments despite them being identical in content.
-**This is by design** to allow for fast hashing and reduced code complexity.
+and comments — and, optionally, input values and variables (see
+[`-ignore-inputs`](#ignoring-input-values) and
+[`-ignore-variables`](#ignoring-variables)). It does, however, hash operations,
+selections and arguments **in the order they appear**, so reordering them yields
+a different hash even though GraphQL considers their order insignificant.
+**This is by design**, favoring fast hashing and reduced code complexity.
 
 ### Strings & Block Strings
 
@@ -228,11 +285,30 @@ In theory you'd assume the following two queries should result in the same hash:
 }
 ```
 
-But they won't because even though the string values are identical, the former uses
-a block string while the latter isn't.
+But they won't, because even though the string values are identical, the former uses
+a block string while the latter uses a regular string.
 In the case when gqlhash is used for query allowlisting
 (a.k.a. [Trusted Documents](https://benjie.dev/graphql/trusted-documents))
 we usually don't want variations to be allowed, instead we just want the irrelevant
 formatting and comments to be ignored.
 Whether strings and block strings with equal value should result in the same hash
-is up for debate and should probably be configurable via CLI flag.
+is up for debate and should probably be configurable via a CLI flag.
+
+### Fragments
+
+gqlhash hashes fragment spreads and fragment definitions as they appear — it does
+**not** inline them. A document using a named fragment therefore produces a
+different hash than its inlined equivalent, even though both select the same fields:
+
+```graphql
+{ user { ...userFields } }
+fragment userFields on User { id name }
+```
+
+```graphql
+{ user { id name } }
+```
+
+Inlining a fragment requires the schema (to resolve the type condition against the
+parent type), and gqlhash is intentionally schema-agnostic, so it treats fragment
+usage as part of the document's structure.

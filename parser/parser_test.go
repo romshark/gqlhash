@@ -1,6 +1,7 @@
 package parser_test
 
 import (
+	"crypto/sha1"
 	"errors"
 	"slices"
 	"strings"
@@ -675,7 +676,7 @@ func TestReadDocumentErrEOF(t *testing.T) {
 		}
 
 		// The queries that end with a string with an unfinished escape sequence
-		// should would produce ErrUnexpectedToken, skip those.
+		// should would produce [parser.ErrUnexpectedToken], skip those.
 		if strings.HasSuffix(s, `"\`) ||
 			strings.HasSuffix(s, `"\u`) ||
 			strings.HasSuffix(s, `"""\`) ||
@@ -801,7 +802,7 @@ func TestTrimEmptyLinesSuffix(t *testing.T) {
 }
 
 // TestHPrefInStringValue makes sure none of the parser.HPref separators
-// can appear in string values without resulting in ErrUnexpectedToken
+// can appear in string values without resulting in [parser.ErrUnexpectedToken]
 func TestHPrefInStringValue(t *testing.T) {
 	f := func(t *testing.T, hpref []byte) {
 		t.Helper()
@@ -872,4 +873,136 @@ func TestHPrefInStringValue(t *testing.T) {
 	f(t, parser.HPrefValueList)
 	f(t, parser.HPrefValueListEnd)
 	f(t, parser.HPrefValueVariable)
+}
+
+func hash(t *testing.T, options parser.Options, s string) string {
+	t.Helper()
+	h := sha1.New()
+	if err := parser.ReadDocumentWithOptions(h, options, []byte(s)); err != nil {
+		t.Fatalf("ReadDocumentWithOptions(%q): %v", s, err)
+	}
+	return string(h.Sum(nil))
+}
+
+func TestReadDocumentIgnoreInputs(t *testing.T) {
+	// Exercises every value kind so the
+	// [parser.Options.IgnoreInputs] branches are covered.
+	const dense = `query Q($v: Int = 7) {
+		f(
+			i: 42, fl: 3.14, s: "text", bs: """block""",
+			b: true, n: null, e: ENUM_VALUE, var: $v,
+			list: [1, "two", THREE], obj: {a: 1, b: "x"}
+		) @dir(k: 9) { sub }
+	}`
+	// Same structure, different input values everywhere (including differing
+	// booleans and value types), so the structure hash must match.
+	const denseOtherValues = `query Q($v: Int = 999) {
+		f(
+			i: 1, fl: 9.99, s: "different", bs: """other""",
+			b: false, n: null, e: OTHER_ENUM, var: $v,
+			list: [9, "nine", NINE], obj: {a: 8, b: "y"}
+		) @dir(k: 0) { sub }
+	}`
+	// Structural difference (extra field).
+	const denseExtraField = `query Q($v: Int = 7) {
+		f(i: 42) @dir(k: 9) { sub extra }
+	}`
+
+	ignore := parser.Options{IgnoreInputs: true}
+	full := parser.Options{}
+
+	// Ignoring inputs: identical structure with different values must match.
+	if hash(t, ignore, dense) != hash(t, ignore, denseOtherValues) {
+		t.Error("structure hash must ignore differing input values")
+	}
+	// Structural differences must still be observed.
+	if hash(t, ignore, dense) == hash(t, ignore, denseExtraField) {
+		t.Error("structure hash must still distinguish structure")
+	}
+	// Every argument value collapses entirely under [parser.Options.IgnoreInputs],
+	// not just the content but the type and container structure too. Scalars of any type,
+	// lists of any length (incl. empty), input objects with any fields, and
+	// variable usages (nested or not) all become equivalent to a bare value.
+	base := hash(t, ignore, `{ f(x: 1) }`)
+	for _, v := range []string{
+		`"1"`, `1.0`, `true`, `false`, `null`, `ENUM`, `"""blk"""`, // scalars
+		`$v`,                           // a variable usage is just a value
+		`[1, 2]`, `[1, 4, 6, 1]`, `[]`, // lists of any length
+		`{a: 1}`, `{k: "ok", y: 42}`, `{}`, // objects with any fields
+		`[$a, 1]`, `{k: $v}`, // nested variables collapse too
+	} {
+		if hash(t, ignore, `{ f(x: `+v+`) }`) != base {
+			t.Errorf("value %s should collapse to a bare value under IgnoreInputs", v)
+		}
+	}
+	// The variable signature is kept, though: a query declaring a variable
+	// differs from one that doesn't (the boundary with [parser.Options.IgnoreVariables]).
+	if hash(t, ignore, `query ($v: Int) { f }`) == hash(t, ignore, `query { f }`) {
+		t.Error("IgnoreInputs must keep the variable signature")
+	}
+	// Full hash still differs from structure hash when values are present.
+	if hash(t, full, dense) == hash(t, ignore, dense) {
+		t.Error("full and structure hashes must differ when inputs are hashed")
+	}
+	// A query without any input values hashes the same either way.
+	const noInputs = `{ a { b c } ...F }`
+	if hash(t, full, noInputs) != hash(t, ignore, noInputs) {
+		t.Error("without input values, full and structure hashes must match")
+	}
+}
+
+func TestReadDocumentIgnoreVariables(t *testing.T) {
+	ignoreVars := parser.Options{IgnoreVariables: true}
+
+	// [parser.Options.IgnoreVariables] is a superset of [parser.Options.IgnoreInputs]:
+	// variable definitions, variable usages AND literal input values all collapse.
+	// The `@dep` directive and default value on the base also exercise the
+	// parse-but-don't-hash path.
+	base := hash(t, ignoreVars, `query Q($x: Int = 1 @dep) { f(a: $x) }`)
+	for _, q := range []string{
+		`query Q($y: String) { f(a: $y) }`, // different variable
+		`query Q { f(a: 1) }`,              // literal instead of variable
+		`query Q { f(a: "different") }`,    // different literal type
+	} {
+		if hash(t, ignoreVars, q) != base {
+			t.Errorf("IgnoreVariables should produce the base hash for %q", q)
+		}
+	}
+
+	// A parameterized operation matches its unparameterized form.
+	if hash(t, ignoreVars, `query Q($x: Int) { f }`) !=
+		hash(t, ignoreVars, `query Q { f }`) {
+		t.Error("IgnoreVariables must ignore the variable definition signature")
+	}
+
+	// Superset check: whatever [parser.Options.IgnoreInputs] makes equal,
+	// [parser.Options.IgnoreVariables] does too.
+	inputs := parser.Options{IgnoreInputs: true}
+	q1, q2 := `{ f(a: 1, b: ENUM) }`, `{ f(a: 2, b: OTHER) }`
+	if hash(t, inputs, q1) != hash(t, inputs, q2) {
+		t.Fatal("precondition: IgnoreInputs should equate q1 and q2")
+	}
+	if hash(t, ignoreVars, q1) != hash(t, ignoreVars, q2) {
+		t.Error("IgnoreVariables must be a superset of IgnoreInputs")
+	}
+
+	// Structure is still observed.
+	if hash(t, ignoreVars, `{ f(a: 1) }`) ==
+		hash(t, ignoreVars, `{ g(a: 1) }`) {
+		t.Error("IgnoreVariables must still distinguish structure")
+	}
+}
+
+// TestExportedWrappersDelegate exercises the thin exported wrappers that are
+// otherwise only reached indirectly through [parser.ReadDocument].
+func TestExportedWrappersDelegate(t *testing.T) {
+	h := sha1.New()
+	if _, err := parser.ReadOperationDefinition(h, []byte("query Q { f }")); err != nil {
+		t.Fatalf("ReadOperationDefinition: %v", err)
+	}
+	if _, err := parser.ReadVariableDefinitionsAfterParenthesis(
+		h, []byte("$x: Int)"),
+	); err != nil {
+		t.Fatalf("ReadVariableDefinitionsAfterParenthesis: %v", err)
+	}
 }

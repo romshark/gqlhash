@@ -110,6 +110,47 @@ func TestRun(t *testing.T) {
 		args(`-file`, "non-existing-file.graphql"), "this must not be read")
 }
 
+func TestRunIgnoreOptions(t *testing.T) {
+	hash := func(t *testing.T, stdin string, a ...string) string {
+		t.Helper()
+		out, errOut := new(IORecorder), new(IORecorder)
+		if code := run(args(a...), out, errOut, strings.NewReader(stdin)); code != 0 {
+			t.Fatalf("code %d; stderr: %v", code, *errOut)
+		}
+		return strings.Join(*out, "")
+	}
+
+	// -ignore-inputs: queries differing only in input values (and their types)
+	// hash the same, but differ from the default (full) hash.
+	full := hash(t, `{ f(x: 1) }`)
+	in1 := hash(t, `{ f(x: 1) }`, "-ignore-inputs")
+	in2 := hash(t, `{ f(x: "different") }`, "-ignore-inputs")
+	if in1 != in2 {
+		t.Errorf("-ignore-inputs: expected equal hashes, got %q and %q", in1, in2)
+	}
+	if in1 == full {
+		t.Error("-ignore-inputs must change the hash")
+	}
+
+	// -ignore-variables implies -ignore-inputs and also drops the variable, so a
+	// parameterized query matches its literal, unparameterized form.
+	v1 := hash(t, `query Q($v: Int) { f(a: $v) }`, "-ignore-variables")
+	v2 := hash(t, `query Q { f(a: 1) }`, "-ignore-variables")
+	if v1 != v2 {
+		t.Errorf("-ignore-variables: expected equal hashes, got %q and %q", v1, v2)
+	}
+	// Under -ignore-inputs a variable usage is ignored like any other value,
+	// but the variable signature (definition) is kept.
+	if hash(t, `{ f(a: $v) }`, "-ignore-inputs") !=
+		hash(t, `{ f(a: 1) }`, "-ignore-inputs") {
+		t.Error("-ignore-inputs must ignore a variable usage like a literal")
+	}
+	if hash(t, `query ($v: ID) { f(a: $v) }`, "-ignore-inputs") ==
+		hash(t, `{ f(a: 1) }`, "-ignore-inputs") {
+		t.Error("-ignore-inputs must keep the variable signature")
+	}
+}
+
 func TestRunVersion(t *testing.T) {
 	f := func(
 		t *testing.T,
