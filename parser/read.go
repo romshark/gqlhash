@@ -397,11 +397,7 @@ func readArguments(h Hash, o Options, s []byte) (arguments, suffix []byte, err e
 // isKeyword returns true if s begins with the whole word kw and not just a
 // longer name starting with it, so the enum "nullable" won't match "null".
 func isKeyword(s []byte, kw string) bool {
-	if !HasPrefix(s, kw) {
-		return false
-	}
-	n := len(kw)
-	return n == len(s) || (!IsLetter(s[n]) && !IsDigit(s[n]) && s[n] != '_')
+	return HasPrefix(s, kw) && (len(kw) == len(s) || !IsNameContinue(s[len(kw)]))
 }
 
 func readValue(h Hash, o Options, s []byte) (

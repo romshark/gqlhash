@@ -539,7 +539,7 @@ func ReadName(s []byte) (name, suffix []byte, err error) {
 		return name, s, ErrUnexpectedToken
 	}
 	for suffix = s[1:]; len(suffix) > 0; {
-		if IsLetter(suffix[0]) || IsDigit(suffix[0]) || suffix[0] == '_' {
+		if IsNameContinue(suffix[0]) {
 			suffix = suffix[1:]
 			continue
 		}
@@ -567,6 +567,12 @@ func IsIgnorableByte(b byte) bool {
 //
 //   - https://spec.graphql.org/September2025/#NameStart
 func IsNameStart(b byte) bool { return lutLetter[b] || b == '_' }
+
+// IsNameContinue returns true if b is NameContinue.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#NameContinue
+func IsNameContinue(b byte) bool { return lutLetter[b] || lutDigit[b] || b == '_' }
 
 // IsLetter returns true if b is Letter.
 // Reference:
