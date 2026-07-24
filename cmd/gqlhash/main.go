@@ -19,6 +19,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/cespare/xxhash/v2"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/blake2s"
 
@@ -31,7 +32,7 @@ var Version = "dev"
 
 const (
 	SupportedHashFunctions = "sha1, sha2, sha3, md5, blake2b, blake2s, " +
-		"fnv, fnv1a, crc32, crc64"
+		"fnv, fnv1a, xxh64, crc32, crc64"
 	SupportedOutputFormats = "hex, base32, base64"
 )
 
@@ -66,6 +67,7 @@ func run(
 			"blake2s is unkeyed.\n"+
 			"fnv is FNV-1, 64 bits wide.\n"+
 			"fnv1a is FNV-1a, 64 bits wide.\n"+
+			"xxh64 is XXH64, unseeded.\n"+
 			"crc32 uses the IEEE polynomial.\n"+
 			"crc64 uses ISO polynomial, defined in ISO 3309 and used in HDLC.",
 	)
@@ -134,35 +136,8 @@ func run(
 		return 1
 	}
 
-	var hasher hash.Hash
-	switch hashFunc {
-	case HashFunctionSHA1:
-		hasher = sha1.New()
-	case HashFunctionSHA2:
-		hasher = sha256.New()
-	case HashFunctionSHA3:
-		hasher = sha3.New512()
-	case HashFunctionMD5:
-		hasher = md5.New()
-	case HashFunctionBLAKE2B:
-		hasher, err = blake2b.New256(nil)
-		if err != nil {
-			panic(fmt.Errorf("initializing blake2b hasher: %w", err))
-		}
-	case HashFunctionBLAKE2S:
-		hasher, err = blake2s.New256(nil)
-		if err != nil {
-			panic(fmt.Errorf("initializing blake2s hasher: %w", err))
-		}
-	case HashFunctionFNV:
-		hasher = fnv.New64()
-	case HashFunctionFNV1A:
-		hasher = fnv.New64a()
-	case HashFunctionCRC32:
-		hasher = crc32.NewIEEE()
-	case HashFunctionCRC64:
-		hasher = crc64.New(crc64.MakeTable(crc64.ISO))
-	default:
+	hasher := newHasher(hashFunc)
+	if hasher == nil {
 		panic(fmt.Errorf("unsupported hash function: %q", *fHashFunction))
 	}
 
@@ -204,6 +179,43 @@ func printVersionInfoAndExit(w io.Writer) (exitCode int) {
 	return 0
 }
 
+// newHasher returns a new hasher for f, or nil if f is unsupported.
+func newHasher(f HashFunction) hash.Hash {
+	switch f {
+	case HashFunctionSHA1:
+		return sha1.New()
+	case HashFunctionSHA2:
+		return sha256.New()
+	case HashFunctionSHA3:
+		return sha3.New512()
+	case HashFunctionMD5:
+		return md5.New()
+	case HashFunctionBLAKE2B:
+		h, err := blake2b.New256(nil)
+		if err != nil {
+			panic(fmt.Errorf("initializing blake2b hasher: %w", err))
+		}
+		return h
+	case HashFunctionBLAKE2S:
+		h, err := blake2s.New256(nil)
+		if err != nil {
+			panic(fmt.Errorf("initializing blake2s hasher: %w", err))
+		}
+		return h
+	case HashFunctionFNV:
+		return fnv.New64()
+	case HashFunctionFNV1A:
+		return fnv.New64a()
+	case HashFunctionXXH64:
+		return xxhash.New()
+	case HashFunctionCRC32:
+		return crc32.NewIEEE()
+	case HashFunctionCRC64:
+		return crc64.New(crc64.MakeTable(crc64.ISO))
+	}
+	return nil
+}
+
 func parseFormat(s string) Format {
 	switch {
 	case strings.EqualFold(s, "hex"):
@@ -234,6 +246,8 @@ func parseHashFunction(s string) HashFunction {
 		return HashFunctionFNV
 	case strings.EqualFold(s, "fnv1a"):
 		return HashFunctionFNV1A
+	case strings.EqualFold(s, "xxh64"):
+		return HashFunctionXXH64
 	case strings.EqualFold(s, "crc32"):
 		return HashFunctionCRC32
 	case strings.EqualFold(s, "crc64"):
@@ -263,6 +277,7 @@ const (
 	HashFunctionBLAKE2S
 	HashFunctionFNV
 	HashFunctionFNV1A
+	HashFunctionXXH64
 	HashFunctionCRC32
 	HashFunctionCRC64
 )

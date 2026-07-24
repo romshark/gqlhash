@@ -166,6 +166,7 @@ gqlhash supports multiple common hash functions:
 - `blake2s` (unkeyed)
 - `fnv` (FNV-1, 64 bits)
 - `fnv1a` (FNV-1a, 64 bits)
+- `xxh64` (XXH64, unseeded)
 - `crc32` (IEEE polynomial)
 - `crc64` (ISO polynomial, defined in ISO 3309)
 
@@ -175,6 +176,29 @@ By default `sha1` is used. Use `-hash` to specify a different hash function:
 # prints: 1ZLCPgw2KjpJtMSxgxbZv8W9os51d7CSXSXEtMupwuw=
 echo '{foo bar}' | gqlhash -hash sha2 -format base64
 ```
+
+<details>
+<summary>Performance</summary>
+
+Hashing `testdata/big.graphql` (2854 bytes), sorted fastest first.
+
+| `-hash`    | time      | throughput |
+| ---------- | --------- | ---------- |
+| `fnv`      | 4.50 µs   | 605 MiB/s  |
+| `xxh64` | 4.59 µs   | 594 MiB/s  |
+| `fnv1a`    | 4.60 µs   | 592 MiB/s  |
+| `sha2`     | 5.28 µs   | 515 MiB/s  |
+| `blake2b`  | 5.79 µs   | 470 MiB/s  |
+| `sha1`     | 5.90 µs   | 462 MiB/s  |
+| `crc32`    | 5.97 µs   | 456 MiB/s  |
+| `blake2s`  | 6.25 µs   | 436 MiB/s  |
+| `md5`      | 6.27 µs   | 434 MiB/s  |
+| `crc64`    | 6.58 µs   | 414 MiB/s  |
+| `sha3`     | 12.81 µs  | 213 MiB/s  |
+
+Measured with `go test ./cmd/gqlhash -bench BenchmarkHashFunctions` on an Intel
+Xeon w5-2455X, Go 1.26.5, `GOMAXPROCS=1`, over 8 runs.
+</details>
 
 ### Ignoring Input Values
 
