@@ -395,8 +395,12 @@ func ReadStringBlockAfterQuotes(s []byte) (
 				setNWSNL(i)
 			}
 
+			// Only lines with non-whitespace text set the common indentation.
+			// Blank lines and the closing-quote line are excluded
+			// (https://spec.graphql.org/September2025/#BlockStringValue()).
+			isBlankLine := i >= len(s) || s[i] == '\n'
 			isLastLine := i+2 < len(s) && s[i+1] == '"' && s[i+2] == '"'
-			if !isLastLine {
+			if !isBlankLine && !isLastLine {
 				if prefixLenSet {
 					prefixLen = min(prefixLen, c)
 				} else {
@@ -685,13 +689,14 @@ var lutHex = [256]bool{
 // Expects s to be the content of the string without the surrounding `"""`.
 func IterateBlockStringLines(s []byte, prefixLen int) iter.Seq[[]byte] {
 	return func(yield func([]byte) bool) {
-		// First line no prefix.
+		// The first line keeps its indentation (the common prefix never applies to it).
 		i, firstLineIsEmpty := 0, true
 		for ; i < len(s) && s[i] != '\n'; i++ {
 			if s[i] != ' ' && s[i] != '\t' {
 				firstLineIsEmpty = false
 			}
 		}
+		contentSeen := !firstLineIsEmpty
 		if !firstLineIsEmpty {
 			var firstLine []byte
 			if i < len(s) && s[i] == '\n' {
@@ -704,24 +709,34 @@ func IterateBlockStringLines(s []byte, prefixLen int) iter.Seq[[]byte] {
 			}
 		}
 		for i++; i < len(s); i++ {
-			start, skipped := i, 0
-			for i < len(s) && skipped < prefixLen && IsWhiteSpace(s[i]) {
-				skipped, i = skipped+1, i+1
+			// Strip up to prefixLen leading whitespace bytes.
+			for skipped := 0; i < len(s) && skipped < prefixLen &&
+				IsWhiteSpace(s[i]); skipped++ {
+				i++
 			}
-			// Skip everything until next line break.
+			lineStart, blank := i, true
 			for ; i < len(s) && s[i] != '\n'; i++ {
+				if !IsWhiteSpace(s[i]) {
+					blank = false
+				}
 			}
-			if i >= start+prefixLen {
-				var line []byte
-				if i < len(s) && s[i] == '\n' {
-					line = s[start+prefixLen : i+1]
-				} else {
-					line = s[start+prefixLen : i]
-				}
-
-				if !yield(line) {
-					return
-				}
+			if blank && !contentSeen {
+				// Leading blank lines are dropped. Trailing ones are already
+				// removed by [TrimEmptyLinesSuffix], so any blank line seen after
+				// content is an interior line and must be kept.
+				continue
+			}
+			var line []byte
+			if i < len(s) && s[i] == '\n' {
+				line = s[lineStart : i+1]
+			} else {
+				line = s[lineStart:i]
+			}
+			if !blank {
+				contentSeen = true
+			}
+			if !yield(line) {
+				return
 			}
 		}
 	}

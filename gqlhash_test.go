@@ -106,6 +106,29 @@ var hashTests = []HashTest{
 		),
 	},
 	{
+		// A blank middle line must not defeat dedentation: all three inputs
+		// encode the same block string value "a\n\nb".
+		Name: "block string blank line dedent",
+		Inputs: []string{
+			// Indented, empty blank middle line.
+			`{ f(x: """` + "\n    a\n\n    b\n    " + `""") }`,
+			// Already dedented.
+			`{ f(x: """` + "\na\n\nb\n" + `""") }`,
+			// Indented, blank middle line filled with spaces.
+			`{ f(x: """` + "\n    a\n    \n    b\n    " + `""") }`,
+			// Extra leading blank line is trimmed like the first one.
+			`{ f(x: """` + "\n\n    a\n\n    b\n    " + `""") }`,
+		},
+		ExpectRecords: MakeRecords(
+			parser.HPrefQuery,
+			parser.HPrefSelectionSet,
+			parser.HPrefField, "f",
+			parser.HPrefArgument, "x",
+			parser.HPrefValueString, "a\n", "\n", "b",
+			parser.HPrefSelectionSetEnd,
+		),
+	},
+	{
 		Name: "subscription with vars",
 		Inputs: []string{
 			`subscription Updates (

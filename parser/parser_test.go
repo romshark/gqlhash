@@ -636,6 +636,12 @@ func TestReadValue(t *testing.T) {
 		f(t, "line one.\n\t\t\t\t\tline two.\n\t\t\t\tline three.",
 			parser.ValueTypeStringBlock, suffix, nil,
 			`"""`+"line one.\n\t\t\t\t\tline two.\n\t\t\t\tline three.\n"+`"""`+suffix)
+
+		// A leading blank line is dropped and the common indentation stripped,
+		// so this block string encodes just "foo".
+		f(t, "\n\n    foo",
+			parser.ValueTypeStringBlock, suffix, nil,
+			`"""`+"\n\n    foo\n    "+`"""`+suffix)
 	}
 
 	{ // ListValue (https://spec.graphql.org/September2025/#sec-List-Value).
