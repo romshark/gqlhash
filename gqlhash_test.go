@@ -222,6 +222,20 @@ var hashTests = []HashTest{
 			parser.HPrefSelectionSetEnd,
 		),
 	},
+	{
+		Name: "float value",
+		Inputs: []string{
+			"{x(f:3.14)}", "{ x ( f : 3.14 ) }",
+		},
+		ExpectRecords: MakeRecords(
+			parser.HPrefQuery,
+			parser.HPrefSelectionSet,
+			parser.HPrefField, "x",
+			parser.HPrefArgument, "f",
+			parser.HPrefValueFloat, "3.14",
+			parser.HPrefSelectionSetEnd,
+		),
+	},
 }
 
 func TestHash(t *testing.T) {

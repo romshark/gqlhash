@@ -446,9 +446,10 @@ func readValue(h Hash, o Options, s []byte) (
 				return value, ValueTypeFloat, suffix, err
 			}
 			// FloatValue (https://spec.graphql.org/September2025/#sec-Float-Value).
+			value = s[:len(s)-len(suffix)]
 			_, _ = h.Write(HPrefValueFloat)
 			_, _ = h.Write([]byte(value))
-			return s[:len(s)-len(suffix)], ValueTypeFloat, suffix, nil
+			return value, ValueTypeFloat, suffix, nil
 		}
 		// IntValue (https://spec.graphql.org/September2025/#sec-Int-Value).
 		_, _ = h.Write(HPrefValueInteger)
