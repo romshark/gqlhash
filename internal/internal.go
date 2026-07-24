@@ -50,14 +50,9 @@ var TestUnexpectedEOF = []string{
 	"query Foo ($v:T={x:1",
 	"query Foo ($v:T=-",
 	"query Foo ($v:T=12",
-	// When adding a suffix at the end it actually becomes unexpected token err
-	// "query Foo ($v:T=12.",
-	"query Foo ($v:T=12e",
-	"query Foo ($v:T=12E",
-	"query Foo ($v:T=12.3e",
-	"query Foo ($v:T=12.3E",
-	"query Foo ($v:T=12.3E+",
-	"query Foo ($v:T=12.3E-",
+	// An incomplete fraction or exponent (e.g. "12.", "12e", "12.3E+") is an
+	// unexpected token error rather than EOF, so those live in
+	// TestErrUnexpectedToken instead.
 	"query Foo ($v:T=12.3E-4",
 	"query Foo ($v:[",
 	"query Foo ($v:[T",
@@ -167,6 +162,13 @@ var TestErrUnexpectedToken = []string{
 	"query Foo {...@dir(x:-1.2e?",
 	"query Foo {...@dir(x:-1.2e-?",
 	"query Foo {...@dir(x:-1.2e-4?",
+	// Incomplete fraction or exponent at EOF: a digit is required.
+	"query Foo ($v:T=12e",
+	"query Foo ($v:T=12E",
+	"query Foo ($v:T=12.3e",
+	"query Foo ($v:T=12.3E",
+	"query Foo ($v:T=12.3E+",
+	"query Foo ($v:T=12.3E-",
 	"query Foo {...@dir(x:[?",
 	"query Foo {...@dir(x:{?",
 	"query Foo {...@dir(x:{y?",

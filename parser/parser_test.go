@@ -463,6 +463,14 @@ func TestReadValue(t *testing.T) {
 			"10000000000000000000000000.0e+23"+suffix)
 		f(t, "-10000000000000000000000000.0E+23", parser.ValueTypeFloat, suffix, nil,
 			"-10000000000000000000000000.0E+23"+suffix)
+
+		// The exponent needs at least one digit after e/E and the optional sign.
+		fErr(t, parser.ErrUnexpectedToken, "1e"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "1E"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "1e+"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "1e-"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "1.0e"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "1.0E-"+suffix)
 	}
 
 	{ // Single-line strings (https://spec.graphql.org/September2025/#sec-String-Value).

@@ -448,7 +448,12 @@ func ReadFloatAfterInteger(s []byte) (value []byte, suffix []byte, err error) {
 			// Signed exponential part.
 			suffix = suffix[1:]
 		}
+		before := suffix
 		for ; len(suffix) > 0 && IsDigit(suffix[0]); suffix = suffix[1:] {
+		}
+		if len(before) == len(suffix) {
+			// No digits after the exponent indicator.
+			return nil, suffix, ErrUnexpectedToken
 		}
 	}
 	return s[:len(s)-len(suffix)], suffix, nil
