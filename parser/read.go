@@ -279,7 +279,7 @@ func readVariableDefinitionsAfterParenthesis(
 		s = SkipIgnorables(s[1:])
 		var name []byte
 		if name, s, err = ReadName(s); err != nil {
-			return s, nil
+			return s, err
 		}
 		_, _ = h.Write(HPrefVariableDefinition)
 		_, _ = h.Write([]byte(name))

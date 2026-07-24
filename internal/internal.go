@@ -127,6 +127,15 @@ var TestErrUnexpectedToken = []string{
 	`query Foo ($s:ID="` + "\u0001",
 	`query Foo ($s:ID="` + "\u000b",
 	// `query Foo($d:[T]="\u?`, // This Produces [parser.ErrUnexpectedEOF]
+	// A variable definition whose name is missing or malformed. The '$' must be
+	// followed by a Name (https://spec.graphql.org/September2025/#Variable),
+	// so the variable definition list is never closed and the document is invalid,
+	// whatever follows.
+	"query($ {f}",
+	"query($@dir {f}",
+	"query($ @dir(x:1) {f}",
+	"query Q($ {f}",
+	"mutation($ {f}",
 	"query Foo @?",
 	"query Foo @dir?",
 	"query Foo @dir(?",

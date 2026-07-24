@@ -323,6 +323,12 @@ func TestCompare(t *testing.T) {
 		{ foo, bar }
 	`, `{foo bar}`)
 	f(t, gqlhash.ErrQueriesDiffer, `{foo bar}`, `{foobar}`)
+
+	// A '$' not followed by a Name leaves the variable definition list unclosed,
+	// so the document is invalid and must be rejected rather than hashed. It
+	// otherwise collides with the valid operation that declares no variables.
+	f(t, gqlhash.ErrUnexpectedToken, `query($ {f}`, `query {f}`)
+	f(t, gqlhash.ErrUnexpectedToken, `query($@dir {f}`, `query @dir {f}`)
 }
 
 func TestCompareErr(t *testing.T) {
