@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha1"
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
@@ -115,31 +114,32 @@ func TestRun(t *testing.T) {
 		args(`-file`, "non-existing-file.graphql"), "this must not be read")
 }
 
-// TestRunOutputEncodings guards against an encoding truncation bug: base32 and
-// base64 must decode back to the same digest as hex (a streaming encoder that
-// is never flushed drops the final partial group).
+// TestRunOutputEncodings checks that base32 and base64 output decodes back to
+// the same digest as hex, across several hash functions (i.e. digest lengths).
 func TestRunOutputEncodings(t *testing.T) {
-	get := func(t *testing.T, format string) string {
+	get := func(t *testing.T, hf, format string) string {
 		t.Helper()
 		out, errOut := new(IORecorder), new(IORecorder)
-		if code := run(args("-format", format), out, errOut,
+		if code := run(args("-hash", hf, "-format", format), out, errOut,
 			strings.NewReader("{foo}")); code != 0 {
-			t.Fatalf("format %s: code %d; stderr %v", format, code, *errOut)
+			t.Fatalf("hash %s format %s: code %d; stderr %v", hf, format, code, *errOut)
 		}
 		return strings.Join(*out, "")
 	}
 
-	raw, err := hex.DecodeString(get(t, "hex"))
-	if err != nil || len(raw) != sha1.Size {
-		t.Fatalf("hex decode: err=%v len=%d", err, len(raw))
-	}
-	if got, err := base64.StdEncoding.DecodeString(get(t, "base64")); err != nil ||
-		!bytes.Equal(got, raw) {
-		t.Errorf("base64 does not round-trip to the digest: %v", err)
-	}
-	if got, err := base32.StdEncoding.DecodeString(get(t, "base32")); err != nil ||
-		!bytes.Equal(got, raw) {
-		t.Errorf("base32 does not round-trip to the digest: %v", err)
+	for hf := range strings.SplitSeq(SupportedHashFunctions, ", ") {
+		raw, err := hex.DecodeString(get(t, hf, "hex"))
+		if err != nil || len(raw) == 0 {
+			t.Fatalf("%s hex decode: err=%v len=%d", hf, err, len(raw))
+		}
+		if got, err := base64.StdEncoding.DecodeString(get(t, hf, "base64")); err != nil ||
+			!bytes.Equal(got, raw) {
+			t.Errorf("%s: base64 does not round-trip to the digest: %v", hf, err)
+		}
+		if got, err := base32.StdEncoding.DecodeString(get(t, hf, "base32")); err != nil ||
+			!bytes.Equal(got, raw) {
+			t.Errorf("%s: base32 does not round-trip to the digest: %v", hf, err)
+		}
 	}
 }
 

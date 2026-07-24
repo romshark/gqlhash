@@ -60,8 +60,8 @@ var (
 // Options configures how a document is hashed.
 type Options struct {
 	// IgnoreInputs produces the same hash for two documents that differ only in
-	// their input values. Every argument value — literals, lists, input objects
-	// and variable usages alike — is ignored; only the variable signature (the
+	// their input values. Every argument value (literals, lists, input objects
+	// and variable usages alike) is ignored; only the variable signature (the
 	// definitions in the operation) is kept.
 	//
 	// For example, these 3 queries produce the same hash:
