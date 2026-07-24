@@ -110,7 +110,7 @@ gqlhash can read the GraphQL query from stdin until EOF and
 print the resulting SHA1 hash as hexadecimal string to stdout:
 
 ```sh
-# prints: fa8eb9872f835fc36f89e20e762516510622aba8
+# prints: 102fe40ed0c19cf540a8223ae7f425b895a02f1f
 echo '{foo bar}' | gqlhash
 ```
 
@@ -141,7 +141,7 @@ gqlhash supports the following output formats:
 By default `hex` is used. Use `-format` to specify a different output format:
 
 ```sh
-# prints: +o65hy+DX8NvieIOdiUWUQYiq6g=
+# prints: EC/kDtDBnPVAqCI65/QluJWgLx8=
 echo '{foo bar}' | gqlhash -format base64
 ```
 
@@ -162,7 +162,7 @@ gqlhash supports multiple common hash functions:
 By default `sha1` is used. Use `-hash` to specify a different hash function:
 
 ```sh
-# prints: t2XWfakQNusOObQfnS09PT3NOgfVqFOyizwqxYzxn4k=
+# prints: 1ZLCPgw2KjpJtMSxgxbZv8W9os51d7CSXSXEtMupwuw=
 echo '{foo bar}' | gqlhash -hash sha2 -format base64
 ```
 

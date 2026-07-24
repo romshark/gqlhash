@@ -171,25 +171,19 @@ func run(
 		return 1
 	}
 
+	var encoded string
 	switch outputFormat {
 	case FormatHex:
-		if _, err = hex.NewEncoder(stdout).Write(sum); err != nil {
-			panic(fmt.Errorf("encoding hex to stdout: %w", err))
-		}
+		encoded = hex.EncodeToString(sum)
 	case FormatBase32:
-		if _, err = base32.NewEncoder(
-			base32.StdEncoding, stdout,
-		).Write(sum); err != nil {
-			panic(fmt.Errorf("encoding base32 to stdout: %w", err))
-		}
+		encoded = base32.StdEncoding.EncodeToString(sum)
 	case FormatBase64:
-		if _, err = base64.NewEncoder(
-			base64.StdEncoding, stdout,
-		).Write(sum); err != nil {
-			panic(fmt.Errorf("encoding base64 to stdout: %w", err))
-		}
+		encoded = base64.StdEncoding.EncodeToString(sum)
 	default:
 		panic(fmt.Errorf("unsupported output format: %q", *fFormat))
+	}
+	if _, err = io.WriteString(stdout, encoded); err != nil {
+		panic(fmt.Errorf("writing hash to stdout: %w", err))
 	}
 	return 0
 }

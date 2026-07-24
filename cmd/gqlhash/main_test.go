@@ -1,6 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha1"
+	"encoding/base32"
+	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"slices"
@@ -51,7 +56,7 @@ func TestRun(t *testing.T) {
 	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
 		args(`-format`, `hex`), "{foo}")
 
-	f(t, 0, nil, stdout(`AHkKRN2e94HSt+VtPHke6Cl6`),
+	f(t, 0, nil, stdout(`AHkKRN2e94HSt+VtPHke6Cl6Mq8=`),
 		args(`-format`, `base64`), "{foo}")
 	f(t, 0, nil, stdout(`AB4QURG5T33YDUVX4VWTY6I65AUXUMVP`),
 		args(`-format`, `base32`), "{foo}")
@@ -108,6 +113,34 @@ func TestRun(t *testing.T) {
 	f(t, 1, stderr(`error reading file "non-existing-file.graphql": `+
 		`open non-existing-file.graphql: no such file or directory`+"\n"), nil,
 		args(`-file`, "non-existing-file.graphql"), "this must not be read")
+}
+
+// TestRunOutputEncodings guards against an encoding truncation bug: base32 and
+// base64 must decode back to the same digest as hex (a streaming encoder that
+// is never flushed drops the final partial group).
+func TestRunOutputEncodings(t *testing.T) {
+	get := func(t *testing.T, format string) string {
+		t.Helper()
+		out, errOut := new(IORecorder), new(IORecorder)
+		if code := run(args("-format", format), out, errOut,
+			strings.NewReader("{foo}")); code != 0 {
+			t.Fatalf("format %s: code %d; stderr %v", format, code, *errOut)
+		}
+		return strings.Join(*out, "")
+	}
+
+	raw, err := hex.DecodeString(get(t, "hex"))
+	if err != nil || len(raw) != sha1.Size {
+		t.Fatalf("hex decode: err=%v len=%d", err, len(raw))
+	}
+	if got, err := base64.StdEncoding.DecodeString(get(t, "base64")); err != nil ||
+		!bytes.Equal(got, raw) {
+		t.Errorf("base64 does not round-trip to the digest: %v", err)
+	}
+	if got, err := base32.StdEncoding.DecodeString(get(t, "base32")); err != nil ||
+		!bytes.Equal(got, raw) {
+		t.Errorf("base32 does not round-trip to the digest: %v", err)
+	}
 }
 
 func TestRunIgnoreOptions(t *testing.T) {
