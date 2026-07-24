@@ -394,32 +394,41 @@ func readArguments(h Hash, o Options, s []byte) (arguments, suffix []byte, err e
 	return s[:len(s)-len(suffix)], suffix, nil
 }
 
+// isKeyword returns true if s begins with the whole word kw and not just a
+// longer name starting with it, so the enum "nullable" won't match "null".
+func isKeyword(s []byte, kw string) bool {
+	if !HasPrefix(s, kw) {
+		return false
+	}
+	n := len(kw)
+	return n == len(s) || (!IsLetter(s[n]) && !IsDigit(s[n]) && s[n] != '_')
+}
+
 func readValue(h Hash, o Options, s []byte) (
 	value []byte, valueType ValueType, suffix []byte, err error,
 ) {
 	if err = ExpectNoEOF(s); err != nil {
 		return value, valueType, s, err
 	}
-	// Under [Options.IgnoreInputs] every value is ignored: all writes go to a
-	// discard sink and composites recurse with it, so scalars, lists, input
-	// objects and variable usages alike collapse to nothing. The variable
-	// signature is kept separately in [readVariableDefinitionsAfterParenthesis]
-	// (unless [Options.IgnoreVariables], which drops it too).
+	// Under [Options.IgnoreInputs] all values are hashed to a discard hasher,
+	// including the items of lists and input objects. The variable signature is
+	// still kept by [readVariableDefinitionsAfterParenthesis] (unless
+	// [Options.IgnoreVariables], which drops it too).
 	if o.IgnoreInputs {
 		h = noopHash{}
 	}
 	switch {
-	case HasPrefix(s, "null"):
+	case isKeyword(s, "null"):
 		// NullValue (https://spec.graphql.org/September2025/#sec-Null-Value).
 		_, _ = h.Write(HPrefValueNull)
 		return s[:len("null")], ValueTypeNull, s[len("null"):], nil
 
-	case HasPrefix(s, "true"):
+	case isKeyword(s, "true"):
 		// BooleanValue (https://spec.graphql.org/September2025/#sec-Boolean-Value).
 		_, _ = h.Write(HPrefValueTrue)
 		return s[:len("true")], ValueTypeBooleanTrue, s[len("true"):], nil
 
-	case HasPrefix(s, "false"):
+	case isKeyword(s, "false"):
 		// BooleanValue (https://spec.graphql.org/September2025/#sec-Boolean-Value).
 		_, _ = h.Write(HPrefValueFalse)
 		return s[:len("false")], ValueTypeBooleanFalse, s[len("false"):], nil
@@ -432,7 +441,7 @@ func readValue(h Hash, o Options, s []byte) (
 		}
 		value = s[:len(s)-len(suffix)]
 		// A variable usage is just another input value: written to h, which is
-		// the discard sink under [Options.IgnoreInputs].
+		// the discard hasher under [Options.IgnoreInputs].
 		_, _ = h.Write(HPrefValueVariable)
 		_, _ = h.Write([]byte(value))
 		return value, ValueTypeVariable, suffix, err

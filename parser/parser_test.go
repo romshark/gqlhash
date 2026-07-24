@@ -398,6 +398,10 @@ func TestReadValue(t *testing.T) {
 		f(t, "Bar", parser.ValueTypeEnum, suffix, nil, "Bar"+suffix)
 		f(t, "_x", parser.ValueTypeEnum, suffix, nil, "_x"+suffix)
 		f(t, "_0", parser.ValueTypeEnum, suffix, nil, "_0"+suffix)
+
+		f(t, "nullable", parser.ValueTypeEnum, suffix, nil, "nullable"+suffix)
+		f(t, "trueStory", parser.ValueTypeEnum, suffix, nil, "trueStory"+suffix)
+		f(t, "falseFlag", parser.ValueTypeEnum, suffix, nil, "falseFlag"+suffix)
 	}
 
 	{ // IntValue (https://spec.graphql.org/September2025/#sec-Int-Value).
