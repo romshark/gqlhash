@@ -57,6 +57,8 @@ func TestRun(t *testing.T) {
 
 	f(t, 0, nil, stdout(`AHkKRN2e94HSt+VtPHke6Cl6Mq8=`),
 		args(`-format`, `base64`), "{foo}")
+	f(t, 0, nil, stdout(`AHkKRN2e94HSt-VtPHke6Cl6Mq8=`),
+		args(`-format`, `base64url`), "{foo}")
 	f(t, 0, nil, stdout(`AB4QURG5T33YDUVX4VWTY6I65AUXUMVP`),
 		args(`-format`, `base32`), "{foo}")
 
@@ -139,11 +141,21 @@ func TestRunOutputEncodings(t *testing.T) {
 		if err != nil || len(raw) == 0 {
 			t.Fatalf("%s hex decode: err=%v len=%d", hf, err, len(raw))
 		}
-		if got, err := base64.StdEncoding.DecodeString(get(t, hf, "base64")); err != nil ||
+		if got, err := base64.StdEncoding.DecodeString(
+			get(t, hf, "base64"),
+		); err != nil ||
 			!bytes.Equal(got, raw) {
 			t.Errorf("%s: base64 does not round-trip to the digest: %v", hf, err)
 		}
-		if got, err := base32.StdEncoding.DecodeString(get(t, hf, "base32")); err != nil ||
+		if got, err := base64.URLEncoding.DecodeString(
+			get(t, hf, "base64url"),
+		); err != nil ||
+			!bytes.Equal(got, raw) {
+			t.Errorf("%s: base64url does not round-trip to the digest: %v", hf, err)
+		}
+		if got, err := base32.StdEncoding.DecodeString(
+			get(t, hf, "base32"),
+		); err != nil ||
 			!bytes.Equal(got, raw) {
 			t.Errorf("%s: base32 does not round-trip to the digest: %v", hf, err)
 		}
@@ -242,6 +254,9 @@ func TestParseFormat(t *testing.T) {
 	f(t, FormatBase64, "base64")
 	f(t, FormatBase64, "Base64")
 	f(t, FormatBase64, "BASE64")
+	f(t, FormatBase64URL, "base64url")
+	f(t, FormatBase64URL, "Base64URL")
+	f(t, FormatBase64URL, "BASE64URL")
 }
 
 func TestParseHashFunction(t *testing.T) {

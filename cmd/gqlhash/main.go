@@ -34,7 +34,7 @@ var Version = "dev"
 const (
 	SupportedHashFunctions = "sha1, sha2, sha3, md5, blake2b, blake2s, " +
 		"blake3, fnv, fnv1a, xxh64, crc32, crc64"
-	SupportedOutputFormats = "hex, base32, base64"
+	SupportedOutputFormats = "hex, base32, base64, base64url"
 )
 
 func main() {
@@ -160,6 +160,8 @@ func run(
 		encoded = base32.StdEncoding.EncodeToString(sum)
 	case FormatBase64:
 		encoded = base64.StdEncoding.EncodeToString(sum)
+	case FormatBase64URL:
+		encoded = base64.URLEncoding.EncodeToString(sum)
 	default:
 		panic(fmt.Errorf("unsupported output format: %q", *fFormat))
 	}
@@ -228,6 +230,8 @@ func parseFormat(s string) Format {
 		return FormatBase32
 	case strings.EqualFold(s, "base64"):
 		return FormatBase64
+	case strings.EqualFold(s, "base64url"):
+		return FormatBase64URL
 	}
 	return 0
 }
@@ -269,6 +273,7 @@ const (
 	FormatHex
 	FormatBase32
 	FormatBase64
+	FormatBase64URL
 )
 
 type HashFunction int8

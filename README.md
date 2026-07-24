@@ -146,12 +146,22 @@ gqlhash supports the following output formats:
   [RFC 4648](https://datatracker.ietf.org/doc/html/rfc4648))
 - `base64` (base64 encoding as defined in
   [RFC 4648](https://datatracker.ietf.org/doc/html/rfc4648))
+- `base64url` (URL-safe base64 encoding as defined in
+  [RFC 4648 §5](https://datatracker.ietf.org/doc/html/rfc4648#section-5))
 
 By default `hex` is used. Use `-format` to specify a different output format:
 
 ```sh
 # prints: EC/kDtDBnPVAqCI65/QluJWgLx8=
 echo '{foo bar}' | gqlhash -format base64
+```
+
+Use `base64url` when the hash goes into a URL, header or file name, since it
+avoids the `+` and `/` characters:
+
+```sh
+# prints: EC_kDtDBnPVAqCI65_QluJWgLx8=
+echo '{foo bar}' | gqlhash -format base64url
 ```
 
 ### Hash Function
