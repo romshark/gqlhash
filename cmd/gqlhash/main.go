@@ -31,7 +31,7 @@ var Version = "dev"
 
 const (
 	SupportedHashFunctions = "sha1, sha2, sha3, md5, blake2b, blake2s, " +
-		"fnv, crc32, crc64"
+		"fnv, fnv1a, crc32, crc64"
 	SupportedOutputFormats = "hex, base32, base64"
 )
 
@@ -64,6 +64,8 @@ func run(
 			"sha3 is SHA3-512.\n"+
 			"blake2b is unkeyed.\n"+
 			"blake2s is unkeyed.\n"+
+			"fnv is FNV-1, 64 bits wide.\n"+
+			"fnv1a is FNV-1a, 64 bits wide.\n"+
 			"crc32 uses the IEEE polynomial.\n"+
 			"crc64 uses ISO polynomial, defined in ISO 3309 and used in HDLC.",
 	)
@@ -154,6 +156,8 @@ func run(
 		}
 	case HashFunctionFNV:
 		hasher = fnv.New64()
+	case HashFunctionFNV1A:
+		hasher = fnv.New64a()
 	case HashFunctionCRC32:
 		hasher = crc32.NewIEEE()
 	case HashFunctionCRC64:
@@ -228,6 +232,8 @@ func parseHashFunction(s string) HashFunction {
 		return HashFunctionBLAKE2S
 	case strings.EqualFold(s, "fnv"):
 		return HashFunctionFNV
+	case strings.EqualFold(s, "fnv1a"):
+		return HashFunctionFNV1A
 	case strings.EqualFold(s, "crc32"):
 		return HashFunctionCRC32
 	case strings.EqualFold(s, "crc64"):
@@ -256,6 +262,7 @@ const (
 	HashFunctionBLAKE2B
 	HashFunctionBLAKE2S
 	HashFunctionFNV
+	HashFunctionFNV1A
 	HashFunctionCRC32
 	HashFunctionCRC64
 )

@@ -164,7 +164,8 @@ gqlhash supports multiple common hash functions:
 - `md5`
 - `blake2b` (unkeyed)
 - `blake2s` (unkeyed)
-- `fnv`
+- `fnv` (FNV-1, 64 bits)
+- `fnv1a` (FNV-1a, 64 bits)
 - `crc32` (IEEE polynomial)
 - `crc64` (ISO polynomial, defined in ISO 3309)
 
