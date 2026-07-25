@@ -738,15 +738,22 @@ func TestIterateBlockStringLines(t *testing.T) {
 	f(t, nil, "", 0)
 	f(t, []string{"abc"}, "abc", 0)
 	f(t, []string{"abc def"}, "abc def", 0)
-	f(t, []string{"abc\n", " def"}, "abc\n def", 0)
-	f(t, []string{"abc\n", "\n", " def"}, "abc\n\n def", 0)
-	f(t, []string{"abc\n", " \n", " def"}, "abc\n \n def", 0)
-	f(t, []string{"abc\n", " \n", " def"}, "\nabc\n \n def", 0)
+	f(t, []string{"abc", " def"}, "abc\n def", 0)
+	f(t, []string{"abc", "", " def"}, "abc\n\n def", 0)
+	f(t, []string{"abc", " ", " def"}, "abc\n \n def", 0)
+	f(t, []string{"abc", " ", " def"}, "\nabc\n \n def", 0)
+
+	// CR and CRLF are LineTerminators too, and CRLF is a single one
+	// (https://spec.graphql.org/September2025/#LineTerminator).
+	f(t, []string{"abc", " def"}, "abc\r\n def", 0)
+	f(t, []string{"abc", " def"}, "abc\r def", 0)
+	f(t, []string{"abc", "", " def"}, "abc\r\n\r\n def", 0)
+	f(t, []string{"a", "b", "c", "d"}, "a\r\nb\rc\nd", 0)
 
 	// First line no prefix.
-	f(t, []string{" abc\n", "\n", "def"}, " abc\n \n def", 1)
-	f(t, []string{" abc\n", " \n", "def"}, " abc\n  \n def", 1)
-	f(t, []string{"\tabc\n", "\t\n", "def"}, "\tabc\n\t\t\n\tdef", 1)
+	f(t, []string{" abc", "", "def"}, " abc\n \n def", 1)
+	f(t, []string{" abc", " ", "def"}, " abc\n  \n def", 1)
+	f(t, []string{"\tabc", "\t", "def"}, "\tabc\n\t\t\n\tdef", 1)
 
 	// Empty (this should be handled by the parser func,
 	// because the parser func needs to return ""/nil for this input).
@@ -756,12 +763,12 @@ func TestIterateBlockStringLines(t *testing.T) {
 	// Trailing whitespace (again, parser func needs to return no trailing empty lines).
 	// f(t, []string{"x\n"}, "x\n", 0)
 
-	f(t, []string{"ж\n", "ツ\n", "\\"}, "\nж\nツ\n\\", 0)
-	f(t, []string{"ж\n", "ツ\n", "\\"}, "\n ж\n ツ\n \\", 1)
-	f(t, []string{"ж\n", "ツ\n", "\\"}, "\n  ж\n  ツ\n  \\", 2)
-	f(t, []string{"ж\n", "ツ\n", "\\"}, "\n   ж\n   ツ\n   \\", 3)
-	f(t, []string{"ж\n", "ツ\n", "\\"}, "\n\t\t\tж\n\t\t\tツ\n\t\t\t\\", 3)
-	f(t, []string{"line one.\n", "\tline two.\n", "line three."},
+	f(t, []string{"ж", "ツ", "\\"}, "\nж\nツ\n\\", 0)
+	f(t, []string{"ж", "ツ", "\\"}, "\n ж\n ツ\n \\", 1)
+	f(t, []string{"ж", "ツ", "\\"}, "\n  ж\n  ツ\n  \\", 2)
+	f(t, []string{"ж", "ツ", "\\"}, "\n   ж\n   ツ\n   \\", 3)
+	f(t, []string{"ж", "ツ", "\\"}, "\n\t\t\tж\n\t\t\tツ\n\t\t\t\\", 3)
+	f(t, []string{"line one.", "\tline two.", "line three."},
 		"line one.\n\t\t\t\t\tline two.\n\t\t\t\tline three.", 4)
 
 	t.Run("break", func(t *testing.T) {
@@ -770,7 +777,7 @@ func TestIterateBlockStringLines(t *testing.T) {
 			r = append(r, string(s))
 			break
 		}
-		if !slices.Equal([]string{"foo\n"}, r) {
+		if !slices.Equal([]string{"foo"}, r) {
 			t.Errorf("expected only foo, received: %#v", r)
 		}
 	})
@@ -783,10 +790,28 @@ func TestIterateBlockStringLines(t *testing.T) {
 			}
 			r = append(r, string(s))
 		}
-		if !slices.Equal([]string{"foo\n"}, r) {
+		if !slices.Equal([]string{"foo"}, r) {
 			t.Errorf("expected only foo, received: %#v", r)
 		}
 	})
+}
+
+func TestReadStringBlockAfterQuotesCommonIndent(t *testing.T) {
+	// A pair of quotes is ordinary block-string content. This first content
+	// line must therefore participate in common-indent calculation.
+	// https://spec.graphql.org/September2025/#BlockStringValue()
+	input := "\n  x\"\"\n    y\n\"\"\"suffix"
+
+	_, prefixLen, suffix, err := parser.ReadStringBlockAfterQuotes([]byte(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if prefixLen != 2 {
+		t.Errorf("expected common indent 2; received: %d", prefixLen)
+	}
+	if string(suffix) != "suffix" {
+		t.Errorf("expected suffix %q; received: %q", "suffix", suffix)
+	}
 }
 
 func TestTrimEmptyLinesSuffix(t *testing.T) {

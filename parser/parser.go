@@ -57,6 +57,10 @@ var (
 	HPrefValueVariable         = []byte{0x1f}
 )
 
+// hLineFeed joins block string lines. Kept as a package-level variable so
+// writing it doesn't allocate.
+var hLineFeed = []byte{'\n'}
+
 // Options configures how a document is hashed.
 type Options struct {
 	// IgnoreInputs produces the same hash for two documents that differ only in
@@ -385,21 +389,23 @@ func ReadStringBlockAfterQuotes(s []byte) (
 				i += 4
 				continue
 			}
-		case '\n':
-			// Skip any WhiteSpace (https://spec.graphql.org/September2025/#WhiteSpace).
+		case '\n', '\r':
+			// Consume the LineTerminator, then skip any WhiteSpace
+			// (https://spec.graphql.org/September2025/#WhiteSpace).
 			c := 0
-			for i++; i < len(s) && IsWhiteSpace(s[i]); i, c = i+1, c+1 {
+			for i += lineTerminatorLen(s, i); i < len(s) &&
+				IsWhiteSpace(s[i]); i, c = i+1, c+1 {
 			}
 
-			if i < len(s) && !IsWhiteSpace(s[i]) && s[i] != '\n' {
+			if i < len(s) && !IsWhiteSpace(s[i]) && lineTerminatorLen(s, i) == 0 {
 				setNWSNL(i)
 			}
 
 			// Only lines with non-whitespace text set the common indentation.
 			// Blank lines and the closing-quote line are excluded
 			// (https://spec.graphql.org/September2025/#BlockStringValue()).
-			isBlankLine := i >= len(s) || s[i] == '\n'
-			isLastLine := i+2 < len(s) && s[i+1] == '"' && s[i+2] == '"'
+			isBlankLine := i >= len(s) || lineTerminatorLen(s, i) > 0
+			isLastLine := i+2 < len(s) && s[i] == '"' && s[i+1] == '"' && s[i+2] == '"'
 			if !isBlankLine && !isLastLine {
 				if prefixLenSet {
 					prefixLen = min(prefixLen, c)
@@ -574,6 +580,24 @@ func IsNameStart(b byte) bool { return lutLetter[b] || b == '_' }
 //   - https://spec.graphql.org/September2025/#NameContinue
 func IsNameContinue(b byte) bool { return lutLetter[b] || lutDigit[b] || b == '_' }
 
+// lineTerminatorLen returns the length in bytes of the LineTerminator at s[i],
+// or 0 if s[i] doesn't begin one. CRLF is a single LineTerminator, hence 2.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#LineTerminator
+func lineTerminatorLen(s []byte, i int) int {
+	switch s[i] {
+	case '\n':
+		return 1
+	case '\r':
+		if i+1 < len(s) && s[i+1] == '\n' {
+			return 2
+		}
+		return 1
+	}
+	return 0
+}
+
 // IsLetter returns true if b is Letter.
 // Reference:
 //
@@ -698,35 +722,38 @@ var lutHex = [256]bool{
 
 // IterateBlockStringLines iterates over individual lines of a GraphQL block string.
 // Expects s to be the content of the string without the surrounding `"""`.
+//
+// Lines are yielded without their LineTerminator. Per BlockStringValue the
+// lines are joined by a single line feed, so LF, CRLF and CR in the source all
+// produce the same sequence.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#BlockStringValue()
 func IterateBlockStringLines(s []byte, prefixLen int) iter.Seq[[]byte] {
 	return func(yield func([]byte) bool) {
 		// The first line keeps its indentation (the common prefix never applies to it).
 		i, firstLineIsEmpty := 0, true
-		for ; i < len(s) && s[i] != '\n'; i++ {
+		for ; i < len(s) && lineTerminatorLen(s, i) == 0; i++ {
 			if s[i] != ' ' && s[i] != '\t' {
 				firstLineIsEmpty = false
 			}
 		}
 		contentSeen := !firstLineIsEmpty
 		if !firstLineIsEmpty {
-			var firstLine []byte
-			if i < len(s) && s[i] == '\n' {
-				firstLine = s[:i+1]
-			} else {
-				firstLine = s[:i]
-			}
-			if !yield(firstLine) {
+			if !yield(s[:i]) {
 				return
 			}
 		}
-		for i++; i < len(s); i++ {
+		for i < len(s) {
+			i += lineTerminatorLen(s, i)
+
 			// Strip up to prefixLen leading whitespace bytes.
 			for skipped := 0; i < len(s) && skipped < prefixLen &&
 				IsWhiteSpace(s[i]); skipped++ {
 				i++
 			}
 			lineStart, blank := i, true
-			for ; i < len(s) && s[i] != '\n'; i++ {
+			for ; i < len(s) && lineTerminatorLen(s, i) == 0; i++ {
 				if !IsWhiteSpace(s[i]) {
 					blank = false
 				}
@@ -737,16 +764,10 @@ func IterateBlockStringLines(s []byte, prefixLen int) iter.Seq[[]byte] {
 				// content is an interior line and must be kept.
 				continue
 			}
-			var line []byte
-			if i < len(s) && s[i] == '\n' {
-				line = s[lineStart : i+1]
-			} else {
-				line = s[lineStart:i]
-			}
 			if !blank {
 				contentSeen = true
 			}
-			if !yield(line) {
+			if !yield(s[lineStart:i]) {
 				return
 			}
 		}
@@ -757,20 +778,30 @@ func IterateBlockStringLines(s []byte, prefixLen int) iter.Seq[[]byte] {
 // An empty line is defined as a line that contains only whitespace characters.
 func TrimEmptyLinesSuffix(s []byte) []byte {
 	e := len(s)
-	for i := e - 1; i >= 0; i-- {
-		if s[i] == '\n' {
-			line := s[i+1 : e]
-			if len(bytes.TrimSpace(line)) != 0 {
-				break // Line is not empty, stop trimming.
-			}
-			e = i // Remove empty line.
-		} else if i == 0 {
-			line := s[i:e]
-			if len(bytes.TrimSpace(line)) != 0 {
+	for {
+		// Find the LineTerminator that ends the second-to-last line. Scanning
+		// for its last byte keeps CRLF intact: the '\n' is found first and the
+		// preceding '\r' is picked up below.
+		termEnd := -1
+		for i := e - 1; i >= 0; i-- {
+			if s[i] == '\n' || s[i] == '\r' {
+				termEnd = i
 				break
 			}
-			e = i // Remove empty line.
 		}
+		if termEnd < 0 {
+			// Only one line left.
+			if len(bytes.TrimSpace(s[:e])) == 0 {
+				return s[:0]
+			}
+			return s[:e]
+		}
+		if len(bytes.TrimSpace(s[termEnd+1:e])) != 0 {
+			return s[:e] // Line is not empty, stop trimming.
+		}
+		if s[termEnd] == '\n' && termEnd > 0 && s[termEnd-1] == '\r' {
+			termEnd-- // Drop the whole CRLF, not just the '\n'.
+		}
+		e = termEnd // Remove empty line.
 	}
-	return s[:e]
 }

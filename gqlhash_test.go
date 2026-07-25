@@ -101,7 +101,10 @@ var hashTests = []HashTest{
 			parser.HPrefArgument, "name",
 			parser.HPrefValueString, "GraphQL",
 			parser.HPrefArgument, "description",
-			parser.HPrefValueString, "line one.\n", "\tline two.\n", "line three.",
+			// Block string lines are written individually and joined by a line
+			// feed, so that LF, CRLF and CR sources all hash alike.
+			parser.HPrefValueString,
+			"line one.", "\n", "\tline two.", "\n", "line three.",
 			parser.HPrefSelectionSetEnd,
 		),
 	},
@@ -124,7 +127,9 @@ var hashTests = []HashTest{
 			parser.HPrefSelectionSet,
 			parser.HPrefField, "f",
 			parser.HPrefArgument, "x",
-			parser.HPrefValueString, "a\n", "\n", "b",
+			// The blank middle line is yielded as an empty line between two
+			// line feed separators.
+			parser.HPrefValueString, "a", "\n", "", "\n", "b",
 			parser.HPrefSelectionSetEnd,
 		),
 	},
@@ -323,6 +328,45 @@ func TestCompare(t *testing.T) {
 		{ foo, bar }
 	`, `{foo bar}`)
 	f(t, gqlhash.ErrQueriesDiffer, `{foo bar}`, `{foobar}`)
+
+	// CR and CRLF are LineTerminators just like LF, and BlockStringValue
+	// normalizes all three to LF, so a block string written with Windows or
+	// classic-Mac line endings must hash like its LF equivalent
+	// (https://spec.graphql.org/September2025/#BlockStringValue()).
+	f(t, nil,
+		`{f(s:"""`+"line1\r\nline2"+`""")}`,
+		`{f(s:"""`+"line1\nline2"+`""")}`)
+	f(t, nil,
+		`{f(s:"""`+"line1\rline2"+`""")}`,
+		`{f(s:"""`+"line1\nline2"+`""")}`)
+	// Terminators may be mixed within one block string.
+	f(t, nil,
+		`{f(s:"""`+"a\r\nb\rc\nd"+`""")}`,
+		`{f(s:"""`+"a\nb\nc\nd"+`""")}`)
+
+	// CRLF is a single LineTerminator, not two, so it must not introduce a
+	// blank line. This guards a fix that treats CR and LF independently.
+	f(t, gqlhash.ErrQueriesDiffer,
+		`{f(s:"""`+"a\r\nb"+`""")}`,
+		`{f(s:"""`+"a\n\nb"+`""")}`)
+
+	// Common indentation is stripped per line, so it must be recognized after
+	// any LineTerminator, not just after LF.
+	f(t, nil,
+		`{f(s:"""`+"\r\n  line1\r\n  line2\r\n  "+`""")}`,
+		`{f(s:"""`+"\n  line1\n  line2\n  "+`""")}`)
+	// Leading and trailing blank lines are dropped regardless of terminator.
+	f(t, nil, `{f(s:"""`+"\r\nfoo\r\n\r\n"+`""")}`, `{f(s:"""foo""")}`)
+	f(t, nil, `{f(s:"""`+"foo\r\r"+`""")}`, `{f(s:"""foo""")}`)
+
+	// Accepting CR must not weaken the rest of the control-character rule:
+	// a single-line string may not contain a LineTerminator at all, and no
+	// string may contain other control characters
+	// (https://spec.graphql.org/September2025/#SourceCharacter).
+	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"`+"a\rb"+`")}`, `{f(s:"ab")}`)
+	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"`+"a\nb"+`")}`, `{f(s:"ab")}`)
+	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"""`+"a\x00b"+`""")}`, `{f(s:"""ab""")}`)
+	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"""`+"a\x07b"+`""")}`, `{f(s:"""ab""")}`)
 
 	// A '$' not followed by a Name leaves the variable definition list unclosed,
 	// so the document is invalid and must be rejected rather than hashed. It

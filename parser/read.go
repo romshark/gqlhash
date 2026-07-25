@@ -473,8 +473,15 @@ func readValue(h Hash, o Options, s []byte) (
 				value = TrimEmptyLinesSuffix(value)
 			}
 
+			// BlockStringValue joins the lines with a single line feed, which
+			// is what normalizes LF, CRLF and CR to the same hash.
 			_, _ = h.Write(HPrefValueString)
+			firstLine := true
 			for line := range IterateBlockStringLines(value, prefixLen) {
+				if !firstLine {
+					_, _ = h.Write(hLineFeed)
+				}
+				firstLine = false
 				_, _ = h.Write(line)
 			}
 
