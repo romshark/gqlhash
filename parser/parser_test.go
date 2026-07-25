@@ -89,8 +89,8 @@ func TestSkipIgnorables(t *testing.T) {
 func TestReadDocument(t *testing.T) {
 	f := func(t *testing.T, expectErr error, input string) {
 		t.Helper()
-		err := parser.ReadDocument(internal.NoopHash{}, []byte(input))
-		if expectErr != err {
+		err := parser.ReadDocument(internal.NoopHash{}, parser.Options{}, []byte(input))
+		if expectErr != err.Err {
 			t.Errorf("expected err: %v; received err: %v; input: %q",
 				expectErr, err, input)
 		}
@@ -313,6 +313,48 @@ func TestReadDocument(t *testing.T) {
 		f(t, nil, "# é € "+astral1+"\n{ x }")
 		f(t, nil, "{ x } # é € "+astral1)
 	}
+}
+
+// TestErrorPosition makes sure a [parser.Error] points at the
+// character where the readers stopped.
+func TestErrorPosition(t *testing.T) {
+	f := func(t *testing.T, expectLine, expectColumn int, input string) {
+		t.Helper()
+		e := parser.ReadDocument(internal.NoopHash{}, parser.Options{}, []byte(input))
+		if e.Err == nil {
+			t.Fatalf("expected an error; received none")
+		}
+		if e.Line != expectLine || e.Column != expectColumn {
+			t.Errorf("expected line %d, column %d; received line %d, column %d;"+
+				" input: %q", expectLine, expectColumn, e.Line, e.Column, input)
+		}
+		if e.Offset < 0 || e.Offset > len(input) {
+			t.Errorf("offset %d out of range for %q", e.Offset, input)
+		}
+	}
+
+	f(t, 1, 1, "")
+	f(t, 1, 1, "?")
+	f(t, 1, 2, "{")
+	f(t, 1, 3, "{ ?")
+
+	// Every LineTerminator starts a new line, CRLF counts as one.
+	f(t, 2, 1, "{\n?")
+	f(t, 2, 1, "{\r\n?")
+	f(t, 2, 1, "{\r?")
+	f(t, 3, 4, "query Q {\n\tf(a: 1)\n\t\t\t?")
+
+	// A column counts characters, not bytes: the 3-byte ツ counts as one.
+	f(t, 1, 13, `{ f(a: "ok" ?) }`)
+	f(t, 1, 13, `{ f(a: "ツ") ? }`)
+	f(t, 1, 3, "{ ツ? }")
+
+	// The position of a value that breaks a rule.
+	f(t, 2, 9, "query Q {\n  f(a: 01)\n}")
+	f(t, 1, 19, `query Q($x: Int = $y) { f }`)
+
+	// A comment doesn't shift the line count.
+	f(t, 2, 1, "# comment\n?")
 }
 
 func TestReadDefinition(t *testing.T) {
@@ -1119,9 +1161,9 @@ func TestReadValue(t *testing.T) {
 func TestReadDocumentErrEOF(t *testing.T) {
 	for _, s := range internal.TestUnexpectedEOF {
 		t.Helper()
-		if err := parser.ReadDocument(internal.NoopHash{}, []byte(s)); err == nil {
+		if err := parser.ReadDocument(internal.NoopHash{}, parser.Options{}, []byte(s)); err.Err == nil {
 			t.Errorf("expected %v", parser.ErrUnexpectedEOF)
-		} else if !errors.Is(err, parser.ErrUnexpectedEOF) {
+		} else if !errors.Is(err.Err, parser.ErrUnexpectedEOF) {
 			t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, err)
 		}
 
@@ -1135,8 +1177,8 @@ func TestReadDocumentErrEOF(t *testing.T) {
 		}
 
 		in := s + "\n"
-		err := parser.ReadDocument(internal.NoopHash{}, []byte(in))
-		if !errors.Is(err, parser.ErrUnexpectedEOF) {
+		err := parser.ReadDocument(internal.NoopHash{}, parser.Options{}, []byte(in))
+		if !errors.Is(err.Err, parser.ErrUnexpectedEOF) {
 			t.Errorf(
 				"(with ignorable suffix) expected %v; received: %v in %q",
 				parser.ErrUnexpectedEOF, err, in,
@@ -1148,8 +1190,8 @@ func TestReadDocumentErrEOF(t *testing.T) {
 // TestReadDocumentErrUnexpectedToken tests all possible unexpected token situations.
 func TestReadDocumentErrUnexpectedToken(t *testing.T) {
 	for _, s := range internal.TestErrUnexpectedToken {
-		err := parser.ReadDocument(internal.NoopHash{}, []byte(s))
-		if !errors.Is(err, parser.ErrUnexpectedToken) {
+		err := parser.ReadDocument(internal.NoopHash{}, parser.Options{}, []byte(s))
+		if !errors.Is(err.Err, parser.ErrUnexpectedToken) {
 			t.Errorf("expected ErrUnexpectedToken; received: %v (input: %q)", err, s)
 		}
 	}
@@ -1296,8 +1338,8 @@ func TestHPrefInStringValue(t *testing.T) {
 				)
 			}
 
-			err := parser.ReadDocument(internal.NoopHash{}, []byte(s))
-			if err != parser.ErrUnescapedControlChar {
+			err := parser.ReadDocument(internal.NoopHash{}, parser.Options{}, []byte(s))
+			if err.Err != parser.ErrUnescapedControlChar {
 				t.Errorf(
 					"hpref %v must not be valid within a string value: %q; "+
 						"expected: %v; received: %v",
@@ -1317,7 +1359,7 @@ func TestHPrefInStringValue(t *testing.T) {
 
 			// A block string may hold the byte. What keeps it from imitating a
 			// record prefix is the escaping of the value, see TestCompare.
-			if err := parser.ReadDocument(internal.NoopHash{}, []byte(s)); err != nil {
+			if err := parser.ReadDocument(internal.NoopHash{}, parser.Options{}, []byte(s)); err.Err != nil {
 				t.Errorf(
 					"hpref %v must be valid within a block string value: %q; "+
 						"received: %v",
@@ -1359,8 +1401,8 @@ func TestHPrefInStringValue(t *testing.T) {
 func hash(t *testing.T, options parser.Options, s string) string {
 	t.Helper()
 	h := sha1.New()
-	if err := parser.ReadDocumentWithOptions(h, options, []byte(s)); err != nil {
-		t.Fatalf("ReadDocumentWithOptions(%q): %v", s, err)
+	if err := parser.ReadDocument(h, options, []byte(s)); err.Err != nil {
+		t.Fatalf("ReadDocument(%q): %v", s, err)
 	}
 	return string(h.Sum(nil))
 }

@@ -13,22 +13,23 @@ func (noopHash) Reset()                      {}
 func (noopHash) Write(b []byte) (int, error) { return len(b), nil }
 func (noopHash) Sum(b []byte) []byte         { return b }
 
-func readDocument(h Hash, o Options, s []byte) (err error) {
+func readDocument(h Hash, o Options, input []byte) Error {
 	// [Options.IgnoreVariables] is a superset of [Options.IgnoreInputs]:
 	// ignoring variables also ignores all input values.
 	if o.IgnoreVariables {
 		o.IgnoreInputs = true
 	}
-	s = SkipIgnorables(s)
-	if err = ExpectNoEOF(s); err != nil {
-		return err
+	s := SkipIgnorables(input)
+	if err := ExpectNoEOF(s); err != nil {
+		return newError(input, s, err)
 	}
 	for {
 		if len(s) < 1 {
-			return nil
+			return Error{}
 		}
+		var err error
 		if s, err = readDefinition(h, o, s); err != nil {
-			return err
+			return newError(input, s, err)
 		}
 		s = SkipIgnorables(s)
 	}

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"hash"
@@ -57,6 +58,59 @@ var (
 		ErrUnexpectedToken)
 )
 
+// Error says where in the document parsing stopped. Its zero value means no
+// error, so callers check [Error.Err] instead of comparing to nil.
+//
+// The readers return it as it is, not as an error, because putting it into an
+// error would allocate on every rejected document.
+type Error struct {
+	// Err is nil when there's no error. Otherwise it's the sentinel:
+	// [ErrUnexpectedEOF], [ErrUnexpectedToken] or one of the errors wrapping
+	// [ErrUnexpectedToken].
+	Err error
+
+	// Offset is the byte index into the document where parsing stopped.
+	Offset int
+
+	// Line and Column are the 1-based position of Offset.
+	// A column counts characters, not bytes.
+	Line, Column int
+}
+
+func (e Error) Error() string {
+	switch {
+	case e.Err == nil:
+		return "no error"
+	case e.Line == 0:
+		// An error that carries no position, like a hash mismatch.
+		return e.Err.Error()
+	}
+	return fmt.Sprintf("%v (line %d, column %d)", e.Err, e.Line, e.Column)
+}
+
+func (e Error) Unwrap() error { return e.Err }
+
+// newError points err at the position where the readers stopped, which
+// is the start of the unread suffix.
+func newError(input, suffix []byte, err error) Error {
+	offset := len(input) - len(suffix)
+	head := input[:min(max(offset, 0), len(input))]
+
+	// CRLF is one LineTerminator, so the pairs are counted once
+	// (https://spec.graphql.org/September2025/#LineTerminator).
+	line := 1 + bytes.Count(head, hLineFeed) + bytes.Count(head, hCarriageReturn) -
+		bytes.Count(head, hCRLF)
+
+	// A column counts the characters after the last LineTerminator. RuneCount
+	// takes a malformed byte for one character, which is what the readers do.
+	lineStart := max(
+		bytes.LastIndexByte(head, '\n'), bytes.LastIndexByte(head, '\r'),
+	) + 1
+	column := utf8.RuneCount(head[lineStart:]) + 1
+
+	return Error{Err: err, Offset: offset, Line: line, Column: column}
+}
+
 // bom is the UTF-8 encoding of UnicodeBOM (U+FEFF). bomFirstByte is kept
 // separate so [SkipIgnorables] can dispatch on a single byte.
 // Reference:
@@ -67,7 +121,7 @@ const (
 	bomFirstByte = '\xef'
 )
 
-// Hash is a subset of the standard `hash.Hash`.
+// Hash is a subset of the standard [hash.Hash].
 type Hash interface {
 	Reset()
 	Sum([]byte) []byte
@@ -115,8 +169,10 @@ var (
 // hLineFeed joins block string lines, hTripleQuote is what a block string's
 // `\"""` stands for. Package-level so writing them doesn't allocate.
 var (
-	hLineFeed    = []byte{'\n'}
-	hTripleQuote = []byte(`"""`)
+	hLineFeed       = []byte{'\n'}
+	hCarriageReturn = []byte{'\r'}
+	hCRLF           = []byte{'\r', '\n'}
+	hTripleQuote    = []byte(`"""`)
 )
 
 // allBytes lets a single byte be written without allocating: allBytes[b : b+1].
@@ -178,20 +234,11 @@ type Options struct {
 	IgnoreVariables bool
 }
 
-// ReadDocument reads one or many ExecutableDefinitions
+// ReadDocument reads one or many ExecutableDefinitions, applying options.
 //
 //   - https://spec.graphql.org/September2025/#Document
 //   - https://spec.graphql.org/September2025/#ExecutableDefinition
-func ReadDocument(h Hash, s []byte) error {
-	return readDocument(h, Options{}, s)
-}
-
-// ReadDocumentWithOptions reads one or many ExecutableDefinitions like
-// [ReadDocument], applying options.
-//
-//   - https://spec.graphql.org/September2025/#Document
-//   - https://spec.graphql.org/September2025/#ExecutableDefinition
-func ReadDocumentWithOptions(h Hash, options Options, s []byte) error {
+func ReadDocument(h Hash, options Options, s []byte) Error {
 	return readDocument(h, options, s)
 }
 
