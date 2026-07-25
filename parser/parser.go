@@ -2,6 +2,7 @@ package parser
 
 import (
 	"errors"
+	"fmt"
 	"hash"
 	"iter"
 	"unicode/utf8"
@@ -10,6 +11,15 @@ import (
 var (
 	ErrUnexpectedEOF   = errors.New("unexpected EOF")
 	ErrUnexpectedToken = errors.New("unexpected token")
+
+	// ErrUnexpectedVariable is a variable usage where the grammar asks for a
+	// Value[Const]: the default value or a directive argument of a variable definition.
+	// It wraps [ErrUnexpectedToken], so matching that one with [errors.Is] still works.
+	// Reference:
+	//
+	//   - https://spec.graphql.org/September2025/#VariableDefinition
+	ErrUnexpectedVariable = fmt.Errorf("%w: variable in constant value",
+		ErrUnexpectedToken)
 )
 
 // bom is the UTF-8 encoding of UnicodeBOM (U+FEFF). bomFirstByte is kept
@@ -192,7 +202,7 @@ func ReadVariableDefinitionsAfterParenthesis(
 //
 //   - https://spec.graphql.org/September2025/#sec-Language.Directives
 func ReadDirectives(h Hash, s []byte) (directives, suffix []byte, err error) {
-	return readDirectives(h, Options{}, s)
+	return readDirectives(h, Options{}, s, false)
 }
 
 // ReadArguments reads Arguments.
@@ -200,7 +210,7 @@ func ReadDirectives(h Hash, s []byte) (directives, suffix []byte, err error) {
 //
 //   - https://spec.graphql.org/September2025/#Arguments
 func ReadArguments(h Hash, s []byte) (arguments, suffix []byte, err error) {
-	return readArguments(h, Options{}, s)
+	return readArguments(h, Options{}, s, false)
 }
 
 // ReadToken expects token to be prefix of s and returns []byte the token trimmed.
@@ -251,7 +261,7 @@ const (
 func ReadValue(h Hash, s []byte) (
 	value []byte, valueType ValueType, suffix []byte, err error,
 ) {
-	return readValue(h, Options{}, s)
+	return readValue(h, Options{}, s, false)
 }
 
 // ReadIntValue reads IntValue.

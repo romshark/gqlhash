@@ -93,7 +93,7 @@ func readDefinition(h Hash, o Options, s []byte) (suffix []byte, err error) {
 		_, _ = h.Write([]byte(typeDec))
 
 		// Optional directives.
-		if _, suffix, err = readDirectives(h, o, suffix); err != nil {
+		if _, suffix, err = readDirectives(h, o, suffix, false); err != nil {
 			return suffix, err
 		}
 		suffix = SkipIgnorables(suffix)
@@ -139,7 +139,7 @@ func readOperationDefinition(h Hash, o Options, s []byte) (suffix []byte, err er
 	}
 
 	// Optional directives.
-	if _, s, err = readDirectives(h, o, s); err != nil {
+	if _, s, err = readDirectives(h, o, s, false); err != nil {
 		return s, err
 	}
 	s = SkipIgnorables(s)
@@ -181,7 +181,7 @@ func readSelectionSet(h Hash, o Options, s []byte) (suffix []byte, err error) {
 				s = SkipIgnorables(s)
 
 				// Optional directives.
-				if _, s, err = readDirectives(h, o, s); err != nil {
+				if _, s, err = readDirectives(h, o, s, false); err != nil {
 					return s, err
 				}
 
@@ -205,14 +205,14 @@ func readSelectionSet(h Hash, o Options, s []byte) (suffix []byte, err error) {
 				s = SkipIgnorables(s)
 
 				// Optional directives.
-				if _, s, err = readDirectives(h, o, s); err != nil {
+				if _, s, err = readDirectives(h, o, s, false); err != nil {
 					return s, err
 				}
 				s = SkipIgnorables(s)
 			} else {
 				// Inline fragment without type condition.
 				_, _ = h.Write(HPrefInlineFragment)
-				if _, s, err = readDirectives(h, o, s); err != nil {
+				if _, s, err = readDirectives(h, o, s, false); err != nil {
 					return s, err
 				}
 				s = SkipIgnorables(s)
@@ -251,14 +251,14 @@ func readSelectionSet(h Hash, o Options, s []byte) (suffix []byte, err error) {
 				return s, err
 			}
 			if s[0] == '(' {
-				if _, s, err = readArguments(h, o, s); err != nil {
+				if _, s, err = readArguments(h, o, s, false); err != nil {
 					return s, err
 				}
 				s = SkipIgnorables(s)
 			}
 
 			// Optional directives.
-			if _, s, err = readDirectives(h, o, s); err != nil {
+			if _, s, err = readDirectives(h, o, s, false); err != nil {
 				return s, err
 			}
 			s = SkipIgnorables(s)
@@ -296,7 +296,7 @@ func readDescription(o Options, s []byte) (found bool, suffix []byte, err error)
 	if len(s) < 1 || s[0] != '"' {
 		return false, s, nil
 	}
-	if _, _, suffix, err = readValue(noopHash{}, o, s); err != nil {
+	if _, _, suffix, err = readValue(noopHash{}, o, s, true); err != nil {
 		return true, suffix, err
 	}
 	return true, SkipIgnorables(suffix), nil
@@ -340,21 +340,23 @@ func readVariableDefinitionsAfterParenthesis(
 		}
 		s = SkipIgnorables(s)
 
-		// Optional default value.
+		// Optional default value. It and the directives below take
+		// Value[Const], which excludes variable usages
+		// (https://spec.graphql.org/September2025/#VariableDefinition).
 		if err = ExpectNoEOF(s); err != nil {
 			return s, err
 		}
 		if s[0] == '=' {
 			s = s[1:]
 			s = SkipIgnorables(s)
-			if _, _, s, err = readValue(h, o, s); err != nil {
+			if _, _, s, err = readValue(h, o, s, true); err != nil {
 				return s, err
 			}
 			s = SkipIgnorables(s)
 		}
 
 		// Optional directives.
-		if _, s, err = readDirectives(h, o, s); err != nil {
+		if _, s, err = readDirectives(h, o, s, true); err != nil {
 			return s, err
 		}
 		s = SkipIgnorables(s)
@@ -421,7 +423,9 @@ func readType(h Hash, s []byte) (
 	return s[:len(s)-len(suffix)], nullable, array, suffix, err
 }
 
-func readDirectives(h Hash, o Options, s []byte) (directives, suffix []byte, err error) {
+func readDirectives(
+	h Hash, o Options, s []byte, constant bool,
+) (directives, suffix []byte, err error) {
 	suffix = s
 	for len(suffix) > 0 {
 		if suffix[0] != '@' {
@@ -440,7 +444,7 @@ func readDirectives(h Hash, o Options, s []byte) (directives, suffix []byte, err
 			return directives, suffix, err
 		}
 		if suffix[0] == '(' {
-			if _, suffix, err = readArguments(h, o, suffix); err != nil {
+			if _, suffix, err = readArguments(h, o, suffix, constant); err != nil {
 				return directives, suffix, err
 			}
 		}
@@ -449,7 +453,9 @@ func readDirectives(h Hash, o Options, s []byte) (directives, suffix []byte, err
 	return s[:len(s)-len(suffix)], suffix, nil
 }
 
-func readArguments(h Hash, o Options, s []byte) (arguments, suffix []byte, err error) {
+func readArguments(
+	h Hash, o Options, s []byte, constant bool,
+) (arguments, suffix []byte, err error) {
 	if suffix, err = ReadToken(s, "("); err != nil {
 		return arguments, suffix, err
 	}
@@ -469,7 +475,7 @@ func readArguments(h Hash, o Options, s []byte) (arguments, suffix []byte, err e
 		}
 
 		suffix = SkipIgnorables(suffix)
-		if _, _, suffix, err = readValue(h, o, suffix); err != nil {
+		if _, _, suffix, err = readValue(h, o, suffix, constant); err != nil {
 			return arguments, suffix, err
 		}
 
@@ -647,7 +653,7 @@ func fixedWidthEscapeValue(s []byte) uint32 {
 		hexByteValue(s[2])<<4 | hexByteValue(s[3])
 }
 
-func readValue(h Hash, o Options, s []byte) (
+func readValue(h Hash, o Options, s []byte, constant bool) (
 	value []byte, valueType ValueType, suffix []byte, err error,
 ) {
 	if err = ExpectNoEOF(s); err != nil {
@@ -678,6 +684,11 @@ func readValue(h Hash, o Options, s []byte) (
 
 	case s[0] == '$':
 		// Variable (https://spec.graphql.org/September2025/#Variable).
+		if constant {
+			// Value[Const] has no Variable, not even nested in a list or an
+			// input object, because the caller passes constant down.
+			return value, ValueTypeVariable, s, ErrUnexpectedVariable
+		}
 		s = SkipIgnorables(s[1:])
 		if _, suffix, err = ReadName(s); err != nil {
 			return s, ValueTypeVariable, suffix, err
@@ -757,7 +768,7 @@ func readValue(h Hash, o Options, s []byte) (
 			return s[:len(s)-len(suffix)], ValueTypeList, suffix, nil
 		}
 		for len(suffix) > 0 {
-			if _, _, suffix, err = readValue(h, o, suffix); err != nil {
+			if _, _, suffix, err = readValue(h, o, suffix, constant); err != nil {
 				return value, ValueTypeList, suffix, err
 			}
 			suffix = SkipIgnorables(suffix)
@@ -800,7 +811,7 @@ func readValue(h Hash, o Options, s []byte) (
 
 			// Value.
 			suffix = SkipIgnorables(suffix)
-			if _, _, suffix, err = readValue(h, o, suffix); err != nil {
+			if _, _, suffix, err = readValue(h, o, suffix, constant); err != nil {
 				return value, ValueTypeInputObject, suffix, err
 			}
 			suffix = SkipIgnorables(suffix)

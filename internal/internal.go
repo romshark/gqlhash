@@ -170,6 +170,12 @@ var TestErrUnexpectedToken = []string{
 	"query Foo {...@dir(x:-1.2e?",
 	"query Foo {...@dir(x:-1.2e-?",
 	"query Foo {...@dir(x:-1.2e-4?",
+	// A variable definition's default value and directives take Value[Const],
+	// which excludes variable usages
+	// (https://spec.graphql.org/September2025/#VariableDefinition).
+	"query Q($x:Int=$y){f}",
+	"query Q($x:Int=[$y]){f}",
+	"query Q($x:Int@d(a:$y)){f}",
 	// A description is only allowed on an operation with an OperationType, on a
 	// fragment and on a variable definition, and only one per definition
 	// (https://spec.graphql.org/September2025/#sec-Descriptions).

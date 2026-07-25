@@ -184,6 +184,34 @@ func TestReadDocument(t *testing.T) {
 		f(t, nil, "query"+bom+"Foo"+bom+"{ x }")
 	}
 
+	{ // Constants (https://spec.graphql.org/September2025/#VariableDefinition).
+		// A default value and the directives of a variable definition take
+		// Value[Const], which excludes variable usages, however deeply nested.
+		f(t, parser.ErrUnexpectedVariable, `query Q($x: Int = $y) { f }`)
+		f(t, parser.ErrUnexpectedVariable, `query Q($x: [Int] = [$y]) { f }`)
+		f(t, parser.ErrUnexpectedVariable, `query Q($x: [[Int]] = [[1, $y]]) { f }`)
+		f(t, parser.ErrUnexpectedVariable, `query Q($x: In = {a: $y}) { f }`)
+		f(t, parser.ErrUnexpectedVariable, `query Q($x: In = {a: {b: [$y]}}) { f }`)
+		f(t, parser.ErrUnexpectedVariable, `query Q($x: Int @d(a: $y)) { f }`)
+		f(t, parser.ErrUnexpectedVariable, `query Q($x: Int @d(a: [$y])) { f }`)
+		f(t, parser.ErrUnexpectedVariable, `query Q($x: Int = 1 @d(a: {b: $y})) { f }`)
+
+		// Constants stay valid there.
+		f(t, nil, `query Q($x: Int = 1) { f }`)
+		f(t, nil, `query Q($x: [Int] = [1, 2]) { f }`)
+		f(t, nil, `query Q($x: In = {a: [1], b: "s"}) { f }`)
+		f(t, nil, `query Q($x: Int = null @d(a: [ENUM])) { f }`)
+
+		// Everywhere else a variable is just another value.
+		f(t, nil, `query Q($x: Int) { f(a: $x) }`)
+		f(t, nil, `query Q($x: Int) { f(a: [$x, {b: $x}]) }`)
+		f(t, nil, `query Q($x: Int) { f @d(a: $x) }`)
+		f(t, nil, `query Q($x: Int) @d(a: $x) { f }`)
+		f(t, nil, `fragment F on T @d(a: $x) { f } { ...F }`)
+		f(t, nil, `{ ... @d(a: $x) { f } }`)
+		f(t, nil, `{ ...F @d(a: $x) }`)
+	}
+
 	{ // Control characters (https://spec.graphql.org/September2025/#SourceCharacter).
 		// A BlockStringCharacter is any SourceCharacter, so a block string may
 		// hold control scalar values.

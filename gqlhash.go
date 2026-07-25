@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	ErrUnexpectedEOF   = parser.ErrUnexpectedEOF
-	ErrUnexpectedToken = parser.ErrUnexpectedToken
-	ErrQueriesDiffer   = errors.New("queries differ")
+	ErrUnexpectedEOF      = parser.ErrUnexpectedEOF
+	ErrUnexpectedToken    = parser.ErrUnexpectedToken
+	ErrUnexpectedVariable = parser.ErrUnexpectedVariable
+	ErrQueriesDiffer      = errors.New("queries differ")
 )
 
 // Hash is a subset of the standard [hash.Hash].
