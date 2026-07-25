@@ -99,7 +99,7 @@ Download one of the compiled binaries from
 ### From Source
 
 ```sh
-go install github.com/romshark/gqlhash@latest
+go install github.com/romshark/gqlhash/cmd/gqlhash@latest
 ```
 
 This requires the latest version of [Go](https://go.dev) to be installed.
