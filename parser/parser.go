@@ -507,7 +507,7 @@ func SkipIgnorables(s []byte) []byte {
 			s = s[1:]
 		case '#':
 			i := 1
-			for ; i < len(s) && s[i] != '\n'; i++ {
+			for ; i < len(s) && lineTerminatorLen(s, i) == 0; i++ {
 			}
 			s = s[i:]
 		default:

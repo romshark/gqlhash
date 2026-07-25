@@ -28,6 +28,8 @@ func TestSkipIgnorables(t *testing.T) {
 	f(t, "", "# this should be skipped")
 	f(t, "", "# this should be skipped\n\n\t # and this\n\t")
 	f(t, "but not this", "# this should be skipped\n\n\t # and this\n\tbut not this")
+	// Bare CR is a LineTerminator, so it ends the comment just like LF.
+	f(t, "but not this", "# this should be skipped\rbut not this")
 
 	f(t, "(", "(")
 	f(t, "{", "{")
