@@ -386,11 +386,10 @@ func TestCompare(t *testing.T) {
 	f(t, nil, `{f(s:"""`+"foo\r\r"+`""")}`, `{f(s:"""foo""")}`)
 
 	// Accepting CR must not weaken the rest of the control-character rule:
-	// a single-line string may not contain a LineTerminator at all, and no
-	// string may contain other control characters
-	// (https://spec.graphql.org/September2025/#SourceCharacter).
-	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"`+"a\rb"+`")}`, `{f(s:"ab")}`)
-	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"`+"a\nb"+`")}`, `{f(s:"ab")}`)
+	// a single-line string may not contain a LineTerminator at all
+	// (https://spec.graphql.org/September2025/#StringCharacter).
+	f(t, gqlhash.ErrUnescapedControlChar, `{f(s:"`+"a\rb"+`")}`, `{f(s:"ab")}`)
+	f(t, gqlhash.ErrUnescapedControlChar, `{f(s:"`+"a\nb"+`")}`, `{f(s:"ab")}`)
 	// A block string may hold a control scalar value, so these parse and differ
 	// (https://spec.graphql.org/September2025/#BlockStringCharacter).
 	f(t, gqlhash.ErrQueriesDiffer, `{f(s:"""`+"a\x00b"+`""")}`, `{f(s:"""ab""")}`)

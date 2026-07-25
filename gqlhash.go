@@ -15,7 +15,12 @@ var (
 	ErrUnexpectedEOF      = parser.ErrUnexpectedEOF
 	ErrUnexpectedToken    = parser.ErrUnexpectedToken
 	ErrUnexpectedVariable = parser.ErrUnexpectedVariable
-	ErrQueriesDiffer      = errors.New("queries differ")
+
+	ErrInvalidEscape        = parser.ErrInvalidEscape
+	ErrMalformedNumber      = parser.ErrMalformedNumber
+	ErrMalformedUTF8        = parser.ErrMalformedUTF8
+	ErrUnescapedControlChar = parser.ErrUnescapedControlChar
+	ErrQueriesDiffer        = errors.New("queries differ")
 )
 
 // Hash is a subset of the standard [hash.Hash].

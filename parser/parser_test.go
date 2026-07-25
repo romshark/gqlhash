@@ -221,9 +221,9 @@ func TestReadDocument(t *testing.T) {
 		f(t, nil, "{ f(s: \"\"\"a\x00b\nc\x1fd\"\"\") }")
 
 		// A normal string keeps rejecting them, they must be escaped there.
-		f(t, parser.ErrUnexpectedToken, "{ f(s: \"a\x00b\") }")
-		f(t, parser.ErrUnexpectedToken, "{ f(s: \"a\x07b\") }")
-		f(t, parser.ErrUnexpectedToken, "{ f(s: \"a\x1fb\") }")
+		f(t, parser.ErrUnescapedControlChar, "{ f(s: \"a\x00b\") }")
+		f(t, parser.ErrUnescapedControlChar, "{ f(s: \"a\x07b\") }")
+		f(t, parser.ErrUnescapedControlChar, "{ f(s: \"a\x1fb\") }")
 		f(t, nil, `{ f(s: "a\u0000b") }`)
 	}
 
@@ -249,8 +249,8 @@ func TestReadDocument(t *testing.T) {
 		f(t, parser.ErrUnexpectedToken, `1 query Q { f }`)
 		f(t, parser.ErrUnexpectedToken, `query Q("A" "B" $x: Int) { f }`)
 		// A description is still a string value and must be valid.
-		f(t, parser.ErrUnexpectedToken, `"\q" query Q { f }`)
-		f(t, parser.ErrUnexpectedToken, `query Q("\q" $x: Int) { f }`)
+		f(t, parser.ErrInvalidEscape, `"\q" query Q { f }`)
+		f(t, parser.ErrInvalidEscape, `query Q("\q" $x: Int) { f }`)
 		f(t, parser.ErrUnexpectedEOF, `"Description"`)
 		f(t, parser.ErrUnexpectedEOF, `query Q("A"`)
 	}
@@ -258,22 +258,22 @@ func TestReadDocument(t *testing.T) {
 	{ // Numeric literals (https://spec.graphql.org/September2025/#sec-Int-Value).
 		// A broken number is one invalid number and must not be split into
 		// several values.
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [01]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [-.1]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [0x123]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [123L]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [1e2foo]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [- foo]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: 007) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [-]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [1.]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [01]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [-.1]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [0x123]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [123L]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [1e2foo]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [- foo]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: 007) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [-]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [1.]) }")
 		f(t, parser.ErrUnexpectedToken, "{ f(a: .5) }")
-		f(t, parser.ErrUnexpectedToken, "query Q($x: Int = 01) { f }")
+		f(t, parser.ErrMalformedNumber, "query Q($x: Int = 01) { f }")
 
 		// The same rules apply wherever a value is read.
-		f(t, parser.ErrUnexpectedToken, "{ f(a: {x: 01}) }")
-		f(t, parser.ErrUnexpectedToken, "{ f @d(a: 1e2foo) }")
-		f(t, parser.ErrUnexpectedToken, "query Q($x: Int @d(a: -.1)) { f }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: {x: 01}) }")
+		f(t, parser.ErrMalformedNumber, "{ f @d(a: 1e2foo) }")
+		f(t, parser.ErrMalformedNumber, "query Q($x: Int @d(a: -.1)) { f }")
 
 		// Values that an Ignored token separates legally are still accepted.
 		f(t, nil, "{ f(a: [1 2]) }")
@@ -297,9 +297,9 @@ func TestReadDocument(t *testing.T) {
 		for name, seq := range badUTF8 {
 			t.Run(name, func(t *testing.T) {
 				// Reject it in a single-line string.
-				f(t, parser.ErrUnexpectedToken, `{ f(s: "`+seq+`") }`)
+				f(t, parser.ErrMalformedUTF8, `{ f(s: "`+seq+`") }`)
 				// Reject it in a block string.
-				f(t, parser.ErrUnexpectedToken, `{ f(s: """`+seq+`""") }`)
+				f(t, parser.ErrMalformedUTF8, `{ f(s: """`+seq+`""") }`)
 				// Reject it in a comment, whose CommentChar is a SourceCharacter
 				// too (https://spec.graphql.org/September2025/#CommentChar).
 				f(t, parser.ErrUnexpectedToken, "# "+seq+"\n{ x }")
@@ -678,20 +678,20 @@ func TestReadIntValue(t *testing.T) {
 	f(t, "", "", parser.ErrUnexpectedEOF, "")
 
 	// A NegativeSign must be followed by a Digit.
-	f(t, "", "-", parser.ErrUnexpectedToken, "-")
-	f(t, "", "- 1", parser.ErrUnexpectedToken, "- 1")
-	f(t, "", "-x", parser.ErrUnexpectedToken, "-x")
-	f(t, "", ".1", parser.ErrUnexpectedToken, ".1")
+	f(t, "", "-", parser.ErrMalformedNumber, "-")
+	f(t, "", "- 1", parser.ErrMalformedNumber, "- 1")
+	f(t, "", "-x", parser.ErrMalformedNumber, "-x")
+	f(t, "", ".1", parser.ErrMalformedNumber, ".1")
 
 	// No digit, '.' or NameStart may follow an IntValue. That also rules out
 	// leading zeroes and floats
 	// (https://spec.graphql.org/September2025/#IntValue).
-	f(t, "", "01", parser.ErrUnexpectedToken, "01")
-	f(t, "", "-01", parser.ErrUnexpectedToken, "-01")
-	f(t, "", "1.5", parser.ErrUnexpectedToken, "1.5")
-	f(t, "", "1e2", parser.ErrUnexpectedToken, "1e2")
-	f(t, "", "123L", parser.ErrUnexpectedToken, "123L")
-	f(t, "", "0x1", parser.ErrUnexpectedToken, "0x1")
+	f(t, "", "01", parser.ErrMalformedNumber, "01")
+	f(t, "", "-01", parser.ErrMalformedNumber, "-01")
+	f(t, "", "1.5", parser.ErrMalformedNumber, "1.5")
+	f(t, "", "1e2", parser.ErrMalformedNumber, "1e2")
+	f(t, "", "123L", parser.ErrMalformedNumber, "123L")
+	f(t, "", "0x1", parser.ErrMalformedNumber, "0x1")
 }
 
 func TestReadValue(t *testing.T) {
@@ -785,24 +785,24 @@ func TestReadValue(t *testing.T) {
 
 		// A number is either a single 0 or starts with 1-9, so a leading zero
 		// is illegal (https://spec.graphql.org/September2025/#IntegerPart).
-		fErr(t, parser.ErrUnexpectedToken, "00"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "01"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "0123"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "-01"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "00"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "01"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "0123"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "-01"+suffix)
 
 		// A NegativeSign must be followed by a Digit.
-		fErr(t, parser.ErrUnexpectedToken, "-"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "-.1"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "-foo"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "-")
+		fErr(t, parser.ErrMalformedNumber, "-"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "-.1"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "-foo"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "-")
 
 		// No digit, '.' or NameStart may follow an IntValue, so a broken number
 		// is one invalid number, not two valid tokens
 		// (https://spec.graphql.org/September2025/#IntValue).
-		fErr(t, parser.ErrUnexpectedToken, "0x123"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "123L"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1foo"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1_"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "0x123"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "123L"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1foo"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1_"+suffix)
 	}
 
 	{ // FloatValue (https://spec.graphql.org/September2025/#sec-Float-Value).
@@ -853,31 +853,31 @@ func TestReadValue(t *testing.T) {
 			"-10000000000000000000000000.0E+23"+suffix)
 
 		// The exponent needs at least one digit after e/E and the optional sign.
-		fErr(t, parser.ErrUnexpectedToken, "1e"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1E"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1e+"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1e-"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1.0e"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1.0E-"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1e"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1E"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1e+"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1e-"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1.0e"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1.0E-"+suffix)
 
 		// The same goes for a FloatValue
 		// (https://spec.graphql.org/September2025/#FloatValue).
-		fErr(t, parser.ErrUnexpectedToken, "1e2foo"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1.5x"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1.2.3"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1.5e3.4"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1e2_"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1e2foo"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1.5x"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1.2.3"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1.5e3.4"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "1e2_"+suffix)
 		// The IntegerPart of a float follows the same rules.
-		fErr(t, parser.ErrUnexpectedToken, "01.5"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "-01.5e2"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "01.5"+suffix)
+		fErr(t, parser.ErrMalformedNumber, "-01.5e2"+suffix)
 	}
 
 	{ // Single-line strings (https://spec.graphql.org/September2025/#sec-String-Value).
-		f(t, ``, parser.ValueTypeString, `uGGGG"`+suffix, parser.ErrUnexpectedToken,
+		f(t, ``, parser.ValueTypeString, `uGGGG"`+suffix, parser.ErrInvalidEscape,
 			`"\uGGGG"`+suffix)
 		f(t, "", parser.ValueTypeString, "", parser.ErrUnexpectedEOF, `"\"`)
 		f(t, "", parser.ValueTypeString, "", parser.ErrUnexpectedEOF, `"`)
-		f(t, "", parser.ValueTypeString, `\k"`+suffix, parser.ErrUnexpectedToken,
+		f(t, "", parser.ValueTypeString, `\k"`+suffix, parser.ErrInvalidEscape,
 			`"\k"`+suffix)
 
 		f(t, ``, parser.ValueTypeString, suffix, nil, `""`+suffix)
@@ -909,10 +909,10 @@ func TestReadValue(t *testing.T) {
 		// the Unicode scalar value range (<= 0xD7FF or 0xE000..0x10FFFF), so
 		// out-of-range and surrogate escapes are a parse error even though their
 		// syntax is valid (https://spec.graphql.org/September2025/#StringCharacter).
-		fErr(t, parser.ErrUnexpectedToken, `"\u{110000}"`+suffix)   // Above U+10FFFF.
-		fErr(t, parser.ErrUnexpectedToken, `"\u{FFFFFFFF}"`+suffix) // Far above U+10FFFF.
-		fErr(t, parser.ErrUnexpectedToken, `"\u{D800}"`+suffix)     // Leading surrogate.
-		fErr(t, parser.ErrUnexpectedToken, `"\u{DFFF}"`+suffix)     // Trailing surrogate.
+		fErr(t, parser.ErrInvalidEscape, `"\u{110000}"`+suffix)   // Above U+10FFFF.
+		fErr(t, parser.ErrInvalidEscape, `"\u{FFFFFFFF}"`+suffix) // Far above U+10FFFF.
+		fErr(t, parser.ErrInvalidEscape, `"\u{D800}"`+suffix)     // Leading surrogate.
+		fErr(t, parser.ErrInvalidEscape, `"\u{DFFF}"`+suffix)     // Trailing surrogate.
 
 		// The legacy pair production `\u XXXX \u XXXX` is the only way a surrogate
 		// may appear: a leading surrogate must be followed by a trailing one, and
@@ -922,34 +922,34 @@ func TestReadValue(t *testing.T) {
 		const pairPoo = `\uD83D` + `\uDCA9`
 		f(t, pairPoo, parser.ValueTypeString, suffix, nil, `"`+pairPoo+`"`+suffix)
 		// Lone leading.
-		fErr(t, parser.ErrUnexpectedToken, `"\uD800"`+suffix)
+		fErr(t, parser.ErrInvalidEscape, `"\uD800"`+suffix)
 		// Lone trailing.
-		fErr(t, parser.ErrUnexpectedToken, `"\uDC00"`+suffix)
+		fErr(t, parser.ErrInvalidEscape, `"\uDC00"`+suffix)
 		// Leading + leading.
-		fErr(t, parser.ErrUnexpectedToken, `"\uD800\uD800"`+suffix)
+		fErr(t, parser.ErrInvalidEscape, `"\uD800\uD800"`+suffix)
 		// Trailing + trailing.
-		fErr(t, parser.ErrUnexpectedToken, `"\uDC00\uDC00"`+suffix)
+		fErr(t, parser.ErrInvalidEscape, `"\uDC00\uDC00"`+suffix)
 		// Reversed pair.
-		fErr(t, parser.ErrUnexpectedToken, `"\uDC00\uD800"`+suffix)
+		fErr(t, parser.ErrInvalidEscape, `"\uDC00\uD800"`+suffix)
 		// Leading, not paired.
-		fErr(t, parser.ErrUnexpectedToken, `"\uD800a"`+suffix)
+		fErr(t, parser.ErrInvalidEscape, `"\uD800a"`+suffix)
 		// The second half of the pair is cut off or isn't a `\uXXXX` escape.
 		// Ends after the first half.
 		fErr(t, parser.ErrUnexpectedEOF, `"\uD800`)
 		// Ends after the backslash.
 		fErr(t, parser.ErrUnexpectedEOF, `"\uD800\`)
 		// No 'u'.
-		fErr(t, parser.ErrUnexpectedToken, `"\uD800\n"`+suffix)
+		fErr(t, parser.ErrInvalidEscape, `"\uD800\n"`+suffix)
 		// Too few hex digits.
 		fErr(t, parser.ErrUnexpectedEOF, `"\uD800\u12`)
 		// Not hex.
-		fErr(t, parser.ErrUnexpectedToken, `"\uD800\uZZZZ"`+suffix)
+		fErr(t, parser.ErrInvalidEscape, `"\uD800\uZZZZ"`+suffix)
 
 		// Malformed variable-width escapes must be rejected (September 2025).
-		fErr(t, parser.ErrUnexpectedToken, `"\u{}"`+suffix)     // No hex digits.
-		fErr(t, parser.ErrUnexpectedToken, `"\u{G}"`+suffix)    // Non-hex digit.
-		fErr(t, parser.ErrUnexpectedToken, `"\u{1F4A9"`+suffix) // Missing closing brace.
-		fErr(t, parser.ErrUnexpectedEOF, `"\u{1F4A9`)           // Unterminated at EOF.
+		fErr(t, parser.ErrInvalidEscape, `"\u{}"`+suffix)     // No hex digits.
+		fErr(t, parser.ErrInvalidEscape, `"\u{G}"`+suffix)    // Non-hex digit.
+		fErr(t, parser.ErrInvalidEscape, `"\u{1F4A9"`+suffix) // Missing closing brace.
+		fErr(t, parser.ErrUnexpectedEOF, `"\u{1F4A9`)         // Unterminated at EOF.
 
 		// Fixed-width escape truncated by EOF before four hex digits.
 		fErr(t, parser.ErrUnexpectedEOF, `"\uAB`)
@@ -1297,11 +1297,11 @@ func TestHPrefInStringValue(t *testing.T) {
 			}
 
 			err := parser.ReadDocument(internal.NoopHash{}, []byte(s))
-			if err != parser.ErrUnexpectedToken {
+			if err != parser.ErrUnescapedControlChar {
 				t.Errorf(
 					"hpref %v must not be valid within a string value: %q; "+
 						"expected: %v; received: %v",
-					hpref, s, parser.ErrUnexpectedToken, err,
+					hpref, s, parser.ErrUnescapedControlChar, err,
 				)
 			}
 		}
