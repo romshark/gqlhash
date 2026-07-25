@@ -293,13 +293,11 @@ func readVariableDefinitionsAfterParenthesis(
 
 		// Type.
 		s = SkipIgnorables(s)
-		var typeDec []byte
-		if typeDec, _, _, s, err = ReadType(s); err != nil {
+		_, _ = h.Write(HPrefType)
+		if _, _, _, s, err = readType(h, s); err != nil {
 			return s, err
 		}
 		s = SkipIgnorables(s)
-		_, _ = h.Write(HPrefType)
-		_, _ = h.Write([]byte(typeDec))
 
 		// Optional default value.
 		if err = ExpectNoEOF(s); err != nil {
@@ -330,6 +328,56 @@ func readVariableDefinitionsAfterParenthesis(
 	}
 
 	return s, err
+}
+
+// readType reads Type and writes its canonical form to h: the type name, the
+// list brackets and '!' without the Ignored tokens that may separate them, so
+// formatting within a type reference doesn't change the hash.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#Type
+func readType(h Hash, s []byte) (
+	typeDef []byte, nullable, array bool, suffix []byte, err error,
+) {
+	suffix, nullable = s, true
+	if err = ExpectNoEOF(suffix); err != nil {
+		return typeDef, nullable, array, suffix, err
+	}
+	switch {
+	case IsNameStart(suffix[0]):
+		// [ReadName] can't fail here: suffix is non-empty and begins with a
+		// NameStart, which are its only two error conditions.
+		var name []byte
+		name, suffix, _ = ReadName(suffix)
+		_, _ = h.Write(name)
+	case suffix[0] == '[':
+		array = true
+		_, _ = h.Write(hBracketLeft)
+		suffix = SkipIgnorables(suffix[1:])
+		// Recurse.
+		if _, _, _, suffix, err = readType(h, suffix); err != nil {
+			return typeDef, nullable, array, suffix, err
+		}
+		suffix = SkipIgnorables(suffix)
+		if err = ExpectNoEOF(suffix); err != nil {
+			return typeDef, nullable, array, suffix, err
+		}
+		if suffix[0] != ']' {
+			return typeDef, nullable, array, suffix, ErrUnexpectedToken
+		}
+		_, _ = h.Write(hBracketRight)
+		suffix = suffix[1:]
+	default:
+		return typeDef, nullable, array, suffix, ErrUnexpectedToken
+	}
+	{
+		s := SkipIgnorables(suffix)
+		if len(s) > 0 && s[0] == '!' {
+			nullable, suffix = false, s[1:]
+			_, _ = h.Write(hExclamation)
+		}
+	}
+	return s[:len(s)-len(suffix)], nullable, array, suffix, err
 }
 
 func readDirectives(h Hash, o Options, s []byte) (directives, suffix []byte, err error) {

@@ -71,6 +71,15 @@ var (
 // writing it doesn't allocate.
 var hLineFeed = []byte{'\n'}
 
+// The punctuators of a type reference. [readType] writes them instead of the
+// raw source slice, which would include the Ignored tokens between them.
+// Kept as package-level variables so writing them doesn't allocate.
+var (
+	hBracketLeft  = []byte{'['}
+	hBracketRight = []byte{']'}
+	hExclamation  = []byte{'!'}
+)
+
 // Options configures how a document is hashed.
 type Options struct {
 	// IgnoreInputs produces the same hash for two documents that differ only in
@@ -193,46 +202,13 @@ func ReadToken(s []byte, token string) (suffix []byte, err error) {
 	return s[len(token):], nil
 }
 
-// ReadType reads Type.
+// ReadType reads Type. typeDef is the raw source text of the type reference,
+// including any Ignored tokens within it.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#Type
 func ReadType(s []byte) (typeDef []byte, nullable, array bool, suffix []byte, err error) {
-	suffix, nullable = s, true
-	if err = ExpectNoEOF(suffix); err != nil {
-		return typeDef, nullable, array, suffix, err
-	}
-	switch {
-	case IsNameStart(suffix[0]):
-		// [ReadName] can't fail here: suffix is non-empty and begins with a
-		// NameStart, which are its only two error conditions. The returned name
-		// is recomputed from suffix below, so only the advanced suffix matters.
-		_, suffix, _ = ReadName(suffix)
-	case suffix[0] == '[':
-		array = true
-		suffix = SkipIgnorables(suffix[1:])
-		// Recurse.
-		if _, _, _, suffix, err = ReadType(suffix); err != nil {
-			return typeDef, nullable, array, suffix, err
-		}
-		suffix = SkipIgnorables(suffix)
-		if err = ExpectNoEOF(suffix); err != nil {
-			return typeDef, nullable, array, suffix, err
-		}
-		if suffix[0] != ']' {
-			return typeDef, nullable, array, suffix, ErrUnexpectedToken
-		}
-		suffix = suffix[1:]
-	default:
-		return typeDef, nullable, array, suffix, ErrUnexpectedToken
-	}
-	{
-		s := SkipIgnorables(suffix)
-		if len(s) > 0 && s[0] == '!' {
-			nullable, suffix = false, s[1:]
-		}
-	}
-	return s[:len(s)-len(suffix)], nullable, array, suffix, err
+	return readType(noopHash{}, s)
 }
 
 // ValueType represents the type of a value

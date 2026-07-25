@@ -436,6 +436,82 @@ func TestReadType(t *testing.T) {
 		f(t, "[_Type_42]", true, true, suffix, nil, "[_Type_42]"+suffix)
 		f(t, "[_Type_42]!", false, true, suffix, nil, "[_Type_42]!"+suffix)
 	}
+
+	{ // Ignored tokens may appear anywhere within a type reference. They remain
+		// part of the raw slice, but must not affect nullable, array or suffix
+		// (https://spec.graphql.org/September2025/#sec-Language.Source-Text.Ignored-Tokens).
+		const suffix = " suffix"
+		f(t, "[ Int ]", true, true, suffix, nil, "[ Int ]"+suffix)
+		f(t, "Int !", false, false, suffix, nil, "Int !"+suffix)
+		f(t, "[Int] !", false, true, suffix, nil, "[Int] !"+suffix)
+		f(t, "[ Int ! ] !", false, true, suffix, nil, "[ Int ! ] !"+suffix)
+		f(t, "[\n\tInt\n]", true, true, suffix, nil, "[\n\tInt\n]"+suffix)
+		f(t, "[Int,]", true, true, suffix, nil, "[Int,]"+suffix)
+		f(t, "[# comment\nInt]", true, true, suffix, nil, "[# comment\nInt]"+suffix)
+		f(t, "["+bom+"Int"+bom+"]", true, true, suffix, nil,
+			"["+bom+"Int"+bom+"]"+suffix)
+	}
+}
+
+// TestReadTypeFormatting makes sure Ignored tokens inside a variable type
+// reference don't change the hash while structural differences still do
+// (https://spec.graphql.org/September2025/#Type).
+func TestReadTypeFormatting(t *testing.T) {
+	o := parser.Options{}
+	const canonical = `query Q($x: [Int!]!) { f }`
+	canonicalHash := hash(t, o, canonical)
+
+	for _, s := range []string{
+		`query Q($x: [ Int ! ] !) { f }`,
+		`query Q($x:[Int!]!){f}`,
+		"query Q($x: [\n\tInt!\n]!) { f }",
+		"query Q($x: [\rInt!\r]!) { f }",
+		`query Q($x: [Int!,]!) { f }`,
+		"query Q($x: [ # comment\n\tInt ! # comment\n\t] !) { f }",
+		`query Q($x: ` + bom + `[` + bom + `Int` + bom +
+			`!` + bom + `]` + bom + `!` + bom + `) { f }`,
+	} {
+		if hash(t, o, s) != canonicalHash {
+			t.Errorf("formatting must not change the hash: %q", s)
+		}
+	}
+
+	// Nested list types are normalized at every level of the recursion.
+	if hash(t, o, `query Q($x: [[Int!]!]!) { f }`) !=
+		hash(t, o, "query Q($x: [ [\tInt ! ] ! # comment\n]  !) { f }") {
+		t.Error("formatting must not change the hash of a nested list type")
+	}
+
+	// [parser.Options.IgnoreInputs] keeps the variable signature, so the type
+	// is still hashed and must still be normalized. Under
+	// [parser.Options.IgnoreVariables] the whole definition is dropped, which
+	// makes even structurally different types equal.
+	ignoreInputs := parser.Options{IgnoreInputs: true}
+	if hash(t, ignoreInputs, canonical) !=
+		hash(t, ignoreInputs, `query Q($x: [ Int ! ] !) { f }`) {
+		t.Error("IgnoreInputs must normalize the type as well")
+	}
+	if hash(t, ignoreInputs, canonical) == hash(t, ignoreInputs, `query Q($x: Int) { f }`) {
+		t.Error("IgnoreInputs must keep distinguishing types")
+	}
+	ignoreVars := parser.Options{IgnoreVariables: true}
+	if hash(t, ignoreVars, canonical) != hash(t, ignoreVars, `query Q($x: Int) { f }`) {
+		t.Error("IgnoreVariables must drop the type entirely")
+	}
+
+	// Structurally different types must keep producing different hashes.
+	types := []string{
+		"Int", "Int!", "[Int]", "[Int!]", "[Int]!", "[Int!]!", "[[Int]]", "Float",
+	}
+	for i, a := range types {
+		for _, b := range types[i+1:] {
+			ha := hash(t, o, `query Q($x: `+a+`) { f }`)
+			hb := hash(t, o, `query Q($x: `+b+`) { f }`)
+			if ha == hb {
+				t.Errorf("types %q and %q must produce different hashes", a, b)
+			}
+		}
+	}
 }
 
 func TestReadValue(t *testing.T) {

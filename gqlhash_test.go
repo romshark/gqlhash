@@ -16,6 +16,10 @@ import (
 	"github.com/vektah/gqlparser/v2/validator/rules"
 )
 
+// bom is the UTF-8 encoding of U+FEFF, which is Ignored
+// (https://spec.graphql.org/September2025/#UnicodeBOM).
+const bom = "\xef\xbb\xbf"
+
 // MockHash is a mock hasher that's recording all writes for testing purposes.
 type MockHash struct{ Records []string }
 
@@ -164,6 +168,28 @@ var hashTests = []HashTest{
 			parser.HPrefSelectionSet,
 			parser.HPrefField, "id",
 			parser.HPrefSelectionSetEnd,
+			parser.HPrefSelectionSetEnd,
+		),
+	},
+	{
+		// Only the canonical type is written, so the Ignored tokens that may
+		// appear between the tokens of a type reference don't change the hash
+		// (https://spec.graphql.org/September2025/#Type).
+		Name: "variable type formatting",
+		Inputs: []string{
+			`query Q($x:[Int!]!){f}`,
+			`query Q ( $x : [ Int ! ] ! ) { f }`,
+			"query Q($x: [\n\t# comment\n\tInt !,\n] !) { f }",
+			`query Q($x: ` + bom + `[` + bom + `Int` + bom +
+				`!` + bom + `]` + bom + `!` + bom + `) { f }`,
+		},
+		ExpectRecords: MakeRecords(
+			parser.HPrefQuery,
+			"Q",
+			parser.HPrefVariableDefinition, "x",
+			parser.HPrefType, "[", "Int", "!", "]", "!",
+			parser.HPrefSelectionSet,
+			parser.HPrefField, "f",
 			parser.HPrefSelectionSetEnd,
 		),
 	},
