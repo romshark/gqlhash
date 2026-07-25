@@ -184,6 +184,34 @@ func TestReadDocument(t *testing.T) {
 		f(t, nil, "query"+bom+"Foo"+bom+"{ x }")
 	}
 
+	{ // Descriptions (https://spec.graphql.org/September2025/#sec-Descriptions).
+		// spec of September 2025 allows a description on an operation,
+		// a fragment and a variable definition.
+		f(t, nil, `"Operation description" query Q { f }`)
+		f(t, nil, "\"Operation description\"\nquery Q { f }")
+		f(t, nil, `"""Block description""" query Q { f }`)
+		f(t, nil, `"Anonymous operation" query { f }`)
+		f(t, nil, `"Mutation" mutation M { f }`)
+		f(t, nil, `"Subscription" subscription S { f }`)
+		f(t, nil, `"Fragment description" fragment F on T { f } query Q { ...F }`)
+		f(t, nil, "query Q(\n\t\"Variable description\"\n\t$x: Int\n) { f }")
+		f(t, nil, `query Q("A" $x: Int, "B" $y: Int = 1 @d) { f }`)
+		f(t, nil, `query Q("""Block""" $x: Int) { f }`)
+		f(t, nil, `"A" query Q { f } "B" mutation M { g }`)
+
+		// Query shorthand takes no description.
+		f(t, parser.ErrUnexpectedToken, `"Description" { f }`)
+		// Only one description, and only a string.
+		f(t, parser.ErrUnexpectedToken, `"A" "B" query Q { f }`)
+		f(t, parser.ErrUnexpectedToken, `1 query Q { f }`)
+		f(t, parser.ErrUnexpectedToken, `query Q("A" "B" $x: Int) { f }`)
+		// A description is still a string value and must be valid.
+		f(t, parser.ErrUnexpectedToken, `"\q" query Q { f }`)
+		f(t, parser.ErrUnexpectedToken, `query Q("\q" $x: Int) { f }`)
+		f(t, parser.ErrUnexpectedEOF, `"Description"`)
+		f(t, parser.ErrUnexpectedEOF, `query Q("A"`)
+	}
+
 	{ // Numeric literals (https://spec.graphql.org/September2025/#sec-Int-Value).
 		// A broken number is one invalid number and must not be split into
 		// several values.

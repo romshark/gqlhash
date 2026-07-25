@@ -38,10 +38,24 @@ func readDefinition(h Hash, o Options, s []byte) (suffix []byte, err error) {
 	if err = ExpectNoEOF(s); err != nil {
 		return s, err
 	}
+
+	var described bool
+	if described, s, err = readDescription(o, s); err != nil {
+		return s, err
+	}
+	if err = ExpectNoEOF(s); err != nil {
+		return s, err
+	}
+
 	switch {
 	case s[0] == '{':
 		// Anonymous operation.
 		// (https://spec.graphql.org/September2025/#sec-Anonymous-Operation-Definitions)
+		if described {
+			// Query shorthand is no OperationDefinition with an OperationType,
+			// which is the only form that takes a description.
+			return s, ErrUnexpectedToken
+		}
 		_, _ = h.Write(HPrefQuery)
 		return readSelectionSet(h, o, s)
 
@@ -272,6 +286,22 @@ func readSelectionSet(h Hash, o Options, s []byte) (suffix []byte, err error) {
 	return s, nil
 }
 
+// readDescription reads the optional Description of a definition and skips the
+// Ignored tokens after it. A description is documentation, it must not affect
+// execution, so it's parsed but never hashed.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#sec-Descriptions
+func readDescription(o Options, s []byte) (found bool, suffix []byte, err error) {
+	if len(s) < 1 || s[0] != '"' {
+		return false, s, nil
+	}
+	if _, _, suffix, err = readValue(noopHash{}, o, s); err != nil {
+		return true, suffix, err
+	}
+	return true, SkipIgnorables(suffix), nil
+}
+
 func readVariableDefinitionsAfterParenthesis(
 	h Hash, o Options, s []byte) (suffix []byte, err error,
 ) {
@@ -280,6 +310,12 @@ func readVariableDefinitionsAfterParenthesis(
 		h = noopHash{}
 	}
 	for {
+		if _, s, err = readDescription(o, s); err != nil {
+			return s, err
+		}
+		if err = ExpectNoEOF(s); err != nil {
+			return s, err
+		}
 		if s[0] != '$' {
 			return s, ErrUnexpectedToken
 		}

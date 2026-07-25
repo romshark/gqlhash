@@ -434,6 +434,18 @@ func TestCompare(t *testing.T) {
 	f(t, gqlhash.ErrQueriesDiffer,
 		`{f(a:"\u0011\u0007x\u0012")}`, `{f(a:""){x}}`)
 
+	// A description is documentation and isn't hashed, so documents differing
+	// only in their descriptions are equal
+	// (https://spec.graphql.org/September2025/#sec-Descriptions).
+	f(t, nil, `"A" query Q { f }`, `query Q { f }`)
+	f(t, nil, `"A" query Q { f }`, `"B" query Q { f }`)
+	f(t, nil, `"""A""" query Q { f }`, `query Q { f }`)
+	f(t, nil,
+		`"A" fragment F on T { f } query Q { ...F }`,
+		`fragment F on T { f } query Q { ...F }`)
+	f(t, nil, `query Q("A" $x: Int) { f }`, `query Q($x: Int) { f }`)
+	f(t, nil, `query Q("A" $x: Int) { f }`, `query Q("B" $x: Int) { f }`)
+
 	// A '$' not followed by a Name leaves the variable definition list unclosed,
 	// so the document is invalid and must be rejected rather than hashed. It
 	// otherwise collides with the valid operation that declares no variables.

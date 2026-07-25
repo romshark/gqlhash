@@ -170,6 +170,12 @@ var TestErrUnexpectedToken = []string{
 	"query Foo {...@dir(x:-1.2e?",
 	"query Foo {...@dir(x:-1.2e-?",
 	"query Foo {...@dir(x:-1.2e-4?",
+	// A description is only allowed on an operation with an OperationType, on a
+	// fragment and on a variable definition, and only one per definition
+	// (https://spec.graphql.org/September2025/#sec-Descriptions).
+	`"A" { f }`,
+	`"A" "B" query Q { f }`,
+	`query Q("A" "B" $x: Int) { f }`,
 	// Broken numbers. Each of these is one invalid number, not two values
 	// (https://spec.graphql.org/September2025/#sec-Int-Value).
 	"{f(a:01)}",

@@ -158,8 +158,9 @@ func ReadDefinition(h Hash, s []byte) (suffix []byte, err error) {
 	return readDefinition(h, Options{}, s)
 }
 
-// ReadOperationDefinition reads OperationDefinition
-// but not the SelectionSet-only version of it.
+// ReadOperationDefinition reads OperationDefinition but not the
+// SelectionSet-only version of it. The optional Description is read by
+// [ReadDefinition], which needs it to tell the definitions apart.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#sec-Language.Operations
