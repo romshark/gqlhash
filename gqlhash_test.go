@@ -391,8 +391,10 @@ func TestCompare(t *testing.T) {
 	// (https://spec.graphql.org/September2025/#SourceCharacter).
 	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"`+"a\rb"+`")}`, `{f(s:"ab")}`)
 	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"`+"a\nb"+`")}`, `{f(s:"ab")}`)
-	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"""`+"a\x00b"+`""")}`, `{f(s:"""ab""")}`)
-	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"""`+"a\x07b"+`""")}`, `{f(s:"""ab""")}`)
+	// A block string may hold a control scalar value, so these parse and differ
+	// (https://spec.graphql.org/September2025/#BlockStringCharacter).
+	f(t, gqlhash.ErrQueriesDiffer, `{f(s:"""`+"a\x00b"+`""")}`, `{f(s:"""ab""")}`)
+	f(t, gqlhash.ErrQueriesDiffer, `{f(s:"""`+"a\x07b"+`""")}`, `{f(s:"""ab""")}`)
 
 	// A string is hashed by its value, not by how it's written
 	// (https://spec.graphql.org/September2025/#sec-String-Value).
@@ -430,6 +432,10 @@ func TestCompare(t *testing.T) {
 	// [parser.HPrefField], so the string below would otherwise collide with an
 	// empty string followed by the field x.
 	f(t, gqlhash.ErrQueriesDiffer, `{f(a:"\u0007x")}`, `{f(a:"") x}`)
+	// A block string holds those bytes raw, which must not collide either.
+	f(t, gqlhash.ErrQueriesDiffer, `{f(a:"""`+"\x07x"+`""")}`, `{f(a:"""""") x}`)
+	f(t, gqlhash.ErrQueriesDiffer,
+		`{f(a:"""`+"\x11\x07x\x12"+`""")}`, `{f(a:""""""){x}}`)
 	// 0x11 opens and 0x12 closes a selection set.
 	f(t, gqlhash.ErrQueriesDiffer,
 		`{f(a:"\u0011\u0007x\u0012")}`, `{f(a:""){x}}`)

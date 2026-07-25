@@ -504,10 +504,8 @@ func ReadStringBlockAfterQuotes(s []byte) (
 		case ' ', '\t':
 			// Ignore WhiteSpace bytes.
 		default:
-			if s[i] < 0x20 {
-				// Illegal control character in string value.
-				return nil, prefixLen, suffix, ErrUnexpectedToken
-			}
+			// A BlockStringCharacter is any SourceCharacter, control ones included.
+			// The escaped value keeps them off the hash prefixes.
 			size := sourceCharacterLen(s[i:])
 			if size == 0 {
 				// Malformed UTF-8, so not a SourceCharacter.

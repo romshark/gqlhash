@@ -184,6 +184,21 @@ func TestReadDocument(t *testing.T) {
 		f(t, nil, "query"+bom+"Foo"+bom+"{ x }")
 	}
 
+	{ // Control characters (https://spec.graphql.org/September2025/#SourceCharacter).
+		// A BlockStringCharacter is any SourceCharacter, so a block string may
+		// hold control scalar values.
+		f(t, nil, "{ f(s: \"\"\"a\x00b\"\"\") }")
+		f(t, nil, "{ f(s: \"\"\"a\x07b\"\"\") }")
+		f(t, nil, "{ f(s: \"\"\"\x01\x0b\x0c\x1f\"\"\") }")
+		f(t, nil, "{ f(s: \"\"\"a\x00b\nc\x1fd\"\"\") }")
+
+		// A normal string keeps rejecting them, they must be escaped there.
+		f(t, parser.ErrUnexpectedToken, "{ f(s: \"a\x00b\") }")
+		f(t, parser.ErrUnexpectedToken, "{ f(s: \"a\x07b\") }")
+		f(t, parser.ErrUnexpectedToken, "{ f(s: \"a\x1fb\") }")
+		f(t, nil, `{ f(s: "a\u0000b") }`)
+	}
+
 	{ // Descriptions (https://spec.graphql.org/September2025/#sec-Descriptions).
 		// spec of September 2025 allows a description on an operation,
 		// a fragment and a variable definition.
@@ -1272,12 +1287,13 @@ func TestHPrefInStringValue(t *testing.T) {
 				)
 			}
 
-			err := parser.ReadDocument(internal.NoopHash{}, []byte(s))
-			if err != parser.ErrUnexpectedToken {
+			// A block string may hold the byte. What keeps it from imitating a
+			// record prefix is the escaping of the value, see TestCompare.
+			if err := parser.ReadDocument(internal.NoopHash{}, []byte(s)); err != nil {
 				t.Errorf(
-					"hpref %v must not be valid within a block string value: %q; "+
-						"expected: %v; received: %v",
-					hpref, s, parser.ErrUnexpectedToken, err,
+					"hpref %v must be valid within a block string value: %q; "+
+						"received: %v",
+					hpref, s, err,
 				)
 			}
 		}
