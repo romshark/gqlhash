@@ -20,6 +20,41 @@ var (
 	//   - https://spec.graphql.org/September2025/#VariableDefinition
 	ErrUnexpectedVariable = fmt.Errorf("%w: variable in constant value",
 		ErrUnexpectedToken)
+
+	// ErrInvalidEscape is a broken escape sequence in a string value: an
+	// unknown escape character, a bad hexadecimal digit, or a Unicode escape
+	// that is no scalar value.
+	// Reference:
+	//
+	//   - https://spec.graphql.org/September2025/#EscapedCharacter
+	//   - https://spec.graphql.org/September2025/#EscapedUnicode
+	ErrInvalidEscape = fmt.Errorf("%w: invalid escape sequence",
+		ErrUnexpectedToken)
+
+	// ErrMalformedNumber is an IntValue or FloatValue that breaks a lexical
+	// rule: a leading zero, a '-' or a fraction or exponent without digits, or
+	// a digit, '.' or NameStart right after the number.
+	// Reference:
+	//
+	//   - https://spec.graphql.org/September2025/#IntValue
+	//   - https://spec.graphql.org/September2025/#FloatValue
+	ErrMalformedNumber = fmt.Errorf("%w: malformed number", ErrUnexpectedToken)
+
+	// ErrMalformedUTF8 is a byte sequence that is no UTF-8 encoded Unicode
+	// scalar value and hence no SourceCharacter.
+	// Reference:
+	//
+	//   - https://spec.graphql.org/September2025/#SourceCharacter
+	ErrMalformedUTF8 = fmt.Errorf("%w: malformed UTF-8", ErrUnexpectedToken)
+
+	// ErrUnescapedControlChar is a control character written as it is in a
+	// single-line string, where it needs an escape sequence. A block string
+	// takes it as it is.
+	// Reference:
+	//
+	//   - https://spec.graphql.org/September2025/#StringCharacter
+	ErrUnescapedControlChar = fmt.Errorf("%w: unescaped control character",
+		ErrUnexpectedToken)
 )
 
 // bom is the UTF-8 encoding of UnicodeBOM (U+FEFF). bomFirstByte is kept
@@ -294,7 +329,7 @@ func readIntegerPart(s []byte) (value []byte, suffix []byte, err error) {
 		suffix = suffix[1:]
 	}
 	if len(suffix) < 1 || !IsDigit(suffix[0]) {
-		return value, s, ErrUnexpectedToken
+		return value, s, ErrMalformedNumber
 	}
 	if suffix[0] == '0' {
 		// digit after the zero would be a leading zero, which [expectNumberEnd] rejects.
@@ -315,7 +350,7 @@ func readIntegerPart(s []byte) (value []byte, suffix []byte, err error) {
 //   - https://spec.graphql.org/September2025/#FloatValue
 func expectNumberEnd(s []byte) error {
 	if len(s) > 0 && (IsDigit(s[0]) || s[0] == '.' || IsNameStart(s[0])) {
-		return ErrUnexpectedToken
+		return ErrMalformedNumber
 	}
 	return nil
 }
@@ -363,11 +398,11 @@ func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error
 					}
 					if j == i+3 || s[j] != '}' {
 						// No hex digits, or an unexpected non-hex character.
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
+						return s[:i+1], s[i+1:], ErrInvalidEscape
 					}
 					if outOfRange || !isUnicodeScalarValue(value) {
 						// Above U+10FFFF, or a surrogate code point.
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
+						return s[:i+1], s[i+1:], ErrInvalidEscape
 					}
 					i = j + 1
 					continue
@@ -380,7 +415,7 @@ func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error
 					!IsHexByte(s[i+3]) ||
 					!IsHexByte(s[i+4]) ||
 					!IsHexByte(s[i+5]) {
-					return s[:i+1], s[i+1:], ErrUnexpectedToken
+					return s[:i+1], s[i+1:], ErrInvalidEscape
 				}
 				leading := hexByteValue(s[i+2])<<12 | hexByteValue(s[i+3])<<8 |
 					hexByteValue(s[i+4])<<4 | hexByteValue(s[i+5])
@@ -392,13 +427,13 @@ func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error
 						return s[:i+1], s[i+1:], ErrUnexpectedEOF
 					}
 					if s[i+6] != '\\' {
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
+						return s[:i+1], s[i+1:], ErrInvalidEscape
 					}
 					if i+7 >= len(s) {
 						return s[:i+1], s[i+1:], ErrUnexpectedEOF
 					}
 					if s[i+7] != 'u' {
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
+						return s[:i+1], s[i+1:], ErrInvalidEscape
 					}
 					if i+11 >= len(s) {
 						return s[:i+1], s[i+1:], ErrUnexpectedEOF
@@ -407,33 +442,33 @@ func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error
 						!IsHexByte(s[i+9]) ||
 						!IsHexByte(s[i+10]) ||
 						!IsHexByte(s[i+11]) {
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
+						return s[:i+1], s[i+1:], ErrInvalidEscape
 					}
 					trailing := hexByteValue(s[i+8])<<12 | hexByteValue(s[i+9])<<8 |
 						hexByteValue(s[i+10])<<4 | hexByteValue(s[i+11])
 					if !isTrailingSurrogate(trailing) {
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
+						return s[:i+1], s[i+1:], ErrInvalidEscape
 					}
 					i += 12
 					continue
 				}
 				if !isUnicodeScalarValue(leading) {
 					// A Trailing Surrogate without a preceding Leading Surrogate.
-					return s[:i+1], s[i+1:], ErrUnexpectedToken
+					return s[:i+1], s[i+1:], ErrInvalidEscape
 				}
 				i += 5
 			default:
-				return s, s[i:], ErrUnexpectedToken
+				return s, s[i:], ErrInvalidEscape
 			}
 		default:
 			if s[i] < 0x20 {
-				// Illegal control character in string value.
-				return s, suffix, ErrUnexpectedToken
+				// A control character needs an escape sequence here.
+				return s, suffix, ErrUnescapedControlChar
 			}
 			size := sourceCharacterLen(s[i:])
 			if size == 0 {
 				// Malformed UTF-8, so not a SourceCharacter.
-				return s, suffix, ErrUnexpectedToken
+				return s, suffix, ErrMalformedUTF8
 			}
 			i += size
 		}
@@ -519,7 +554,7 @@ func ReadStringBlockAfterQuotes(s []byte) (
 			size := sourceCharacterLen(s[i:])
 			if size == 0 {
 				// Malformed UTF-8, so not a SourceCharacter.
-				return nil, prefixLen, suffix, ErrUnexpectedToken
+				return nil, prefixLen, suffix, ErrMalformedUTF8
 			}
 			// Don't ignore non-WhiteSpace bytes.
 			setNWSNL(i)
@@ -546,7 +581,7 @@ func ReadFloatAfterInteger(s []byte) (value []byte, suffix []byte, err error) {
 		}
 		if len(before) == len(suffix) {
 			// No digits after dot
-			return nil, suffix, ErrUnexpectedToken
+			return nil, suffix, ErrMalformedNumber
 		}
 	}
 	if len(suffix) > 0 && (suffix[0] == 'e' || suffix[0] == 'E') {
@@ -561,7 +596,7 @@ func ReadFloatAfterInteger(s []byte) (value []byte, suffix []byte, err error) {
 		}
 		if len(before) == len(suffix) {
 			// No digits after the exponent indicator.
-			return nil, suffix, ErrUnexpectedToken
+			return nil, suffix, ErrMalformedNumber
 		}
 	}
 	if err = expectNumberEnd(suffix); err != nil {
