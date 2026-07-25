@@ -48,7 +48,7 @@ func BenchmarkHashFunctions(b *testing.B) {
 			b.ReportAllocs()
 
 			for b.Loop() {
-				buf, err = gqlhash.AppendQueryHash(buf[:0], hasher, query)
+				buf, err = gqlhash.AppendQueryHash(buf[:0], hasher, gqlhash.Options{}, query)
 				if err != nil {
 					b.Fatal(err)
 				}

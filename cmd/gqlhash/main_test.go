@@ -104,9 +104,12 @@ func TestRun(t *testing.T) {
 	f(t, 1, stderr("no input\n"), nil,
 		args(), "")
 
-	// GraphQL Syntax error
-	f(t, 1, stderr("syntax error: unexpected EOF\n"), nil,
+	// GraphQL Syntax error. It points at where the document stopped.
+	f(t, 1, stderr("syntax error: unexpected EOF (line 1, column 2)\n"), nil,
 		args(), "{")
+	f(t, 1, stderr("syntax error: unexpected token: malformed number"+
+		" (line 2, column 9)\n"), nil,
+		args(), "query Q {\n  f(a: 01)\n}")
 
 	// File input
 	tempDir := t.TempDir()
