@@ -842,6 +842,11 @@ func TestTrimEmptyLinesSuffix(t *testing.T) {
 	f(t, "ツ ж  ", "ツ ж  \n  ")
 	f(t, "ツ ж\t \t", "ツ ж\t \t\n  ")
 	f(t, "ツ ж\t \t", "ツ ж\t \t\n  \n   \n\t\n")
+
+	// GraphQL Whitespace includes only space and horizontal tab. A non-breaking
+	// space (U+00A0) is content, so it must not be treated as an empty line.
+	f(t, "\u00a0", "\u00a0")
+	f(t, "foo\n\u00a0", "foo\n\u00a0")
 }
 
 // TestHPrefInStringValue makes sure none of the parser.HPref separators

@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"bytes"
 	"errors"
 	"hash"
 	"iter"
@@ -791,12 +790,12 @@ func TrimEmptyLinesSuffix(s []byte) []byte {
 		}
 		if termEnd < 0 {
 			// Only one line left.
-			if len(bytes.TrimSpace(s[:e])) == 0 {
+			if containsOnlyWhiteSpace(s[:e]) {
 				return s[:0]
 			}
 			return s[:e]
 		}
-		if len(bytes.TrimSpace(s[termEnd+1:e])) != 0 {
+		if !containsOnlyWhiteSpace(s[termEnd+1 : e]) {
 			return s[:e] // Line is not empty, stop trimming.
 		}
 		if s[termEnd] == '\n' && termEnd > 0 && s[termEnd-1] == '\r' {
@@ -804,4 +803,13 @@ func TrimEmptyLinesSuffix(s []byte) []byte {
 		}
 		e = termEnd // Remove empty line.
 	}
+}
+
+func containsOnlyWhiteSpace(s []byte) bool {
+	for _, b := range s {
+		if !IsWhiteSpace(b) {
+			return false
+		}
+	}
+	return true
 }
