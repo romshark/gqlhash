@@ -394,6 +394,46 @@ func TestCompare(t *testing.T) {
 	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"""`+"a\x00b"+`""")}`, `{f(s:"""ab""")}`)
 	f(t, gqlhash.ErrUnexpectedToken, `{f(s:"""`+"a\x07b"+`""")}`, `{f(s:"""ab""")}`)
 
+	// A string is hashed by its value, not by how it's written
+	// (https://spec.graphql.org/September2025/#sec-String-Value).
+
+	// Escape sequences count in a normal string but not in a block string, so
+	// a line feed and the two characters `\` and `n` are different values.
+	f(t, gqlhash.ErrQueriesDiffer, `{f(s:"\n")}`, `{f(s:"""\n""")}`)
+	f(t, gqlhash.ErrQueriesDiffer, `{f(s:"\t")}`, `{f(s:"""\t""")}`)
+	f(t, nil, `{f(s:"\u0041")}`, `{f(s:"""A""")}`)
+
+	// Different spellings of the same normal string are equal.
+	f(t, nil, `{f(s:"a")}`, `{f(s:"\u0061")}`)
+	f(t, nil, `{f(s:"ab")}`, `{f(s:"\u0061\u0062")}`)
+	f(t, nil, `{f(s:"a/b")}`, `{f(s:"a\/b")}`)
+	f(t, nil, `{f(s:"💩")}`, `{f(s:"\u{1F4A9}")}`)
+	// A surrogate pair spells out one code point, not two characters.
+	f(t, nil, `{f(s:"💩")}`, `{f(s:"\uD83D\uDCA9")}`)
+	f(t, nil, `{f(s:"\u{1F4A9}")}`, `{f(s:"\uD83D\uDCA9")}`)
+	// An escape sequence isn't the character it's spelled with.
+	f(t, gqlhash.ErrQueriesDiffer, `{f(s:"\b")}`, `{f(s:"b")}`)
+	f(t, gqlhash.ErrQueriesDiffer, `{f(s:"\f")}`, `{f(s:"f")}`)
+	f(t, gqlhash.ErrQueriesDiffer, `{f(s:"\r")}`, `{f(s:"\n")}`)
+
+	// A block string evaluates `\"""` to `"""` and leaves everything else as is.
+	f(t, nil, `{f(s:"a\"\"\"b")}`, `{f(s:"""a\"""b""")}`)
+	f(t, nil, `{f(s:"a\\b")}`, `{f(s:"""a\b""")}`)
+	f(t, nil, `{f(s:"a\\nb")}`, `{f(s:"""a\nb""")}`)
+
+	// A normal and a block string holding the same value are equal.
+	f(t, nil, `{f(s:"a\nb")}`, `{f(s:"""a`+"\n"+`b""")}`)
+	f(t, nil, `{f(s:"a\"b")}`, `{f(s:"""a"b""")}`)
+	f(t, nil, `{f(s:"\tx")}`, `{f(s:"""`+"\tx"+`""")}`)
+
+	// An escaped byte must not be able to imitate a hash prefix: 0x07 is
+	// [parser.HPrefField], so the string below would otherwise collide with an
+	// empty string followed by the field x.
+	f(t, gqlhash.ErrQueriesDiffer, `{f(a:"\u0007x")}`, `{f(a:"") x}`)
+	// 0x11 opens and 0x12 closes a selection set.
+	f(t, gqlhash.ErrQueriesDiffer,
+		`{f(a:"\u0011\u0007x\u0012")}`, `{f(a:""){x}}`)
+
 	// A '$' not followed by a Name leaves the variable definition list unclosed,
 	// so the document is invalid and must be rejected rather than hashed. It
 	// otherwise collides with the valid operation that declares no variables.

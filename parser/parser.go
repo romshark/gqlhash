@@ -67,13 +67,24 @@ var (
 	HPrefValueVariable         = []byte{0x1f}
 )
 
-// hLineFeed joins block string lines. Kept as a package-level variable so
-// writing it doesn't allocate.
-var hLineFeed = []byte{'\n'}
+// hLineFeed joins block string lines, hTripleQuote is what a block string's
+// `\"""` stands for. Package-level so writing them doesn't allocate.
+var (
+	hLineFeed    = []byte{'\n'}
+	hTripleQuote = []byte(`"""`)
+)
+
+// allBytes lets a single byte be written without allocating: allBytes[b : b+1].
+var allBytes = func() (a [256]byte) {
+	for i := range a {
+		a[i] = byte(i)
+	}
+	return a
+}()
 
 // The punctuators of a type reference. [readType] writes them instead of the
-// raw source slice, which would include the Ignored tokens between them.
-// Kept as package-level variables so writing them doesn't allocate.
+// raw source, which would include the Ignored tokens between them.
+// Package-level so writing them doesn't allocate.
 var (
 	hBracketLeft  = []byte{'['}
 	hBracketRight = []byte{']'}
@@ -256,10 +267,10 @@ func ReadIntValue(s []byte) (value []byte, suffix []byte, err error) {
 	return value, suffix, nil
 }
 
-// readIntegerPart reads IntegerPart, the part IntValue and FloatValue share.
-// A '-' must be followed by a digit, so a '-' alone is an unexpected token, just like
-// a fraction or exponent without digits. Leading zeroes aren't rejected here but by
-// [expectNumberEnd], which the caller calls once it knows where the number ends.
+// readIntegerPart reads the IntegerPart that IntValue and FloatValue share.
+// A '-' needs a digit after it, just like a fraction or exponent does. Leading
+// zeroes are left to [expectNumberEnd], which the caller calls once it knows
+// where the number ends.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#IntegerPart
@@ -269,15 +280,13 @@ func readIntegerPart(s []byte) (value []byte, suffix []byte, err error) {
 		return value, s, err
 	}
 	if suffix[0] == '-' {
-		// NegativeSign.
 		suffix = suffix[1:]
 	}
 	if len(suffix) < 1 || !IsDigit(suffix[0]) {
 		return value, s, ErrUnexpectedToken
 	}
 	if suffix[0] == '0' {
-		// Zero. Another digit after it would be a leading zero,
-		// which [expectNumberEnd] rejects.
+		// digit after the zero would be a leading zero, which [expectNumberEnd] rejects.
 		suffix = suffix[1:]
 		return s[:len(s)-len(suffix)], suffix, nil
 	}
@@ -286,9 +295,9 @@ func readIntegerPart(s []byte) (value []byte, suffix []byte, err error) {
 	return s[:len(s)-len(suffix)], suffix, nil
 }
 
-// expectNumberEnd returns [ErrUnexpectedToken] if s begins with a byte that may not
-// follow an IntValue or FloatValue. A digit, '.' or NameStart right after a number
-// belongs to that number, which makes it one broken number instead of two valid tokens.
+// expectNumberEnd returns [ErrUnexpectedToken] if s begins with a byte that may
+// not follow a number. A digit, '.' or NameStart still belongs to the number,
+// which makes it one broken number instead of two tokens.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#IntValue

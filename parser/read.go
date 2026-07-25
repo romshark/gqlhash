@@ -1,5 +1,10 @@
 package parser
 
+import (
+	"bytes"
+	"unicode/utf8"
+)
+
 // noopHash discards all writes. It is used to parse-but-not-hash sections that
 // [Options] marks as ignored (e.g. variable definitions under [Options.IgnoreVariables]).
 type noopHash struct{}
@@ -330,9 +335,9 @@ func readVariableDefinitionsAfterParenthesis(
 	return s, err
 }
 
-// readType reads Type and writes its canonical form to h: the type name, the
-// list brackets and '!' without the Ignored tokens that may separate them, so
-// formatting within a type reference doesn't change the hash.
+// readType reads Type and writes its canonical form to h - name, brackets and
+// '!' - without the Ignored tokens between them, so formatting within a type
+// reference doesn't change the hash.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#Type
@@ -466,6 +471,146 @@ func readKeyword(s []byte, kw string) (suffix []byte, err error) {
 	return s[len(kw):], nil
 }
 
+// writeStringValue writes a single-line string with its escape sequences
+// evaluated, so two spellings of one value hash alike. s is the source between
+// the quotes, already validated by [ReadStringLineAfterQuotes].
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#sec-String-Value
+func writeStringValue(h Hash, s []byte) {
+	for {
+		i := bytes.IndexByte(s, '\\')
+		if i < 0 {
+			// The rest stands for itself and needs no escaping: control bytes
+			// are rejected and every backslash begins an escape sequence.
+			_, _ = h.Write(s)
+			return
+		}
+		_, _ = h.Write(s[:i])
+		s = s[i:]
+
+		switch s[1] {
+		case 'b':
+			writeStringByte(h, '\b')
+			s = s[2:]
+		case 'f':
+			writeStringByte(h, '\f')
+			s = s[2:]
+		case 'n':
+			writeStringByte(h, '\n')
+			s = s[2:]
+		case 'r':
+			writeStringByte(h, '\r')
+			s = s[2:]
+		case 't':
+			writeStringByte(h, '\t')
+			s = s[2:]
+		case 'u':
+			var v uint32
+			if s[2] == '{' {
+				// Variable-width `\u{HexDigit+}`. Leading zeroes can't overflow v,
+				// the value is at most 0x10FFFF.
+				i := 3
+				for ; s[i] != '}'; i++ {
+					v = v<<4 | hexByteValue(s[i])
+				}
+				s = s[i+1:]
+			} else {
+				v = fixedWidthEscapeValue(s[2:])
+				s = s[6:]
+				if isLeadingSurrogate(v) {
+					// A surrogate pair spells out a single code point.
+					trailing := fixedWidthEscapeValue(s[2:])
+					v = 0x10000 + (v-0xD800)<<10 + (trailing - 0xDC00)
+					s = s[6:]
+				}
+			}
+			writeStringRune(h, rune(v))
+		default:
+			// `\"`, `\\` and `\/` stand for the character itself.
+			writeStringByte(h, s[1])
+			s = s[2:]
+		}
+	}
+}
+
+// writeBlockStringLine writes one line of a block string. Its only escape is
+// `\"""`, which stands for `"""`.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#BlockStringCharacter
+func writeBlockStringLine(h Hash, s []byte) {
+	const escapedTripleQuote = `\"""`
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if !mustEscapeInStringValue(s[i]) {
+			continue
+		}
+		_, _ = h.Write(s[start:i])
+		if HasPrefix(s[i:], escapedTripleQuote) {
+			_, _ = h.Write(hTripleQuote)
+			i += len(escapedTripleQuote) - 1 // The loop skips the last byte.
+		} else {
+			writeEscapedStringByte(h, s[i])
+		}
+		start = i + 1
+	}
+	_, _ = h.Write(s[start:])
+}
+
+func writeStringByte(h Hash, b byte) {
+	if mustEscapeInStringValue(b) {
+		writeEscapedStringByte(h, b)
+		return
+	}
+	_, _ = h.Write(allBytes[b : b+1])
+}
+
+// writeStringRune writes r as UTF-8, byte by byte: a buffer handed to
+// [Hash.Write] would escape to the heap.
+func writeStringRune(h Hash, r rune) {
+	var buf [utf8.UTFMax]byte
+	n := utf8.EncodeRune(buf[:], r)
+	for _, b := range buf[:n] {
+		writeStringByte(h, b)
+	}
+}
+
+// writeEscapedStringByte writes b as a backslash escape, which is what keeps a
+// string value from containing a byte that looks like a hash prefix.
+func writeEscapedStringByte(h Hash, b byte) {
+	_, _ = h.Write(lutStringEscapeSeq[b][:])
+}
+
+// lutStringEscapeSeq keeps every escape sequence ready, so writing one doesn't
+// allocate. Adding 0x40 turns a control byte into a printable character.
+var lutStringEscapeSeq = func() (t [256][2]byte) {
+	for i := range t {
+		t[i] = [2]byte{'\\', byte(i) + 0x40}
+	}
+	t['\\'] = [2]byte{'\\', '\\'}
+	return t
+}()
+
+func mustEscapeInStringValue(b byte) bool { return lutStringEscape[b] }
+
+// lutStringEscape marks the bytes of a string value that must be escaped: the
+// backslash, which the escaping uses, and the control bytes the hash prefixes
+// are taken from. Tab, line feed and carriage return are no prefixes and stay.
+var lutStringEscape = func() (t [256]bool) {
+	for b := range 0x20 {
+		t[b] = true
+	}
+	t['\t'], t['\n'], t['\r'] = false, false, false
+	t['\\'] = true
+	return t
+}()
+
+func fixedWidthEscapeValue(s []byte) uint32 {
+	return hexByteValue(s[0])<<12 | hexByteValue(s[1])<<8 |
+		hexByteValue(s[2])<<4 | hexByteValue(s[3])
+}
+
 func readValue(h Hash, o Options, s []byte) (
 	value []byte, valueType ValueType, suffix []byte, err error,
 ) {
@@ -553,7 +698,7 @@ func readValue(h Hash, o Options, s []byte) (
 					_, _ = h.Write(hLineFeed)
 				}
 				firstLine = false
-				_, _ = h.Write(line)
+				writeBlockStringLine(h, line)
 			}
 
 			return value, ValueTypeStringBlock, suffix, nil
@@ -563,7 +708,7 @@ func readValue(h Hash, o Options, s []byte) (
 			}
 			value = s[1 : len(s)-len(suffix)-1]
 			_, _ = h.Write(HPrefValueString)
-			_, _ = h.Write([]byte(value))
+			writeStringValue(h, value)
 			return value, ValueTypeString, suffix, nil
 		}
 
