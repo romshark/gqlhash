@@ -48,7 +48,6 @@ var TestUnexpectedEOF = []string{
 	"query Foo ($v:T={x",
 	"query Foo ($v:T={x:",
 	"query Foo ($v:T={x:1",
-	"query Foo ($v:T=-",
 	"query Foo ($v:T=12",
 	// An incomplete fraction or exponent (e.g. "12.", "12e", "12.3E+") is an
 	// unexpected token error rather than EOF, so those live in
@@ -171,6 +170,19 @@ var TestErrUnexpectedToken = []string{
 	"query Foo {...@dir(x:-1.2e?",
 	"query Foo {...@dir(x:-1.2e-?",
 	"query Foo {...@dir(x:-1.2e-4?",
+	// Broken numbers. Each of these is one invalid number, not two values
+	// (https://spec.graphql.org/September2025/#sec-Int-Value).
+	"{f(a:01)}",
+	"{f(a:-01)}",
+	"{f(a:-.1)}",
+	"{f(a:0x123)}",
+	"{f(a:123L)}",
+	"{f(a:1e2foo)}",
+	"{f(a:- foo)}",
+	"{f(a:1.2.3)}",
+	// A '-' needs a digit after it, so a '-' alone is an unexpected token, even
+	// at EOF, just like a fraction or exponent without digits.
+	"query Foo ($v:T=-",
 	// Incomplete fraction or exponent at EOF: a digit is required.
 	"query Foo ($v:T=12e",
 	"query Foo ($v:T=12E",

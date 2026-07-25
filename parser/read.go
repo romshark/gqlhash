@@ -509,20 +509,25 @@ func readValue(h Hash, o Options, s []byte) (
 		return value, ValueTypeVariable, suffix, err
 
 	case s[0] == '-' || IsDigit(s[0]):
-		if value, suffix, err = ReadIntValue(s); err != nil {
+		// IntValue and FloatValue share the IntegerPart, so it's read before
+		// the two can be told apart. Both must end on [expectNumberEnd].
+		if value, suffix, err = readIntegerPart(s); err != nil {
 			return value, ValueTypeInt, suffix, err
 		}
 		if len(suffix) > 0 && (suffix[0] == '.' || suffix[0] == 'e' || suffix[0] == 'E') {
+			// FloatValue (https://spec.graphql.org/September2025/#sec-Float-Value).
 			if _, suffix, err = ReadFloatAfterInteger(suffix); err != nil {
 				return value, ValueTypeFloat, suffix, err
 			}
-			// FloatValue (https://spec.graphql.org/September2025/#sec-Float-Value).
 			value = s[:len(s)-len(suffix)]
 			_, _ = h.Write(HPrefValueFloat)
 			_, _ = h.Write([]byte(value))
 			return value, ValueTypeFloat, suffix, nil
 		}
 		// IntValue (https://spec.graphql.org/September2025/#sec-Int-Value).
+		if err = expectNumberEnd(suffix); err != nil {
+			return value, ValueTypeInt, suffix, err
+		}
 		_, _ = h.Write(HPrefValueInteger)
 		_, _ = h.Write([]byte(value))
 		return value, ValueTypeInt, suffix, nil

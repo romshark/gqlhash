@@ -168,6 +168,43 @@ func TestReadDocument(t *testing.T) {
 		f(t, nil, "query"+bom+"Foo"+bom+"{ x }")
 	}
 
+	{ // Numeric literals (https://spec.graphql.org/September2025/#sec-Int-Value).
+		// A broken number is one invalid number and must not be split into
+		// several values.
+		f(t, parser.ErrUnexpectedToken, "{ f(a: [01]) }")
+		f(t, parser.ErrUnexpectedToken, "{ f(a: [-.1]) }")
+		f(t, parser.ErrUnexpectedToken, "{ f(a: [0x123]) }")
+		f(t, parser.ErrUnexpectedToken, "{ f(a: [123L]) }")
+		f(t, parser.ErrUnexpectedToken, "{ f(a: [1e2foo]) }")
+		f(t, parser.ErrUnexpectedToken, "{ f(a: [- foo]) }")
+		f(t, parser.ErrUnexpectedToken, "{ f(a: 007) }")
+		f(t, parser.ErrUnexpectedToken, "{ f(a: [-]) }")
+		f(t, parser.ErrUnexpectedToken, "{ f(a: [1.]) }")
+		f(t, parser.ErrUnexpectedToken, "{ f(a: .5) }")
+		f(t, parser.ErrUnexpectedToken, "query Q($x: Int = 01) { f }")
+
+		// The same rules apply wherever a value is read.
+		f(t, parser.ErrUnexpectedToken, "{ f(a: {x: 01}) }")
+		f(t, parser.ErrUnexpectedToken, "{ f @d(a: 1e2foo) }")
+		f(t, parser.ErrUnexpectedToken, "query Q($x: Int @d(a: -.1)) { f }")
+
+		// Values that an Ignored token separates legally are still accepted.
+		f(t, nil, "{ f(a: [1 2]) }")
+		f(t, nil, "{ f(a: [1, 2]) }")
+		f(t, nil, "{ f(a: [1 -2]) }")
+		f(t, nil, "{ f(a: [0 1]) }")
+		f(t, nil, "{ f(a: [1 foo]) }")
+		f(t, nil, "{ f(a: [1.5 2e3 -0]) }")
+		f(t, nil, "{ f(a: [1#comment\n2]) }")
+		f(t, nil, "{ f(a: [1\n2]) }")
+		f(t, nil, "{ f(a: [1"+bom+"2]) }")
+		f(t, nil, "{ f(a: {x: 1, y: -2.5e-3}) }")
+		f(t, nil, "query Q($x: Int = -0) { f }")
+
+		// Only the integer part rejects leading zeroes.
+		f(t, nil, "{ f(a: [1.05 1e05 1e+05 0.0 0e0 -0.05]) }")
+	}
+
 	{ // Source text is UTF-8 encoded Unicode scalar values
 		// (https://spec.graphql.org/September2025/#SourceCharacter).
 		for name, seq := range badUTF8 {
@@ -514,6 +551,48 @@ func TestReadTypeFormatting(t *testing.T) {
 	}
 }
 
+func TestReadIntValue(t *testing.T) {
+	f := func(
+		t *testing.T, expectValue, expectSuffix string, expectErr error, s string,
+	) {
+		t.Helper()
+		value, suffix, err := parser.ReadIntValue([]byte(s))
+		if expectErr != err {
+			t.Errorf("expected err: %v; received err: %v; input: %q", expectErr, err, s)
+		}
+		if expectValue != string(value) {
+			t.Errorf("expected value: %q; received value: %q", expectValue, value)
+		}
+		if expectSuffix != string(suffix) {
+			t.Errorf("expected suffix: %q; received suffix: %q", expectSuffix, suffix)
+		}
+	}
+
+	f(t, "0", "", nil, "0")
+	f(t, "-0", "", nil, "-0")
+	f(t, "42", "", nil, "42")
+	f(t, "-42", " rest", nil, "-42 rest")
+	f(t, "7", ")", nil, "7)")
+
+	f(t, "", "", parser.ErrUnexpectedEOF, "")
+
+	// A NegativeSign must be followed by a Digit.
+	f(t, "", "-", parser.ErrUnexpectedToken, "-")
+	f(t, "", "- 1", parser.ErrUnexpectedToken, "- 1")
+	f(t, "", "-x", parser.ErrUnexpectedToken, "-x")
+	f(t, "", ".1", parser.ErrUnexpectedToken, ".1")
+
+	// No digit, '.' or NameStart may follow an IntValue. That also rules out
+	// leading zeroes and floats
+	// (https://spec.graphql.org/September2025/#IntValue).
+	f(t, "", "01", parser.ErrUnexpectedToken, "01")
+	f(t, "", "-01", parser.ErrUnexpectedToken, "-01")
+	f(t, "", "1.5", parser.ErrUnexpectedToken, "1.5")
+	f(t, "", "1e2", parser.ErrUnexpectedToken, "1e2")
+	f(t, "", "123L", parser.ErrUnexpectedToken, "123L")
+	f(t, "", "0x1", parser.ErrUnexpectedToken, "0x1")
+}
+
 func TestReadValue(t *testing.T) {
 	f := func(
 		t *testing.T,
@@ -602,6 +681,27 @@ func TestReadValue(t *testing.T) {
 			"10000000000000000000000000"+suffix)
 		f(t, "-10000000000000000000000000", parser.ValueTypeInt, suffix, nil,
 			"-10000000000000000000000000"+suffix)
+
+		// A number is either a single 0 or starts with 1-9, so a leading zero
+		// is illegal (https://spec.graphql.org/September2025/#IntegerPart).
+		fErr(t, parser.ErrUnexpectedToken, "00"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "01"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "0123"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "-01"+suffix)
+
+		// A NegativeSign must be followed by a Digit.
+		fErr(t, parser.ErrUnexpectedToken, "-"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "-.1"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "-foo"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "-")
+
+		// No digit, '.' or NameStart may follow an IntValue, so a broken number
+		// is one invalid number, not two valid tokens
+		// (https://spec.graphql.org/September2025/#IntValue).
+		fErr(t, parser.ErrUnexpectedToken, "0x123"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "123L"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "1foo"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "1_"+suffix)
 	}
 
 	{ // FloatValue (https://spec.graphql.org/September2025/#sec-Float-Value).
@@ -658,6 +758,17 @@ func TestReadValue(t *testing.T) {
 		fErr(t, parser.ErrUnexpectedToken, "1e-"+suffix)
 		fErr(t, parser.ErrUnexpectedToken, "1.0e"+suffix)
 		fErr(t, parser.ErrUnexpectedToken, "1.0E-"+suffix)
+
+		// The same goes for a FloatValue
+		// (https://spec.graphql.org/September2025/#FloatValue).
+		fErr(t, parser.ErrUnexpectedToken, "1e2foo"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "1.5x"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "1.2.3"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "1.5e3.4"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "1e2_"+suffix)
+		// The IntegerPart of a float follows the same rules.
+		fErr(t, parser.ErrUnexpectedToken, "01.5"+suffix)
+		fErr(t, parser.ErrUnexpectedToken, "-01.5e2"+suffix)
 	}
 
 	{ // Single-line strings (https://spec.graphql.org/September2025/#sec-String-Value).

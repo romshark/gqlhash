@@ -247,22 +247,57 @@ func ReadValue(h Hash, s []byte) (
 //
 //   - https://spec.graphql.org/September2025/#IntValue
 func ReadIntValue(s []byte) (value []byte, suffix []byte, err error) {
+	if value, suffix, err = readIntegerPart(s); err != nil {
+		return value, suffix, err
+	}
+	if err = expectNumberEnd(suffix); err != nil {
+		return nil, s, err
+	}
+	return value, suffix, nil
+}
+
+// readIntegerPart reads IntegerPart, the part IntValue and FloatValue share.
+// A '-' must be followed by a digit, so a '-' alone is an unexpected token, just like
+// a fraction or exponent without digits. Leading zeroes aren't rejected here but by
+// [expectNumberEnd], which the caller calls once it knows where the number ends.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#IntegerPart
+func readIntegerPart(s []byte) (value []byte, suffix []byte, err error) {
 	suffix = s
+	if err = ExpectNoEOF(suffix); err != nil {
+		return value, s, err
+	}
 	if suffix[0] == '-' {
-		// Negative integer.
+		// NegativeSign.
 		suffix = suffix[1:]
-		if err = ExpectNoEOF(suffix); err != nil {
-			return value, s, err
-		}
+	}
+	if len(suffix) < 1 || !IsDigit(suffix[0]) {
+		return value, s, ErrUnexpectedToken
 	}
 	if suffix[0] == '0' {
-		// Zero.
+		// Zero. Another digit after it would be a leading zero,
+		// which [expectNumberEnd] rejects.
 		suffix = suffix[1:]
 		return s[:len(s)-len(suffix)], suffix, nil
 	}
 	for ; len(suffix) > 0 && IsDigit(suffix[0]); suffix = suffix[1:] {
 	}
 	return s[:len(s)-len(suffix)], suffix, nil
+}
+
+// expectNumberEnd returns [ErrUnexpectedToken] if s begins with a byte that may not
+// follow an IntValue or FloatValue. A digit, '.' or NameStart right after a number
+// belongs to that number, which makes it one broken number instead of two valid tokens.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#IntValue
+//   - https://spec.graphql.org/September2025/#FloatValue
+func expectNumberEnd(s []byte) error {
+	if len(s) > 0 && (IsDigit(s[0]) || s[0] == '.' || IsNameStart(s[0])) {
+		return ErrUnexpectedToken
+	}
+	return nil
 }
 
 // ReadStringLineAfterQuotes reads a single-line StringValue contents after '"'.
@@ -510,6 +545,9 @@ func ReadFloatAfterInteger(s []byte) (value []byte, suffix []byte, err error) {
 			// No digits after the exponent indicator.
 			return nil, suffix, ErrUnexpectedToken
 		}
+	}
+	if err = expectNumberEnd(suffix); err != nil {
+		return nil, suffix, err
 	}
 	return s[:len(s)-len(suffix)], suffix, nil
 }
