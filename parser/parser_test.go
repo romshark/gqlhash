@@ -41,7 +41,8 @@ func TestReadDocument(t *testing.T) {
 		t.Helper()
 		err := parser.ReadDocument(internal.NoopHash{}, []byte(input))
 		if expectErr != err {
-			t.Errorf("expected err: %v; received err: %v", expectErr, err)
+			t.Errorf("expected err: %v; received err: %v; input: %q",
+				expectErr, err, input)
 		}
 	}
 
@@ -73,6 +74,50 @@ func TestReadDocument(t *testing.T) {
 		}
 		fragment UserInfo on User { name email }
 	`)
+
+	{ // Keyword boundaries (https://spec.graphql.org/September2025/#Name).
+		// Reject a keyword that's only the start of a longer name.
+		f(t, parser.ErrUnexpectedToken, "queryFoo { x }")
+		f(t, parser.ErrUnexpectedToken, "mutationFoo { x }")
+		f(t, parser.ErrUnexpectedToken, "subscriptionFoo { x }")
+		f(t, parser.ErrUnexpectedToken, "fragmentFoo on T { x }")
+		f(t, parser.ErrUnexpectedToken, "fragment F onType { x }")
+
+		// Reject it for digit and underscore continuations too.
+		f(t, parser.ErrUnexpectedToken, "query1 { x }")
+		f(t, parser.ErrUnexpectedToken, "query_ { x }")
+		f(t, parser.ErrUnexpectedToken, "fragment F on_T { x }")
+
+		// Accept a keyword ended by an ignorable or by punctuation.
+		f(t, nil, "query Foo { x }")
+		f(t, nil, "query,Foo { x }")
+		f(t, nil, "query\nFoo { x }")
+		f(t, nil, "query#comment\nFoo { x }")
+		f(t, nil, "query{ x }")
+		f(t, nil, "mutation M { x }")
+		f(t, nil, "subscription S { x }")
+		f(t, nil, "fragment F on T { x }")
+		f(t, nil, "fragment F#comment\non#comment\nT { x }")
+		f(t, nil, "fragment F on T{ x }")
+
+		// Accept a name that starts with a keyword.
+		f(t, nil, "query queryFoo { x }")
+		f(t, nil, "fragment fragmentFoo on onType { x }")
+
+		// Accept a fragment spread whose name starts with `on`.
+		f(t, nil, "{ ... onType }")
+		f(t, nil, "{ ... on_T }")
+		f(t, nil, "{ ... on1 }")
+
+		// Accept a type condition whose `on` is ended by any ignorable.
+		f(t, nil, "{ ... on Bar { x } }")
+		f(t, nil, "{ ... on,Bar { x } }")
+		f(t, nil, "{ ... on#comment\nBar { x } }")
+
+		// Reject a bare `on`, which can't name a spread and has no type after it.
+		f(t, parser.ErrUnexpectedToken, "{ ... on }")
+		f(t, parser.ErrUnexpectedToken, "{ ... on{ x } }")
+	}
 }
 
 func TestReadDefinition(t *testing.T) {

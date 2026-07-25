@@ -528,13 +528,13 @@ const (
 func ReadOperationType(h Hash, s []byte) (
 	operationType OperationType, suffix []byte, err error,
 ) {
-	if HasPrefix(s, "query") || s[0] == '{' {
+	if isKeyword(s, "query") || s[0] == '{' {
 		_, _ = h.Write(HPrefQuery)
 		return OperationTypeQuery, s[len("query"):], nil
-	} else if HasPrefix(s, "mutation") {
+	} else if isKeyword(s, "mutation") {
 		_, _ = h.Write(HPrefMutation)
 		return OperationTypeMutation, s[len("mutation"):], nil
-	} else if HasPrefix(s, "subscription") {
+	} else if isKeyword(s, "subscription") {
 		_, _ = h.Write(HPrefSubscription)
 		return OperationTypeSubscription, s[len("subscription"):], nil
 	}

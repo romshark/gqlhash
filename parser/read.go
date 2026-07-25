@@ -40,7 +40,7 @@ func readDefinition(h Hash, o Options, s []byte) (suffix []byte, err error) {
 		_, _ = h.Write(HPrefQuery)
 		return readSelectionSet(h, o, s)
 
-	case HasPrefix(s, "fragment"):
+	case isKeyword(s, "fragment"):
 		// FragmentDefinition
 		// (https://spec.graphql.org/September2025/#FragmentDefinition).
 		s = s[len("fragment"):]
@@ -59,7 +59,7 @@ func readDefinition(h Hash, o Options, s []byte) (suffix []byte, err error) {
 		// TypeCondition
 		// (https://spec.graphql.org/September2025/#TypeCondition).
 		suffix = SkipIgnorables(suffix)
-		if suffix, err = ReadToken(suffix, "on"); err != nil {
+		if suffix, err = readKeyword(suffix, "on"); err != nil {
 			return suffix, err
 		}
 		suffix = SkipIgnorables(suffix)
@@ -143,13 +143,15 @@ func readSelectionSet(h Hash, o Options, s []byte) (suffix []byte, err error) {
 			s = s[len("..."):]
 			s = SkipIgnorables(s)
 
-			if len(s) > len("on ") && HasPrefix(s, "on") && IsIgnorableByte(s[2]) {
+			if isKeyword(s, "on") {
 				// Inline fragment
 				// (https://spec.graphql.org/September2025/#InlineFragment).
+				// A FragmentSpread can't be named "on", so a bare "on" keyword
+				// always begins a type condition.
 
 				// Type condition
 				// (https://spec.graphql.org/September2025/#TypeCondition).
-				s = SkipIgnorables(s[3:])
+				s = SkipIgnorables(s[len("on"):])
 				var typeName []byte
 				if typeName, s, err = ReadName(s); err != nil {
 					return s, err
@@ -398,6 +400,22 @@ func readArguments(h Hash, o Options, s []byte) (arguments, suffix []byte, err e
 // longer name starting with it, so the enum "nullable" won't match "null".
 func isKeyword(s []byte, kw string) bool {
 	return HasPrefix(s, kw) && (len(kw) == len(s) || !IsNameContinue(s[len(kw)]))
+}
+
+// readKeyword reads the keyword kw. Unlike [ReadToken], which reads punctuators,
+// kw must be a whole Name and not merely the start of a longer one, because
+// Name doesn't allow a NameContinue to follow it.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#Name
+func readKeyword(s []byte, kw string) (suffix []byte, err error) {
+	if err = ExpectNoEOF(s); err != nil {
+		return s, err
+	}
+	if !isKeyword(s, kw) {
+		return s, ErrUnexpectedToken
+	}
+	return s[len(kw):], nil
 }
 
 func readValue(h Hash, o Options, s []byte) (
