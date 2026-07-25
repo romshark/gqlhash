@@ -305,17 +305,26 @@ func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error
 				}
 				if s[i+2] == '{' {
 					// Variable-width form `\u{HexDigit+}` (spec of September 2025).
-					// Scalar value range isn't validated, consistent with the
-					// fixed-width form below (which accepts lone surrogates too).
 					j := i + 3
-					for j < len(s) && IsHexByte(s[j]) {
-						j++
+					// Leading zeros are permitted, so accumulate but stop growing
+					// the value once it's certainly out of range to avoid overflow.
+					var value uint32
+					outOfRange := false
+					for ; j < len(s) && IsHexByte(s[j]); j++ {
+						if !outOfRange {
+							value = value<<4 | hexByteValue(s[j])
+							outOfRange = value > 0x10FFFF
+						}
 					}
 					if j >= len(s) {
 						return s[:i+1], s[i+1:], ErrUnexpectedEOF
 					}
 					if j == i+3 || s[j] != '}' {
 						// No hex digits, or an unexpected non-hex character.
+						return s[:i+1], s[i+1:], ErrUnexpectedToken
+					}
+					if outOfRange || !isUnicodeScalarValue(value) {
+						// Above U+10FFFF, or a surrogate code point.
 						return s[:i+1], s[i+1:], ErrUnexpectedToken
 					}
 					i = j + 1
@@ -329,6 +338,45 @@ func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error
 					!IsHexByte(s[i+3]) ||
 					!IsHexByte(s[i+4]) ||
 					!IsHexByte(s[i+5]) {
+					return s[:i+1], s[i+1:], ErrUnexpectedToken
+				}
+				leading := hexByteValue(s[i+2])<<12 | hexByteValue(s[i+3])<<8 |
+					hexByteValue(s[i+4])<<4 | hexByteValue(s[i+5])
+				if isLeadingSurrogate(leading) {
+					// A Leading Surrogate is only legal as the first half of a
+					// surrogate pair, which must be a second fixed-width escape
+					// holding a Trailing Surrogate.
+					if i+6 >= len(s) {
+						return s[:i+1], s[i+1:], ErrUnexpectedEOF
+					}
+					if s[i+6] != '\\' {
+						return s[:i+1], s[i+1:], ErrUnexpectedToken
+					}
+					if i+7 >= len(s) {
+						return s[:i+1], s[i+1:], ErrUnexpectedEOF
+					}
+					if s[i+7] != 'u' {
+						return s[:i+1], s[i+1:], ErrUnexpectedToken
+					}
+					if i+11 >= len(s) {
+						return s[:i+1], s[i+1:], ErrUnexpectedEOF
+					}
+					if !IsHexByte(s[i+8]) ||
+						!IsHexByte(s[i+9]) ||
+						!IsHexByte(s[i+10]) ||
+						!IsHexByte(s[i+11]) {
+						return s[:i+1], s[i+1:], ErrUnexpectedToken
+					}
+					trailing := hexByteValue(s[i+8])<<12 | hexByteValue(s[i+9])<<8 |
+						hexByteValue(s[i+10])<<4 | hexByteValue(s[i+11])
+					if !isTrailingSurrogate(trailing) {
+						return s[:i+1], s[i+1:], ErrUnexpectedToken
+					}
+					i += 12
+					continue
+				}
+				if !isUnicodeScalarValue(leading) {
+					// A Trailing Surrogate without a preceding Leading Surrogate.
 					return s[:i+1], s[i+1:], ErrUnexpectedToken
 				}
 				i += 5
@@ -611,6 +659,39 @@ func IsDigit(b byte) bool { return lutDigit[b] }
 
 // IsHexByte returns true if b is a hexadecimal digit.
 func IsHexByte(b byte) bool { return lutHex[b] }
+
+// hexByteValue returns the numeric value of hexadecimal digit b.
+// The result is meaningless unless IsHexByte(b) is true.
+func hexByteValue(b byte) uint32 {
+	switch {
+	case b >= '0' && b <= '9':
+		return uint32(b - '0')
+	case b >= 'a' && b <= 'f':
+		return uint32(b-'a') + 10
+	}
+	return uint32(b-'A') + 10
+}
+
+// isUnicodeScalarValue returns true if v is within the Unicode scalar value
+// range, which excludes the surrogate code points 0xD800-0xDFFF.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#sec-Unicode
+func isUnicodeScalarValue(v uint32) bool {
+	return v <= 0xD7FF || (v >= 0xE000 && v <= 0x10FFFF)
+}
+
+// isLeadingSurrogate returns true if v is a Leading Surrogate code point.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#StringCharacter
+func isLeadingSurrogate(v uint32) bool { return v >= 0xD800 && v <= 0xDBFF }
+
+// isTrailingSurrogate returns true if v is a Trailing Surrogate code point.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#StringCharacter
+func isTrailingSurrogate(v uint32) bool { return v >= 0xDC00 && v <= 0xDFFF }
 
 // lutLetter is a lookup table for bytes representing a Letter.
 // Reference:

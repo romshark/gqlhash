@@ -508,12 +508,34 @@ func TestReadValue(t *testing.T) {
 		f(t, `\u{10FFFF}`, parser.ValueTypeString, suffix, nil, `"\u{10FFFF}"`+suffix)
 		f(t, `a\u{1F600}b`, parser.ValueTypeString, suffix, nil, `"a\u{1F600}b"`+suffix)
 
-		// gqlhash does not validate Unicode scalar values, just like it doesn't
-		// for the fixed-width `\uXXXX` form (which also accepts lone surrogates
-		// such as `\uD800`), so grammatically valid but out-of-range or surrogate
-		// escapes are still accepted.
-		f(t, `\u{110000}`, parser.ValueTypeString, suffix, nil, `"\u{110000}"`+suffix)
-		f(t, `\u{D800}`, parser.ValueTypeString, suffix, nil, `"\u{D800}"`+suffix)
+		// StringCharacter :: \u EscapedUnicode asserts the escaped value is within
+		// the Unicode scalar value range (<= 0xD7FF or 0xE000..0x10FFFF), so
+		// out-of-range and surrogate escapes are a parse error even though their
+		// syntax is valid (https://spec.graphql.org/September2025/#StringCharacter).
+		fErr(t, parser.ErrUnexpectedToken, `"\u{110000}"`+suffix)   // Above U+10FFFF.
+		fErr(t, parser.ErrUnexpectedToken, `"\u{FFFFFFFF}"`+suffix) // Far above U+10FFFF.
+		fErr(t, parser.ErrUnexpectedToken, `"\u{D800}"`+suffix)     // Leading surrogate.
+		fErr(t, parser.ErrUnexpectedToken, `"\u{DFFF}"`+suffix)     // Trailing surrogate.
+
+		// The legacy pair production `\u XXXX \u XXXX` is the only way a surrogate
+		// may appear: a leading surrogate must be followed by a trailing one, and
+		// otherwise both halves must each be scalar values.
+		// pairPoo is the surrogate pair for U+1F4A9 PILE OF POO, written as a
+		// concatenation so the two escapes stay literal in the source.
+		const pairPoo = `\uD83D` + `\uDCA9`
+		f(t, pairPoo, parser.ValueTypeString, suffix, nil, `"`+pairPoo+`"`+suffix)
+		// Lone leading.
+		fErr(t, parser.ErrUnexpectedToken, `"\uD800"`+suffix)
+		// Lone trailing.
+		fErr(t, parser.ErrUnexpectedToken, `"\uDC00"`+suffix)
+		// Leading + leading.
+		fErr(t, parser.ErrUnexpectedToken, `"\uD800\uD800"`+suffix)
+		// Trailing + trailing.
+		fErr(t, parser.ErrUnexpectedToken, `"\uDC00\uDC00"`+suffix)
+		// Reversed pair.
+		fErr(t, parser.ErrUnexpectedToken, `"\uDC00\uD800"`+suffix)
+		// Leading, not paired.
+		fErr(t, parser.ErrUnexpectedToken, `"\uD800a"`+suffix)
 
 		// Malformed variable-width escapes must be rejected (September 2025).
 		fErr(t, parser.ErrUnexpectedToken, `"\u{}"`+suffix)     // No hex digits.
