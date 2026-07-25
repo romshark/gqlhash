@@ -68,6 +68,22 @@ func TestSkipIgnorables(t *testing.T) {
 	f(t, "xyz", bom+bom+"xyz")
 	f(t, "xyz", " "+bom+"\t,\n"+bom+"xyz")
 	f(t, "xyz", bom+"# comment\n"+bom+"xyz")
+
+	// A BOM starts with 0xEF, but 0xEF alone is no BOM and ends the Ignored.
+	f(t, "\xefxyz", "\xefxyz")
+	f(t, "\xef\xbbxyz", "\xef\xbbxyz")
+
+	// The same set of bytes, without comments and the BOM.
+	for _, b := range []byte{' ', ',', '\t', '\n', '\r'} {
+		if !parser.IsIgnorableByte(b) {
+			t.Errorf("expected %q to be ignorable", b)
+		}
+	}
+	for _, b := range []byte{'#', 'x', '\xef', 0} {
+		if parser.IsIgnorableByte(b) {
+			t.Errorf("expected %q not to be ignorable", b)
+		}
+	}
 }
 
 func TestReadDocument(t *testing.T) {
@@ -410,6 +426,20 @@ func TestReadName(t *testing.T) {
 		f(t, "__typename", suffix, nil, "__typename"+suffix)
 		f(t, "fooBar", suffix, nil, "fooBar"+suffix)
 		f(t, "foo_Bar42", suffix, nil, "foo_Bar42"+suffix)
+	}
+
+	// A Letter is the ASCII letter a Name is built from. '_' and digits are
+	// part of a Name too, but no Letters
+	// (https://spec.graphql.org/September2025/#Letter).
+	for _, b := range []byte{'a', 'z', 'A', 'Z', 'm'} {
+		if !parser.IsLetter(b) {
+			t.Errorf("expected %q to be a letter", b)
+		}
+	}
+	for _, b := range []byte{'_', '0', '9', '-', '\xd0', 0} {
+		if parser.IsLetter(b) {
+			t.Errorf("expected %q not to be a letter", b)
+		}
 	}
 }
 
@@ -832,6 +862,17 @@ func TestReadValue(t *testing.T) {
 		fErr(t, parser.ErrUnexpectedToken, `"\uDC00\uD800"`+suffix)
 		// Leading, not paired.
 		fErr(t, parser.ErrUnexpectedToken, `"\uD800a"`+suffix)
+		// The second half of the pair is cut off or isn't a `\uXXXX` escape.
+		// Ends after the first half.
+		fErr(t, parser.ErrUnexpectedEOF, `"\uD800`)
+		// Ends after the backslash.
+		fErr(t, parser.ErrUnexpectedEOF, `"\uD800\`)
+		// No 'u'.
+		fErr(t, parser.ErrUnexpectedToken, `"\uD800\n"`+suffix)
+		// Too few hex digits.
+		fErr(t, parser.ErrUnexpectedEOF, `"\uD800\u12`)
+		// Not hex.
+		fErr(t, parser.ErrUnexpectedToken, `"\uD800\uZZZZ"`+suffix)
 
 		// Malformed variable-width escapes must be rejected (September 2025).
 		fErr(t, parser.ErrUnexpectedToken, `"\u{}"`+suffix)     // No hex digits.
