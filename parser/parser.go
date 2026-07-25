@@ -136,7 +136,7 @@ func ReadOperationDefinition(h Hash, s []byte) (suffix []byte, err error) {
 	return readOperationDefinition(h, Options{}, s)
 }
 
-// ReadVariableDefinitions reads VariableDefinitions.
+// ReadSelectionSet reads SelectionSet.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#sec-Selection-Sets
@@ -279,7 +279,7 @@ func ReadIntValue(s []byte) (value []byte, suffix []byte, err error) {
 }
 
 // ReadStringLineAfterQuotes reads a single-line StringValue contents after '"'.
-// Tip: Use ReadStringBlock for block strings.
+// Tip: Use ReadStringBlockAfterQuotes for block strings.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#sec-String-Value
@@ -394,7 +394,11 @@ func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error
 	return s, suffix, ErrUnexpectedEOF
 }
 
-// ReadStringBlockAfterQuotes reads a block string StringValue contents after '"""'.
+// ReadStringBlockAfterQuotes reads a block string StringValue after the opening
+// '"""'. A non-empty value still has the closing '"""' attached, so callers that
+// want just the contents must cut it off. value is nil when the block holds
+// nothing but WhiteSpace and LineTerminators. prefixLen is the common
+// indentation to strip from every line except the first.
 // Tip: Use ReadStringLineAfterQuotes for single-line strings.
 // Reference:
 //
@@ -403,8 +407,9 @@ func ReadStringBlockAfterQuotes(s []byte) (
 	value []byte, prefixLen int, suffix []byte, err error,
 ) {
 	prefixLenSet := false
-	// firstNonWhiteSpaceAndNewLine stores the index of the last byte that's not
-	// a tab, whitespace, or a line-break.
+	// firstNonWhiteSpaceAndNewLine stores the index of the first byte that is
+	// neither WhiteSpace nor a LineTerminator. setNWSNL keeps that first index
+	// and ignores every later call.
 	firstNonWhiteSpaceAndNewLineFound := false
 	firstNonWhiteSpaceAndNewLine := 0
 	setNWSNL := func(i int) {
@@ -420,10 +425,8 @@ func ReadStringBlockAfterQuotes(s []byte) (
 				// End of the block string found.
 				if firstNonWhiteSpaceAndNewLineFound &&
 					firstNonWhiteSpaceAndNewLine != i {
-					// The block not filled with just whitespace and line-breaks only.
+					// The block isn't filled with just whitespace and line-breaks.
 					value = s[:i+3]
-
-					// Trim empty suffix.
 				}
 				return value, prefixLen, s[i+3:], nil
 			}
@@ -802,6 +805,11 @@ var lutHex = [256]bool{
 
 // IterateBlockStringLines iterates over individual lines of a GraphQL block string.
 // Expects s to be the content of the string without the surrounding `"""`.
+//
+// The caller must prepare both inputs: prefixLen is the common indentation as
+// returned by [ReadStringBlockAfterQuotes], and s must already have its trailing
+// blank lines removed by [TrimEmptyLinesSuffix]. Leading blank lines are dropped
+// here, so any blank line reached after content is treated as interior and kept.
 //
 // Lines are yielded without their LineTerminator. Per BlockStringValue the
 // lines are joined by a single line feed, so LF, CRLF and CR in the source all
