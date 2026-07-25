@@ -11,6 +11,32 @@ import (
 	"github.com/romshark/gqlhash/parser"
 )
 
+// bom is the UTF-8 encoding of U+FEFF, which is Ignored
+// (https://spec.graphql.org/September2025/#UnicodeBOM).
+const bom = "\xef\xbb\xbf"
+
+// Supplementary-plane (astral) characters (https://www.unicode.org/roadmaps/smp),
+// each a 4-byte UTF-8 sequence:
+// U+1F4A9 PILE OF POO and U+1D11E MUSICAL SYMBOL G CLEF.
+// Used to exercise the full Unicode SourceCharacter range
+// (https://spec.graphql.org/September2025/#SourceCharacter).
+var astral1, astral2 = string(rune(0x1F4A9)), string(rune(0x1D11E))
+
+// Byte sequences that aren't valid UTF-8 encodings of a Unicode scalar value.
+// SourceCharacter admits only scalar values, so none of these may appear in a
+// document (https://spec.graphql.org/September2025/#SourceCharacter).
+var badUTF8 = map[string]string{
+	"lone continuation byte":    "\x80",
+	"invalid byte 0xFF":         "\xff",
+	"truncated 2-byte sequence": "\xc3",
+	"truncated 3-byte sequence": "\xe2\x82",
+	"truncated 4-byte sequence": "\xf0\x9f\x92",
+	"overlong encoding of '/'":  "\xc0\xaf",
+	"surrogate U+D800":          "\xed\xa0\x80",
+	"surrogate U+DFFF":          "\xed\xbf\xbf",
+	"above U+10FFFF":            "\xf4\x90\x80\x80",
+}
+
 func TestSkipIgnorables(t *testing.T) {
 	f := func(t *testing.T, expect, input string) {
 		t.Helper()
@@ -34,6 +60,14 @@ func TestSkipIgnorables(t *testing.T) {
 	f(t, "(", "(")
 	f(t, "{", "{")
 	f(t, "xyz", "xyz")
+
+	// A UTF-8 BOM is Ignored and may appear before or after any token
+	// (https://spec.graphql.org/September2025/#UnicodeBOM).
+	f(t, "", bom)
+	f(t, "xyz", bom+"xyz")
+	f(t, "xyz", bom+bom+"xyz")
+	f(t, "xyz", " "+bom+"\t,\n"+bom+"xyz")
+	f(t, "xyz", bom+"# comment\n"+bom+"xyz")
 }
 
 func TestReadDocument(t *testing.T) {
@@ -117,6 +151,43 @@ func TestReadDocument(t *testing.T) {
 		// Reject a bare `on`, which can't name a spread and has no type after it.
 		f(t, parser.ErrUnexpectedToken, "{ ... on }")
 		f(t, parser.ErrUnexpectedToken, "{ ... on{ x } }")
+	}
+
+	{ // UTF-8 BOM (https://spec.graphql.org/September2025/#UnicodeBOM).
+		// Accept a BOM anywhere an Ignored is allowed.
+		f(t, nil, bom+"{ x }")
+		f(t, nil, "{ x }"+bom)
+		f(t, nil, "{ "+bom+"x }")
+		f(t, nil, "{ x"+bom+"}")
+		f(t, nil, bom+"query Foo { x }")
+		f(t, nil, "query"+bom+"Foo { x }")
+		f(t, nil, "fragment F on"+bom+"T { x }")
+		f(t, nil, "{ f(a:"+bom+"1) }")
+
+		// A BOM doesn't glue two names together.
+		f(t, nil, "query"+bom+"Foo"+bom+"{ x }")
+	}
+
+	{ // Source text is UTF-8 encoded Unicode scalar values
+		// (https://spec.graphql.org/September2025/#SourceCharacter).
+		for name, seq := range badUTF8 {
+			t.Run(name, func(t *testing.T) {
+				// Reject it in a single-line string.
+				f(t, parser.ErrUnexpectedToken, `{ f(s: "`+seq+`") }`)
+				// Reject it in a block string.
+				f(t, parser.ErrUnexpectedToken, `{ f(s: """`+seq+`""") }`)
+				// Reject it in a comment, whose CommentChar is a SourceCharacter
+				// too (https://spec.graphql.org/September2025/#CommentChar).
+				f(t, parser.ErrUnexpectedToken, "# "+seq+"\n{ x }")
+				f(t, parser.ErrUnexpectedToken, "{ x } # "+seq)
+			})
+		}
+
+		// Keep accepting well-formed sequences of every length.
+		f(t, nil, `{ f(s: "é € `+astral1+`") }`)
+		f(t, nil, `{ f(s: """é € `+astral1+`""") }`)
+		f(t, nil, "# é € "+astral1+"\n{ x }")
+		f(t, nil, "{ x } # é € "+astral1)
 	}
 }
 
@@ -422,13 +493,6 @@ func TestReadValue(t *testing.T) {
 	f(t, "0", parser.ValueTypeInt, "-dash", nil, "0-dash")
 
 	const suffix = " suffix"
-
-	// Supplementary-plane (astral) characters (https://www.unicode.org/roadmaps/smp),
-	// each a 4-byte UTF-8 sequence:
-	// U+1F4A9 PILE OF POO and U+1D11E MUSICAL SYMBOL G CLEF.
-	// Used to exercise the full Unicode SourceCharacter range
-	// (https://spec.graphql.org/September2025/#SourceCharacter).
-	astral1, astral2 := string(rune(0x1F4A9)), string(rune(0x1D11E))
 
 	{ // NullValue (https://spec.graphql.org/September2025/#sec-Null-Value).
 		f(t, "null", parser.ValueTypeNull, suffix, nil, "null"+suffix)

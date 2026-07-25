@@ -4,11 +4,22 @@ import (
 	"errors"
 	"hash"
 	"iter"
+	"unicode/utf8"
 )
 
 var (
 	ErrUnexpectedEOF   = errors.New("unexpected EOF")
 	ErrUnexpectedToken = errors.New("unexpected token")
+)
+
+// bom is the UTF-8 encoding of UnicodeBOM (U+FEFF). bomFirstByte is kept
+// separate so [SkipIgnorables] can dispatch on a single byte.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#UnicodeBOM
+const (
+	bom          = "\xef\xbb\xbf"
+	bomFirstByte = '\xef'
 )
 
 // Hash is a subset of the standard `hash.Hash`.
@@ -388,7 +399,12 @@ func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error
 				// Illegal control character in string value.
 				return s, suffix, ErrUnexpectedToken
 			}
-			i++
+			size := sourceCharacterLen(s[i:])
+			if size == 0 {
+				// Malformed UTF-8, so not a SourceCharacter.
+				return s, suffix, ErrUnexpectedToken
+			}
+			i += size
 		}
 	}
 	return s, suffix, ErrUnexpectedEOF
@@ -471,8 +487,15 @@ func ReadStringBlockAfterQuotes(s []byte) (
 				// Illegal control character in string value.
 				return nil, prefixLen, suffix, ErrUnexpectedToken
 			}
+			size := sourceCharacterLen(s[i:])
+			if size == 0 {
+				// Malformed UTF-8, so not a SourceCharacter.
+				return nil, prefixLen, suffix, ErrUnexpectedToken
+			}
 			// Don't ignore non-WhiteSpace bytes.
 			setNWSNL(i)
+			i += size
+			continue
 		}
 		i++
 	}
@@ -546,21 +569,40 @@ func ReadOperationType(h Hash, s []byte) (
 
 // SkipIgnorables skips over any comments, spaces, tabs, line-breaks and
 // carriage-returns it encounters and returns the s suffix.
+//
+// It stops at the first byte that isn't part of an Ignored, which includes a
+// byte inside a comment that isn't valid UTF-8. Such a byte is no CommentChar,
+// so the comment ends there and the caller reports the leftover as unexpected.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#sec-Line-Terminators
 //   - https://spec.graphql.org/September2025/#sec-Comments
 //   - https://spec.graphql.org/September2025/#sec-White-Space
+//   - https://spec.graphql.org/September2025/#UnicodeBOM
 func SkipIgnorables(s []byte) []byte {
 	for len(s) > 0 {
 		switch s[0] {
 		case ' ', ',', '\t', '\n', '\r':
 			s = s[1:]
 		case '#':
+			// CommentChar is a SourceCharacter but not a LineTerminator
+			// (https://spec.graphql.org/September2025/#CommentChar).
 			i := 1
-			for ; i < len(s) && lineTerminatorLen(s, i) == 0; i++ {
+			for i < len(s) && lineTerminatorLen(s, i) == 0 {
+				size := sourceCharacterLen(s[i:])
+				if size == 0 {
+					return s[i:] // Malformed UTF-8 ends the comment.
+				}
+				i += size
 			}
 			s = s[i:]
+		case bomFirstByte:
+			// UnicodeBOM (U+FEFF) may appear before or after any token, not just
+			// at the start of the document.
+			if !HasPrefix(s, bom) {
+				return s
+			}
+			s = s[len(bom):]
 		default:
 			return s
 		}
@@ -662,6 +704,25 @@ func IsDigit(b byte) bool { return lutDigit[b] }
 
 // IsHexByte returns true if b is a hexadecimal digit.
 func IsHexByte(b byte) bool { return lutHex[b] }
+
+// sourceCharacterLen returns the length in bytes of the SourceCharacter at the
+// start of s, or 0 if those bytes aren't a well-formed UTF-8 encoding of a
+// Unicode scalar value. Surrogates, overlong encodings, truncated sequences and
+// values above U+10FFFF all return 0. Expects s to be non-empty.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#SourceCharacter
+func sourceCharacterLen(s []byte) int {
+	if s[0] < utf8.RuneSelf {
+		return 1
+	}
+	// DecodeRune reports every malformed encoding as (RuneError, 1), which a
+	// literal U+FFFD can't be confused with because it decodes to 3 bytes.
+	if r, size := utf8.DecodeRune(s); r != utf8.RuneError || size > 1 {
+		return size
+	}
+	return 0
+}
 
 // hexByteValue returns the numeric value of hexadecimal digit b.
 // The result is meaningless unless IsHexByte(b) is true.
