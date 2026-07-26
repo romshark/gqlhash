@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/romshark/gqlhash"
 )
 
 type (
@@ -99,6 +101,9 @@ func TestRun(t *testing.T) {
 	f(t, 2, stderr(`unsupported hash function "sha9", use any of: `+
 		SupportedHashFunctions+"\n"), nil,
 		args(`-hash`, `sha9`), "{foo}")
+	f(t, 2, stderr("unsupported ignore mode \"vars\", use any of: "+
+		SupportedIgnoreModes+"\n"), nil,
+		args(`-ignore`, `vars`), "{foo}")
 
 	// Err
 	f(t, 1, stderr("no input\n"), nil,
@@ -187,34 +192,34 @@ func TestRunIgnoreOptions(t *testing.T) {
 		return strings.Join(*out, "")
 	}
 
-	// -ignore-inputs: queries differing only in input values (and their types)
+	// -ignore=inputs: queries differing only in input values (and their types)
 	// hash the same, but differ from the default (full) hash.
 	full := hash(t, `{ f(x: 1) }`)
-	in1 := hash(t, `{ f(x: 1) }`, "-ignore-inputs")
-	in2 := hash(t, `{ f(x: "different") }`, "-ignore-inputs")
+	in1 := hash(t, `{ f(x: 1) }`, "-ignore=inputs")
+	in2 := hash(t, `{ f(x: "different") }`, "-ignore=inputs")
 	if in1 != in2 {
-		t.Errorf("-ignore-inputs: expected equal hashes, got %q and %q", in1, in2)
+		t.Errorf("-ignore=inputs: expected equal hashes, got %q and %q", in1, in2)
 	}
 	if in1 == full {
-		t.Error("-ignore-inputs must change the hash")
+		t.Error("-ignore=inputs must change the hash")
 	}
 
-	// -ignore-variables implies -ignore-inputs and also drops the variable, so a
+	// -ignore=variables implies -ignore=inputs and also drops the variable, so a
 	// parameterized query matches its literal, unparameterized form.
-	v1 := hash(t, `query Q($v: Int) { f(a: $v) }`, "-ignore-variables")
-	v2 := hash(t, `query Q { f(a: 1) }`, "-ignore-variables")
+	v1 := hash(t, `query Q($v: Int) { f(a: $v) }`, "-ignore=variables")
+	v2 := hash(t, `query Q { f(a: 1) }`, "-ignore=variables")
 	if v1 != v2 {
-		t.Errorf("-ignore-variables: expected equal hashes, got %q and %q", v1, v2)
+		t.Errorf("-ignore=variables: expected equal hashes, got %q and %q", v1, v2)
 	}
-	// Under -ignore-inputs a variable usage is ignored like any other value,
+	// Under -ignore=inputs a variable usage is ignored like any other value,
 	// but the variable signature (definition) is kept.
-	if hash(t, `{ f(a: $v) }`, "-ignore-inputs") !=
-		hash(t, `{ f(a: 1) }`, "-ignore-inputs") {
-		t.Error("-ignore-inputs must ignore a variable usage like a literal")
+	if hash(t, `{ f(a: $v) }`, "-ignore=inputs") !=
+		hash(t, `{ f(a: 1) }`, "-ignore=inputs") {
+		t.Error("-ignore=inputs must ignore a variable usage like a literal")
 	}
-	if hash(t, `query ($v: ID) { f(a: $v) }`, "-ignore-inputs") ==
-		hash(t, `{ f(a: 1) }`, "-ignore-inputs") {
-		t.Error("-ignore-inputs must keep the variable signature")
+	if hash(t, `query ($v: ID) { f(a: $v) }`, "-ignore=inputs") ==
+		hash(t, `{ f(a: 1) }`, "-ignore=inputs") {
+		t.Error("-ignore=inputs must keep the variable signature")
 	}
 }
 
@@ -246,6 +251,35 @@ func TestRunVersion(t *testing.T) {
 	Version = "1.2.3-test"
 
 	f(t, 0, []string{"gqlhash v1.2.3-test"}, args("-version"))
+}
+
+func TestParseIgnore(t *testing.T) {
+	f := func(t *testing.T, expect gqlhash.Ignore, expectOK bool, input string) {
+		t.Helper()
+		a, ok := parseIgnore(input)
+		if ok != expectOK {
+			t.Errorf("expected ok: %t; received: %t; input: %q", expectOK, ok, input)
+		}
+		if a != expect {
+			t.Errorf("expected: %#v; received: %#v", expect, a)
+		}
+	}
+
+	f(t, 0, false, "")
+	f(t, 0, false, "unsupported")
+	f(t, 0, false, "inputs_")
+	f(t, 0, false, "_inputs")
+	// The two flags of v1 are gone, so their names name no mode.
+	f(t, 0, false, "ignore-inputs")
+	f(t, gqlhash.IgnoreNothing, true, "nothing")
+	f(t, gqlhash.IgnoreNothing, true, "Nothing")
+	f(t, gqlhash.IgnoreNothing, true, "NOTHING")
+	f(t, gqlhash.IgnoreInputs, true, "inputs")
+	f(t, gqlhash.IgnoreInputs, true, "Inputs")
+	f(t, gqlhash.IgnoreInputs, true, "INPUTS")
+	f(t, gqlhash.IgnoreVariables, true, "variables")
+	f(t, gqlhash.IgnoreVariables, true, "Variables")
+	f(t, gqlhash.IgnoreVariables, true, "VARIABLES")
 }
 
 func TestParseFormat(t *testing.T) {

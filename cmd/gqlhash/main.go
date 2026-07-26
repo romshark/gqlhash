@@ -35,6 +35,7 @@ const (
 	SupportedHashFunctions = "sha1, sha2, sha3, md5, blake2b, blake2s, " +
 		"blake3, fnv, fnv1a, xxh64, crc32, crc64"
 	SupportedOutputFormats = "hex, base32, base64, base64url"
+	SupportedIgnoreModes   = "nothing, inputs, variables"
 )
 
 func main() {
@@ -73,17 +74,16 @@ func run(
 			"crc32 uses the IEEE polynomial.\n"+
 			"crc64 uses ISO polynomial, defined in ISO 3309 and used in HDLC.",
 	)
-	fIgnoreInputs := cli.Bool(
-		"ignore-inputs",
-		false,
-		"Ignore input values so queries differing only in argument and\n"+
-			"default values produce the same hash.",
-	)
-	fIgnoreVariables := cli.Bool(
-		"ignore-variables",
-		false,
-		"Ignore variables entirely (definitions and usages). Implies\n"+
-			"-ignore-inputs.",
+	fIgnore := cli.String(
+		"ignore",
+		"nothing",
+		"Selects what to leave out of the hash "+
+			"("+SupportedIgnoreModes+").\n"+
+			"nothing leaves out formatting and comments only.\n"+
+			"inputs also leaves out every argument value, so queries differing\n"+
+			"only in their argument and default values hash alike.\n"+
+			"variables leaves out what inputs does and the variable definitions\n"+
+			"too, so a parameterized query matches its literal form.",
 	)
 	fVersion := cli.Bool(
 		"version",
@@ -120,6 +120,16 @@ func run(
 
 	// source names the input in a syntax error. Only -file gives a path that an
 	// editor can open, stdin gets the placeholder every compiler uses.
+	ignore, ok := parseIgnore(*fIgnore)
+	if !ok {
+		_, _ = fmt.Fprintf(
+			stderr, "unsupported ignore mode %q, use any of: "+
+				SupportedIgnoreModes+"\n",
+			*fIgnore,
+		)
+		return 2
+	}
+
 	var input []byte
 	var err error
 	source := "<stdin>"
@@ -145,16 +155,6 @@ func run(
 	hasher := newHasher(hashFunc)
 	if hasher == nil {
 		panic(fmt.Errorf("unsupported hash function: %q", *fHashFunction))
-	}
-
-	// -ignore-variables leaves out what -ignore-inputs leaves out, so the two
-	// flags together are the wider one.
-	ignore := gqlhash.IgnoreNothing
-	switch {
-	case *fIgnoreVariables:
-		ignore = gqlhash.IgnoreVariables
-	case *fIgnoreInputs:
-		ignore = gqlhash.IgnoreInputs
 	}
 
 	sum, errHash := gqlhash.AppendQueryHash(nil, hasher, gqlhash.Options{
@@ -238,6 +238,21 @@ func newHasher(f HashFunction) hash.Hash {
 		return crc64.New(crc64.MakeTable(crc64.ISO))
 	}
 	return nil
+}
+
+// parseIgnore returns the ignore mode s names, and false if it names none.
+// Unlike [parseFormat] and [parseHashFunction] it needs the second return:
+// the zero value of [gqlhash.Ignore] is the valid IgnoreNothing.
+func parseIgnore(s string) (gqlhash.Ignore, bool) {
+	switch {
+	case strings.EqualFold(s, "nothing"):
+		return gqlhash.IgnoreNothing, true
+	case strings.EqualFold(s, "inputs"):
+		return gqlhash.IgnoreInputs, true
+	case strings.EqualFold(s, "variables"):
+		return gqlhash.IgnoreVariables, true
+	}
+	return 0, false
 }
 
 func parseFormat(s string) Format {

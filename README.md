@@ -13,7 +13,7 @@ It's a [CLI tool](#usage) for scripts and CI pipelines and a Go package ([Compar
 
 It's [faster](#performance) than parsing a document into an AST and comparing the ASTs, and faster than comparing documents after minification.
 
-With [`-ignore-variables`](#ignoring-variables) the following two documents produce the same SHA1 hash, despite differing in formatting, comments, input values and variables:
+With [`-ignore=variables`](#ignoring-variables) the following two documents produce the same SHA1 hash, despite differing in formatting, comments, input values and variables:
 
 ```graphql
 {
@@ -46,7 +46,7 @@ query (
 
 gqlhash implements the GraphQL specification of [September 2025](https://spec.graphql.org/September2025/).
 
-`-ignore-inputs` ignores input values, so the following two documents produce the same hash despite differing argument values and value types:
+`-ignore=inputs` ignores input values, so the following two documents produce the same hash despite differing argument values and value types:
 
 ```graphql
 { object(x: 42, y: 1.0) { id } }
@@ -58,7 +58,7 @@ gqlhash implements the GraphQL specification of [September 2025](https://spec.gr
 
 Both produce the same hex-encoded SHA1 hash `f298bdffe58cc1791fb9bc37b338d472641ab59c`.
 
-`-ignore-variables` ignores what `-ignore-inputs` ignores and the variables on top of that, both their definitions and their usages. A parameterized document then matches its inline-value equivalent:
+`-ignore=variables` ignores what `-ignore=inputs` ignores and the variables on top of that, both their definitions and their usages. A parameterized document then matches its inline-value equivalent:
 
 ```graphql
 query ($x: Int) { object(x: $x) { id } }
@@ -88,7 +88,7 @@ Comparing the hash of a committed document against a generated one reports a cha
 
 ### Grouping operations
 
-With [`-ignore-inputs`](#ignoring-input-values) documents that differ only in their literal values share a hash, which groups them in logs and metrics by shape rather than by argument.
+With [`-ignore=inputs`](#ignoring-input-values) documents that differ only in their literal values share a hash, which groups them in logs and metrics by shape rather than by argument.
 
 ## Installation
 
@@ -212,24 +212,26 @@ Measured with `go test ./cmd/gqlhash -bench BenchmarkHashFunctions` on an Apple 
 
 ### Ignoring Input Values
 
-`-ignore-inputs` ignores input values, so documents that differ only in their argument or default values, whatever the value type, hash alike:
+`-ignore` selects what to leave out of the hash: `nothing` (the default), `inputs` or `variables`. Each one leaves out what the one before it leaves out, and more.
+
+`-ignore=inputs` ignores input values, so documents that differ only in their argument or default values, whatever the value type, hash alike:
 
 ```sh
 # Both print the same hash.
-echo '{ object(x: 42, y: 1.0) { id } }' | gqlhash -ignore-inputs
-echo '{ object(x: 7, y: "hello") { id } }' | gqlhash -ignore-inputs
+echo '{ object(x: 42, y: 1.0) { id } }' | gqlhash -ignore=inputs
+echo '{ object(x: 7, y: "hello") { id } }' | gqlhash -ignore=inputs
 ```
 
 Variable usages are ignored like literals: `object(x: $v)` and `object(x: 1)` hash alike. The variable signature is kept, so `query ($v: ID)` differs from an operation that declares no variables.
 
 ### Ignoring Variables
 
-`-ignore-variables` ignores variables entirely, both definitions and usages, on top of what `-ignore-inputs` ignores. A parameterized document then matches its inline-value equivalent:
+`-ignore=variables` ignores variables entirely, both definitions and usages, on top of what `-ignore=inputs` ignores. A parameterized document then matches its inline-value equivalent:
 
 ```sh
 # Both print the same hash.
-echo 'query ($x: Int) { object(x: $x) { id } }' | gqlhash -ignore-variables
-echo '{ object(x: 42) { id } }' | gqlhash -ignore-variables
+echo 'query ($x: Int) { object(x: $x) { id } }' | gqlhash -ignore=variables
+echo '{ object(x: 42) { id } }' | gqlhash -ignore=variables
 ```
 
 ## Performance
