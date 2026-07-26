@@ -67,49 +67,64 @@ var (
 type Error struct {
 	// Err is nil when there's no error. Otherwise it's [ErrUnexpectedEOF],
 	// [ErrUnexpectedToken], one of the errors wrapping [ErrUnexpectedToken], or
-	// the error of the [io.Writer]. A write error has no position, so Line is 0.
+	// the error of the [io.Writer].
 	Err error
 
-	// Offset is the byte index into the document where parsing stopped.
+	// Offset is the byte index into the document where parsing stopped, and -1
+	// where there is no position, which is the error of an [io.Writer]. Offset 0
+	// is the first byte of the document, so it can't stand for "no position".
+	//
+	// [Position] turns it into a line and a column.
 	Offset int
-
-	// Line and Column are the 1-based position of Offset.
-	// A column counts characters, not bytes.
-	Line, Column int
 }
+
+// IsErr returns true if e holds an error.
+func (e Error) IsErr() bool { return e.Err != nil }
 
 func (e Error) Error() string {
 	switch {
 	case e.Err == nil:
 		return "no error"
-	case e.Line == 0:
-		// No position: a write error or a hash mismatch.
+	case e.Offset < 0:
 		return e.Err.Error()
 	}
-	return fmt.Sprintf("%v (line %d, column %d)", e.Err, e.Line, e.Column)
+	return fmt.Sprintf("%v (offset %d)", e.Err, e.Offset)
 }
 
 func (e Error) Unwrap() error { return e.Err }
 
 // newError points err at offset, the position where the state machine stopped.
 func newError(src string, offset int, err error) Error {
-	offset = min(max(offset, 0), len(src))
-	head := src[:offset]
+	return Error{Err: err, Offset: min(max(offset, 0), len(src))}
+}
 
-	// CRLF is one LineTerminator, so a pair counts once
-	// (https://spec.graphql.org/September2025/#LineTerminator).
-	line := 1 + strings.Count(head, "\n") + strings.Count(head, "\r") -
+// Position returns the 1-based line and column of offset in s. A column counts
+// characters, not bytes: a malformed byte counts as one, as it does for the
+// parser. It returns 0, 0 for a negative offset, which is what an [Error] carries
+// where there is no position.
+//
+// Why not a method of [Error]: a line and a column are presentation, and finding
+// them scans the document up to offset. That belongs where the message is
+// formatted, not on the path that rejects a document.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#LineTerminator
+func Position[S ~string | ~[]byte](s S, offset int) (line, column int) {
+	if offset < 0 {
+		return 0, 0
+	}
+	src := asString(s)
+	head := src[:min(offset, len(src))]
+
+	// CRLF is one LineTerminator, so a pair counts once.
+	line = 1 + strings.Count(head, "\n") + strings.Count(head, "\r") -
 		strings.Count(head, "\r\n")
 
 	// A column counts the characters after the last LineTerminator.
-	// RuneCountInString takes a malformed byte for one character, as does the
-	// state machine.
 	lineStart := max(
 		strings.LastIndexByte(head, '\n'), strings.LastIndexByte(head, '\r'),
 	) + 1
-	column := utf8.RuneCountInString(head[lineStart:]) + 1
-
-	return Error{Err: err, Offset: offset, Line: line, Column: column}
+	return line, utf8.RuneCountInString(head[lineStart:]) + 1
 }
 
 // The hash prefixes introduce the tokens of the canonical form.

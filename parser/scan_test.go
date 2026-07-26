@@ -141,15 +141,26 @@ func TestError(t *testing.T) {
 		t.Errorf("expected nil; received %v", err)
 	}
 
+	if zero.IsErr() {
+		t.Error("expected the zero value to hold no error")
+	}
+
 	// An error without a position, like the hash mismatch of the root package.
-	noPos := parser.Error{Err: parser.ErrUnexpectedToken}
+	noPos := parser.Error{Err: parser.ErrUnexpectedToken, Offset: -1}
 	if s := noPos.Error(); s != parser.ErrUnexpectedToken.Error() {
 		t.Errorf("expected %q; received %q", parser.ErrUnexpectedToken, s)
 	}
 
 	_, err := parse(parser.Options{}, "{\n\t?}")
-	if s := err.Error(); s != "unexpected token (line 2, column 2)" {
+	if !err.IsErr() {
+		t.Error("expected an error")
+	}
+	if s := err.Error(); s != "unexpected token (offset 3)" {
 		t.Errorf("unexpected message: %q", s)
+	}
+	if line, column := parser.Position("{\n\t?}", err.Offset); line != 2 || column != 2 {
+		t.Errorf("expected line 2, column 2; received line %d, column %d",
+			line, column)
 	}
 	if !errors.Is(err, parser.ErrUnexpectedToken) {
 		t.Error("expected errors.Is to match the sentinel")

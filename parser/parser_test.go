@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"testing"
 
@@ -799,7 +800,8 @@ func TestParseTypeFormatting(t *testing.T) {
 	}
 }
 
-// TestErrorPosition pins the character a [parser.Error] points at.
+// TestErrorPosition pins the character the offset of a [parser.Error] points at,
+// as [parser.Position] reports it.
 func TestErrorPosition(t *testing.T) {
 	f := func(t *testing.T, expectLine, expectColumn int, input string) {
 		t.Helper()
@@ -807,12 +809,18 @@ func TestErrorPosition(t *testing.T) {
 		if e.Err == nil {
 			t.Fatalf("expected an error; received none")
 		}
-		if e.Line != expectLine || e.Column != expectColumn {
-			t.Errorf("expected line %d, column %d; received line %d, column %d;"+
-				" input: %q", expectLine, expectColumn, e.Line, e.Column, input)
-		}
 		if e.Offset < 0 || e.Offset > len(input) {
 			t.Errorf("offset %d out of range for %q", e.Offset, input)
+		}
+		line, column := parser.Position(input, e.Offset)
+		if line != expectLine || column != expectColumn {
+			t.Errorf("expected line %d, column %d; received line %d, column %d;"+
+				" input: %q", expectLine, expectColumn, line, column, input)
+		}
+		// Both input types report the same position.
+		if l, c := parser.Position([]byte(input), e.Offset); l != line || c != column {
+			t.Errorf("[]byte: expected line %d, column %d; received line %d,"+
+				" column %d", line, column, l, c)
 		}
 	}
 
@@ -1257,10 +1265,12 @@ func TestParseWriteError(t *testing.T) {
 		if !errors.Is(e, wantErr) {
 			t.Error("expected errors.Is to match the write error")
 		}
-		// A write error has no position in the document, so none is reported and
-		// the message stays the message of the writer.
-		if e.Offset != 0 || e.Line != 0 || e.Column != 0 {
-			t.Errorf("expected no position; received %+v", e)
+		// A write error has no position, so the message stays the message of the writer.
+		if e.Offset != -1 {
+			t.Errorf("expected offset -1; received %+v", e)
+		}
+		if line, column := parser.Position(input, e.Offset); line != 0 || column != 0 {
+			t.Errorf("expected no position; received line %d, column %d", line, column)
 		}
 		if e.Error() != wantErr.Error() {
 			t.Errorf("expected message %q; received %q", wantErr, e.Error())
@@ -1283,5 +1293,33 @@ func TestParseWriteError(t *testing.T) {
 		parser.HPrefField, "f", parser.HPrefSelectionSetEnd,
 	); r.String() != want {
 		t.Errorf("expected stream %q; received %q", want, r.String())
+	}
+}
+
+// TestPosition covers the offsets [parser.Position] takes that no [parser.Error] carries.
+func TestPosition(t *testing.T) {
+	const src = "{\n\tf\n}"
+
+	// A negative offset is what an error without a position carries.
+	for _, offset := range []int{-1, -2, math.MinInt} {
+		if line, column := parser.Position(src, offset); line != 0 || column != 0 {
+			t.Errorf("offset %d: expected 0, 0; received %d, %d",
+				offset, line, column)
+		}
+	}
+
+	// An offset past the end is clamped to the end.
+	end, endColumn := parser.Position(src, len(src))
+	for _, offset := range []int{len(src) + 1, math.MaxInt} {
+		line, column := parser.Position(src, offset)
+		if line != end || column != endColumn {
+			t.Errorf("offset %d: expected %d, %d; received %d, %d",
+				offset, end, endColumn, line, column)
+		}
+	}
+
+	// The first byte of an empty document is line 1, column 1.
+	if line, column := parser.Position("", 0); line != 1 || column != 1 {
+		t.Errorf("expected 1, 1; received %d, %d", line, column)
 	}
 }

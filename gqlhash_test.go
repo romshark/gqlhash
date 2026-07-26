@@ -497,6 +497,23 @@ func TestCompare(t *testing.T) {
 	f(t, gqlhash.ErrUnexpectedToken, `query($@dir {f}`, `query @dir {f}`)
 }
 
+// TestPosition covers the [gqlhash.Position] wrapper.
+func TestPosition(t *testing.T) {
+	const src = "query Q {\n  f(a: 01)\n}"
+	_, err := gqlhash.AppendQueryHash(nil, sha1.New(), gqlhash.Options{}, src)
+	if !err.IsErr() {
+		t.Fatal("expected an error")
+	}
+	if line, column := gqlhash.Position(src, err.Offset); line != 2 || column != 9 {
+		t.Errorf("expected line 2, column 9; received line %d, column %d",
+			line, column)
+	}
+	// A hash mismatch has no position.
+	if line, column := gqlhash.Position(src, -1); line != 0 || column != 0 {
+		t.Errorf("expected no position; received line %d, column %d", line, column)
+	}
+}
+
 func TestCompareErr(t *testing.T) {
 	received := gqlhash.Compare(sha1.New(), gqlhash.Options{}, []byte(``), []byte(`{x}`))
 	if received.Err != gqlhash.ErrUnexpectedEOF {
