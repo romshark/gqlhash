@@ -40,6 +40,11 @@ var _ Hash = hash.Hash(nil)
 // Options configures how a document is hashed (see [parser.Options]).
 type Options = parser.Options
 
+// Position returns the 1-based line and column of offset in s (see [parser.Position]).
+func Position[S ~string | ~[]byte](s S, offset int) (line, column int) {
+	return parser.Position(s, offset)
+}
+
 // Compare returns the zero [Error] if the documents a and b have the same hash,
 // and an [Error] carrying [ErrQueriesDiffer] if both are valid GraphQL but
 // differ. Applies options (see [Options]).
@@ -71,7 +76,7 @@ func CompareWithBuffer[S ~string | ~[]byte](
 		return err
 	}
 	if !bytes.Equal(buffer[:size], buffer[size:]) {
-		return Error{Err: ErrQueriesDiffer, Line: 1, Column: 1}
+		return Error{Err: ErrQueriesDiffer, Offset: -1}
 	}
 	return Error{}
 }

@@ -104,11 +104,12 @@ func TestRun(t *testing.T) {
 	f(t, 1, stderr("no input\n"), nil,
 		args(), "")
 
-	// GraphQL Syntax error. It points at where the document stopped.
-	f(t, 1, stderr("syntax error: unexpected EOF (line 1, column 2)\n"), nil,
+	// GraphQL syntax error. It points at where the document stopped, in the
+	// file:line:column: message format that editors and CI annotations parse.
+	f(t, 1, stderr("<stdin>:1:2: syntax error: unexpected EOF\n"), nil,
 		args(), "{")
-	f(t, 1, stderr("syntax error: unexpected token: malformed number"+
-		" (line 2, column 9)\n"), nil,
+	f(t, 1, stderr("<stdin>:2:9: syntax error: unexpected token:"+
+		" malformed number\n"), nil,
 		args(), "query Q {\n  f(a: 01)\n}")
 
 	// File input
@@ -119,6 +120,17 @@ func TestRun(t *testing.T) {
 	}
 	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
 		args(`-file`, testInputGraphQL), "this must not be read")
+
+	// A syntax error in a file names the file, which is what makes the position
+	// resolvable for an editor.
+	invalidGraphQL := filepath.Join(tempDir, "invalid.graphql")
+	if err := os.WriteFile(invalidGraphQL, []byte("query Q {\n  f(a: 01)\n}"),
+		0o644); err != nil {
+		t.Fatalf("writing test input file: %v", err)
+	}
+	f(t, 1, stderr(invalidGraphQL+":2:9: syntax error: unexpected token:"+
+		" malformed number\n"), nil,
+		args(`-file`, invalidGraphQL), "this must not be read")
 
 	// Input file doesn't exist
 	f(t, 1, stderr(`error reading file "non-existing-file.graphql": `+

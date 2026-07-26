@@ -118,9 +118,13 @@ func run(
 		return 2
 	}
 
+	// source names the input in a syntax error. Only -file gives a path that an
+	// editor can open, stdin gets the placeholder every compiler uses.
 	var input []byte
 	var err error
+	source := "<stdin>"
 	if *fFile != "" {
+		source = *fFile
 		if input, err = os.ReadFile(*fFile); err != nil {
 			_, _ = fmt.Fprintf(stderr, "error reading file %q: %v\n", *fFile, err)
 			return 1
@@ -148,7 +152,12 @@ func run(
 		IgnoreVariables: *fIgnoreVariables,
 	}, input)
 	if errHash.Err != nil {
-		_, _ = fmt.Fprintf(stderr, "syntax error: %v\n", errHash)
+		// A hash never fails a write, so the error is a syntax error and carries
+		// a position. The format is the one editors and CI annotations parse:
+		// file:line:column: message.
+		line, column := gqlhash.Position(input, errHash.Offset)
+		_, _ = fmt.Fprintf(stderr, "%s:%d:%d: syntax error: %v\n",
+			source, line, column, errHash.Err)
 		return 1
 	}
 

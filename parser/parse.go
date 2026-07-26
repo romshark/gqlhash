@@ -766,7 +766,7 @@ DONE:
 	p.buf = w.buf
 	if e != nil {
 		// A write error is no syntax error and has no position in src.
-		return Error{Err: e}
+		return Error{Err: e, Offset: -1}
 	}
 	return Error{}
 
