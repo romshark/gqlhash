@@ -159,3 +159,82 @@ func TestError(t *testing.T) {
 		t.Error("expected Unwrap to return the sentinel")
 	}
 }
+
+// TestParseNestingAttack reads testdata/nesting-attack.graphql, a document
+// shaped to make a parser recurse as deeply as it can be made to. The state
+// machine has no recursion to exhaust, so the only thing that grows with the
+// nesting is the value stack, one byte per open ListValue or InputObjectValue.
+func TestParseNestingAttack(t *testing.T) {
+	src := readTestdata(t, "nesting-attack.graphql")
+
+	// A parser with the smallest possible buffers must grow into it and agree
+	// with a default one.
+	want, err := parse(parser.Options{}, src)
+	if err.Err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The minified variant is the same document, so it must produce the very
+	// same canonical stream however deeply it nests.
+	min, errMin := parse(parser.Options{}, readTestdata(t, "nesting-attack.min.graphql"))
+	if errMin.Err != nil {
+		t.Fatalf("minified: unexpected error: %v", errMin)
+	}
+	if min != want {
+		t.Error("minified variant must produce the same stream")
+	}
+	r := new(recorder)
+	if e := parser.NewParser[string](1, 1).Parse(r, parser.Options{}, src); e.Err != nil {
+		t.Fatalf("minimal parser: %v", e)
+	}
+	if r.String() != want {
+		t.Error("minimal parser: stream differs")
+	}
+
+	// Reading it twice must not leave anything behind in the reused buffers.
+	p := parser.NewParser[string](0, 0)
+	for range 2 {
+		r := new(recorder)
+		if e := p.Parse(r, parser.Options{}, src); e.Err != nil {
+			t.Fatalf("unexpected error: %v", e)
+		}
+		if r.String() != want {
+			t.Error("stream differs between runs")
+		}
+	}
+	h := internal.NoopHash{}
+	_ = p.Parse(h, parser.Options{}, src)
+	if n := testing.AllocsPerRun(20, func() {
+		_ = p.Parse(h, parser.Options{}, src)
+	}); n != 0 {
+		t.Errorf("expected no allocations; received %v", n)
+	}
+
+	// Nesting far deeper than any recursive parser would survive.
+	const deep = 100_000
+	for _, input := range []string{
+		strings.Repeat("{a", deep) + "b" + strings.Repeat("}", deep),
+		"{f(a:" + strings.Repeat("[", deep) + "1" + strings.Repeat("]", deep) + ")}",
+		"{f(a:" + strings.Repeat("{k:", deep) + "1" + strings.Repeat("}", deep) + ")}",
+		"{f(a:" + strings.Repeat("[{k:", deep) + "1" + strings.Repeat("}]", deep) + ")}",
+		"query Q($v:" + strings.Repeat("[", deep) + "Int" +
+			strings.Repeat("]", deep) + "){f}",
+	} {
+		if e := p.Parse(internal.NoopHash{}, parser.Options{}, input); e.Err != nil {
+			t.Errorf("%d levels deep: %v", deep, e)
+		}
+	}
+
+	// Nesting that never closes is a syntax error, not a hang or a crash.
+	for _, input := range []string{
+		strings.Repeat("{a", deep),
+		"{f(a:" + strings.Repeat("[", deep),
+		"{f(a:" + strings.Repeat("{k:", deep),
+		"query Q($v:" + strings.Repeat("[", deep),
+	} {
+		if e := p.Parse(internal.NoopHash{}, parser.Options{}, input); e.Err !=
+			parser.ErrUnexpectedEOF {
+			t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, e)
+		}
+	}
+}

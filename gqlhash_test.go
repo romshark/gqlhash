@@ -601,11 +601,23 @@ var benchQueryBig string
 //go:embed "testdata/big.min.graphql"
 var benchQueryBigMinified string
 
+//go:embed "testdata/nesting-attack.graphql"
+var benchQueryNestingAttack string
+
+//go:embed "testdata/nesting-attack.min.graphql"
+var benchQueryNestingAttackMinified string
+
 var benchQueries = []struct {
 	Name      string
 	Schema    string
 	Formatted string
 	Minified  string
+
+	// SchemaInvalid excludes the query from everything that involves the
+	// schema. An adversarial document doesn't respect a schema, and a
+	// hash-based firewall has to reject it before validation gets to see it,
+	// which is exactly why hashing it must stay cheap.
+	SchemaInvalid bool
 }{
 	{
 		Name:   "blockstring",
@@ -644,6 +656,16 @@ var benchQueries = []struct {
 		Schema:    benchSchema,
 		Formatted: benchQueryBig,
 		Minified:  benchQueryBigMinified,
+	},
+	{
+		// Deeply nested selection sets, inline fragments, list values, input
+		// object values and list types, which is what makes a recursive parser
+		// recurse and gqlhash grow nothing but a counter and its value stack.
+		Name:          "nesting_attack",
+		Schema:        benchSchema,
+		Formatted:     benchQueryNestingAttack,
+		Minified:      benchQueryNestingAttackMinified,
+		SchemaInvalid: true,
 	},
 }
 
@@ -685,15 +707,17 @@ func TestBenchQueries(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parsing schema: %v", err)
 			}
-			if _, errs := vektah.LoadQueryWithRules(
-				schema, q.Formatted, nil,
-			); errs != nil {
-				t.Errorf("parsing formatted query: %v", errs)
-			}
-			if _, errs := vektah.LoadQueryWithRules(
-				schema, q.Minified, nil,
-			); errs != nil {
-				t.Errorf("parsing minified query: %v", errs)
+			if !q.SchemaInvalid {
+				if _, errs := vektah.LoadQueryWithRules(
+					schema, q.Formatted, nil,
+				); errs != nil {
+					t.Errorf("parsing formatted query: %v", errs)
+				}
+				if _, errs := vektah.LoadQueryWithRules(
+					schema, q.Minified, nil,
+				); errs != nil {
+					t.Errorf("parsing minified query: %v", errs)
+				}
 			}
 
 			errCmp := gqlhash.Compare(
@@ -745,6 +769,9 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 					}
 				})
 
+				if q.SchemaInvalid {
+					return
+				}
 				b.Run(name+"/vektah", func(b *testing.B) {
 					for range b.N {
 						_, errs := vektah.LoadQueryWithRules(schema, input, vektahRules)

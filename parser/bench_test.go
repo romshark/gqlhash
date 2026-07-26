@@ -8,9 +8,9 @@ import (
 	"github.com/romshark/gqlhash/parser"
 )
 
-// benchDocuments are the documents of testdata, formatted and minified.
 var benchDocuments = []string{
 	"medium.graphql", "medium.min.graphql", "big.graphql", "big.min.graphql",
+	"nesting-attack.graphql", "nesting-attack.min.graphql",
 }
 
 func readTestdata(tb testing.TB, name string) string {

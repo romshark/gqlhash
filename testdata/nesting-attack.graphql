@@ -1,0 +1,497 @@
+# A nesting attack: syntactically valid GraphQL that no schema would accept,
+# shaped to make a parser recurse as deeply as it can be made to.
+#
+# gqlhash reads it with one flat state machine, so the only state that grows with
+# the nesting is a selection set depth counter, a list type depth counter and one
+# byte per open ListValue or InputObjectValue on the preallocated value stack -
+# never a Go stack frame.
+#
+# nesting-attack.min.graphql is the same document minified: it must hash alike.
+
+# Selection sets, 128 deep.
+query NestedSelectionSets {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+b
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+
+# Inline fragments, 64 deep.
+query NestedInlineFragments {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+... on T {
+f
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+
+# ListValues, 128 deep.
+query NestedListValues {
+  f(a: [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ 1 ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ] ])
+}
+
+# InputObjectValues, 128 deep.
+query NestedInputObjects {
+  f(a: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: { k: 1 } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } })
+}
+
+# ListValues and InputObjectValues alternating, 64 pairs deep, which makes
+# every frame of the value stack differ from the one below it.
+query AlternatingValues {
+  f(a: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: [ { k: 1 } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ] } ])
+}
+
+# ListTypes, 32 deep.
+query NestedListTypes($v: [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ [ Int ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] ! ] !) {
+  f
+}
+
+# The same nesting spread over a fragment definition and its spread.
+fragment DeepFragment on T {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+a {
+b
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+
+query SpreadsDeepFragment {
+  ...DeepFragment
+}
