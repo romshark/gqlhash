@@ -4,7 +4,6 @@ import (
 	"crypto/sha1"
 	_ "embed"
 	"fmt"
-	"slices"
 	"testing"
 
 	"github.com/romshark/gqlhash"
@@ -20,32 +19,29 @@ import (
 // (https://spec.graphql.org/September2025/#UnicodeBOM).
 const bom = "\xef\xbb\xbf"
 
-// MockHash is a mock hasher that's recording all writes for testing purposes.
-type MockHash struct{ Records []string }
+// MockHash is a mock hasher that records the canonical token stream it's given
+// instead of hashing it, which is what makes the stream itself testable.
+type MockHash struct{ Stream []byte }
 
 func (m *MockHash) Write(data []byte) (int, error) {
-	m.Records = append(m.Records, string(data))
+	m.Stream = append(m.Stream, data...)
 	return len(data), nil
 }
 
-func (m *MockHash) Reset() {
-	m.Records = m.Records[:0]
-}
+func (m *MockHash) Reset() { m.Stream = m.Stream[:0] }
 
 func (m *MockHash) Sum(b []byte) []byte {
 	h := sha1.New()
-	for _, s := range m.Records {
-		_, _ = h.Write([]byte(s))
-	}
+	_, _ = h.Write(m.Stream)
 	return h.Sum(b)
 }
 
 var _ parser.Hash = new(MockHash)
 
 type HashTest struct {
-	Name          string
-	Inputs        []string
-	ExpectRecords []string
+	Name         string
+	Inputs       []string
+	ExpectStream string
 }
 
 var hashTests = []HashTest{
@@ -54,7 +50,7 @@ var hashTests = []HashTest{
 		Inputs: []string{
 			"{foo}", "{ foo }", "query { foo }",
 		},
-		ExpectRecords: MakeRecords(
+		ExpectStream: MakeStream(
 			parser.HPrefQuery,
 			parser.HPrefSelectionSet,
 			parser.HPrefField, "foo",
@@ -66,7 +62,7 @@ var hashTests = []HashTest{
 		Inputs: []string{
 			"{foo bar}", "{ foo  bar }", "query{foo,bar}",
 		},
-		ExpectRecords: MakeRecords(
+		ExpectStream: MakeStream(
 			parser.HPrefQuery,
 			parser.HPrefSelectionSet,
 			parser.HPrefField, "foo",
@@ -97,7 +93,7 @@ var hashTests = []HashTest{
   	line two.
   line three.""")}`,
 		},
-		ExpectRecords: MakeRecords(
+		ExpectStream: MakeStream(
 			parser.HPrefMutation,
 			"GQL",
 			parser.HPrefSelectionSet,
@@ -126,7 +122,7 @@ var hashTests = []HashTest{
 			// Extra leading blank line is trimmed like the first one.
 			`{ f(x: """` + "\n\n    a\n\n    b\n    " + `""") }`,
 		},
-		ExpectRecords: MakeRecords(
+		ExpectStream: MakeStream(
 			parser.HPrefQuery,
 			parser.HPrefSelectionSet,
 			parser.HPrefField, "f",
@@ -152,7 +148,7 @@ var hashTests = []HashTest{
 			}`,
 			`subscription Updates($x:T="жツ") @ok{updates(channel:$x limit:5){id}}`,
 		},
-		ExpectRecords: MakeRecords(
+		ExpectStream: MakeStream(
 			parser.HPrefSubscription,
 			"Updates",
 			parser.HPrefVariableDefinition, "x",
@@ -183,7 +179,7 @@ var hashTests = []HashTest{
 			`query Q($x: ` + bom + `[` + bom + `Int` + bom +
 				`!` + bom + `]` + bom + `!` + bom + `) { f }`,
 		},
-		ExpectRecords: MakeRecords(
+		ExpectStream: MakeStream(
 			parser.HPrefQuery,
 			"Q",
 			parser.HPrefVariableDefinition, "x",
@@ -210,7 +206,7 @@ var hashTests = []HashTest{
 			}`,
 			`{x @translate(lang:{codes:[EN,DE,FR,IT]})}`,
 		},
-		ExpectRecords: MakeRecords(
+		ExpectStream: MakeStream(
 			parser.HPrefQuery,
 			parser.HPrefSelectionSet,
 			parser.HPrefField, "x",
@@ -248,7 +244,7 @@ var hashTests = []HashTest{
 			}`,
 			`{x{...on A{a},...F,...@include(if:true){i}}},fragment F on X@dir{f}`,
 		},
-		ExpectRecords: MakeRecords(
+		ExpectStream: MakeStream(
 			parser.HPrefQuery,
 			parser.HPrefSelectionSet,
 			parser.HPrefField, "x",
@@ -281,7 +277,7 @@ var hashTests = []HashTest{
 		Inputs: []string{
 			"{x(f:3.14)}", "{ x ( f : 3.14 ) }",
 		},
-		ExpectRecords: MakeRecords(
+		ExpectStream: MakeStream(
 			parser.HPrefQuery,
 			parser.HPrefSelectionSet,
 			parser.HPrefField, "x",
@@ -298,25 +294,62 @@ func TestHash(t *testing.T) {
 			h := new(MockHash)
 			for _, input := range set.Inputs {
 				if _, err := gqlhash.AppendQueryHash(
-					nil, h, gqlhash.Options{}, []byte(input),
+					nil, h, gqlhash.Options{}, input,
 				); err.Err != nil {
 					t.Errorf("unexpected error: %v; input: %q", err, input)
 				}
-				if slices.Compare(set.ExpectRecords, h.Records) != 0 {
-					t.Errorf("expected:\n%v;\nreceived:\n%v; input: %q",
-						set.ExpectRecords, h.Records, input)
+				if string(h.Stream) != set.ExpectStream {
+					t.Errorf("expected:\n%q;\nreceived:\n%q; input: %q",
+						set.ExpectStream, h.Stream, input)
 				}
 			}
 		})
 	}
 }
 
-func MakeRecords(v ...any) []string {
-	s := make([]string, len(v))
-	for i, x := range v {
-		s[i] = fmt.Sprintf("%s", x)
+// MakeStream builds a canonical token stream from prefix bytes and text.
+func MakeStream(v ...any) string {
+	var b []byte
+	for _, x := range v {
+		switch x := x.(type) {
+		case byte:
+			b = append(b, x)
+		case string:
+			b = append(b, x...)
+		default:
+			panic(fmt.Sprintf("unsupported stream part: %T", x))
+		}
 	}
-	return s
+	return string(b)
+}
+
+// TestInputTypes makes sure the functions take a document as a string just as
+// well as a []byte, and that both produce the same hash.
+func TestInputTypes(t *testing.T) {
+	const a, b = `{ foo bar }`, "{\n\tfoo\n\tbar\n}"
+
+	if err := gqlhash.Compare(sha1.New(), gqlhash.Options{}, a, b); err.Err != nil {
+		t.Errorf("string: %v", err)
+	}
+	if err := gqlhash.Compare(
+		sha1.New(), gqlhash.Options{}, []byte(a), []byte(b),
+	); err.Err != nil {
+		t.Errorf("[]byte: %v", err)
+	}
+
+	sumString, err := gqlhash.AppendQueryHash(nil, sha1.New(), gqlhash.Options{}, a)
+	if err.Err != nil {
+		t.Fatalf("string: %v", err)
+	}
+	sumBytes, err := gqlhash.AppendQueryHash(
+		nil, sha1.New(), gqlhash.Options{}, []byte(a),
+	)
+	if err.Err != nil {
+		t.Fatalf("[]byte: %v", err)
+	}
+	if string(sumString) != string(sumBytes) {
+		t.Error("a string and a []byte document must hash alike")
+	}
 }
 
 func TestCompare(t *testing.T) {
@@ -748,7 +781,7 @@ func BenchmarkOptions(b *testing.B) {
 				b.ResetTimer()
 				for range b.N {
 					h.Reset()
-					if err := parser.ReadDocument(h, m.o, in); err.Err != nil {
+					if err := parser.Parse(h, m.o, in); err.Err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -802,7 +835,7 @@ func FuzzHashing(f *testing.F) {
 
 		var first error
 		for i, o := range opts {
-			err := parser.ReadDocument(h, o, in)
+			err := parser.Parse(h, o, in)
 			if i == 0 {
 				first = err
 			} else if fmt.Sprint(err) != fmt.Sprint(first) {

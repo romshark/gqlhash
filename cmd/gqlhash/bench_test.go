@@ -48,9 +48,14 @@ func BenchmarkHashFunctions(b *testing.B) {
 			b.ReportAllocs()
 
 			for b.Loop() {
-				buf, err = gqlhash.AppendQueryHash(buf[:0], hasher, gqlhash.Options{}, query)
-				if err != nil {
-					b.Fatal(err)
+				// errHash is no error: assigning it to one would make it
+				// non-nil even when there's no error.
+				var errHash gqlhash.Error
+				buf, errHash = gqlhash.AppendQueryHash(
+					buf[:0], hasher, gqlhash.Options{}, query,
+				)
+				if errHash.Err != nil {
+					b.Fatal(errHash)
 				}
 			}
 		})

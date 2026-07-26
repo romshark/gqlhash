@@ -38,14 +38,16 @@ type Options = parser.Options
 // carriage-returns. Err is [ErrQueriesDiffer] if the queries are valid GraphQL
 // but different. The order of fields must be preserved, otherwise a difference
 // will be observed. Applies options (see [Options]).
-func Compare(h hash.Hash, options Options, a, b []byte) Error {
+func Compare[S ~string | ~[]byte](h hash.Hash, options Options, a, b S) Error {
 	return CompareWithBuffer(nil, h, options, a, b)
 }
 
 // CompareWithBuffer is identical to [Compare] but allows reusing a buffer
 // to reduce dynamic memory allocation. Ideally, provide a buffer
 // with the capacity of `h.Size()*2`.
-func CompareWithBuffer(buffer []byte, h hash.Hash, options Options, a, b []byte) Error {
+func CompareWithBuffer[S ~string | ~[]byte](
+	buffer []byte, h hash.Hash, options Options, a, b S,
+) Error {
 	size := h.Size()
 	if buffer == nil {
 		buffer = make([]byte, 0, size*2)
@@ -69,12 +71,12 @@ func CompareWithBuffer(buffer []byte, h hash.Hash, options Options, a, b []byte)
 
 // AppendQueryHash parses s and appends its hash to buffer ignoring comments,
 // spaces, tabs, line-breaks and carriage-returns, applying options.
-func AppendQueryHash(buffer []byte, h Hash, options Options, s []byte) ([]byte, Error) {
+func AppendQueryHash[S ~string | ~[]byte](
+	buffer []byte, h Hash, options Options, s S,
+) ([]byte, Error) {
 	h.Reset()
-	// No SkipIgnorables here: the reader does it, and keeps the offsets of a
-	// [parser.Error] relative to s.
-	if err := parser.ReadDocument(h, options, s); err.Err != nil {
-		// Returning err as an error allocates, which is why the reader hands
+	if err := parser.Parse(h, options, s); err.Err != nil {
+		// Returning err as an error allocates, which is why the parser hands
 		// it back as it is.
 		return nil, err
 	}

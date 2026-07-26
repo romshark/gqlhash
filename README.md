@@ -112,7 +112,13 @@ This requires the latest version of [Go](https://go.dev) to be installed.
 > handling path. A Go server can use the functions
 > ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash#Compare),
 > [CompareWithBuffer](https://pkg.go.dev/github.com/romshark/gqlhash#CompareWithBuffer)
-> and [AppendQueryHash](https://pkg.go.dev/github.com/romshark/gqlhash#AppendQueryHash)).
+> and [AppendQueryHash](https://pkg.go.dev/github.com/romshark/gqlhash#AppendQueryHash)),
+> which all accept both `string` and `[]byte` documents.
+> For the last bit of throughput, keep a
+> [parser.Parser](https://pkg.go.dev/github.com/romshark/gqlhash/parser#Parser)
+> per goroutine and call
+> [Parse](https://pkg.go.dev/github.com/romshark/gqlhash/parser#Parser.Parse)
+> on it: it reuses its buffers instead of taking them from a global pool.
 
 
 gqlhash can read the GraphQL query from stdin until EOF and
@@ -193,23 +199,23 @@ echo '{foo bar}' | gqlhash -hash sha2 -format base64
 
 Hashing `testdata/big.graphql` (2854 bytes), sorted fastest first.
 
-| `-hash`   | time     | throughput |
-| --------- | -------- | ---------- |
-| `xxh64`   | 4.35 µs  | 627 MiB/s  |
-| `fnv1a`   | 4.75 µs  | 573 MiB/s  |
-| `fnv`     | 4.77 µs  | 571 MiB/s  |
-| `sha2`    | 5.19 µs  | 524 MiB/s  |
-| `blake2b` | 5.58 µs  | 488 MiB/s  |
-| `crc32`   | 5.59 µs  | 487 MiB/s  |
-| `sha1`    | 5.78 µs  | 471 MiB/s  |
-| `blake2s` | 6.15 µs  | 442 MiB/s  |
-| `md5`     | 6.21 µs  | 438 MiB/s  |
-| `crc64`   | 6.27 µs  | 435 MiB/s  |
-| `blake3`  | 6.32 µs  | 431 MiB/s  |
-| `sha3`    | 12.82 µs | 212 MiB/s  |
+| `-hash`   | time    | throughput  |
+| --------- | ------- | ----------- |
+| `xxh64`   | 2.04 µs | 1336 MiB/s  |
+| `crc32`   | 2.10 µs | 1297 MiB/s  |
+| `sha1`    | 2.39 µs | 1137 MiB/s  |
+| `sha2`    | 2.40 µs | 1135 MiB/s  |
+| `crc64`   | 2.72 µs | 999 MiB/s   |
+| `blake2b` | 3.26 µs | 834 MiB/s   |
+| `fnv`     | 3.57 µs | 762 MiB/s   |
+| `fnv1a`   | 3.62 µs | 751 MiB/s   |
+| `blake3`  | 3.77 µs | 721 MiB/s   |
+| `md5`     | 3.93 µs | 693 MiB/s   |
+| `blake2s` | 4.06 µs | 670 MiB/s   |
+| `sha3`    | 4.85 µs | 561 MiB/s   |
 
-Measured with `go test ./cmd/gqlhash -bench BenchmarkHashFunctions` on an Intel
-Xeon w5-2455X, Go 1.26.5, `GOMAXPROCS=1`, over 8 runs.
+Measured with `go test ./cmd/gqlhash -bench BenchmarkHashFunctions` on an Apple
+M4 Pro, Go 1.26.5, `GOMAXPROCS=1`, over 8 runs.
 </details>
 
 ### Ignoring Input Values
@@ -242,11 +248,11 @@ echo '{ object(x: 42) { id } }' | gqlhash -ignore-variables
 ## Performance
 
 - Compared to plain SHA1 hashing gqlhash performance overhead is just **~4x**
-  on average across benchmarks (min: ~2x, max: ~6x).
+  on average across benchmarks (min: ~2.5x, max: ~5x).
 - Compared to parsing the queries into AST with
   [vektah/gqlparser/v2](https://github.com/vektah/gqlparser).
-  gqlhash shows a significant advantage of **~64x**
-  on average across benchmarks (min: ~18x; max: ~144x).
+  gqlhash shows a significant advantage of **~53x**
+  on average across benchmarks (min: ~18x; max: ~113x).
   The difference can mainly be explained by the fact that gqlhash **doesn't allocate**,
   compared to hundreds of memory allocations for the same queries by gqlparser/v2.
 
@@ -255,43 +261,43 @@ See benchmark results below.
 <details>
 
 ```
-goos: linux
-goarch: amd64
+goos: darwin
+goarch: arm64
 pkg: github.com/romshark/gqlhash
-cpu: Intel(R) Xeon(R) w5-2455X
-BenchmarkReferenceSHA1/blockstring/minified/direct-24           11474282                96.73 ns/op            0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/blockstring/minified/gqlhash-24           2948920               399.6 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/blockstring/minified/vektah-24             44791             26185 ns/op           10905 B/op        195 allocs/op
+cpu: Apple M4 Pro
+BenchmarkReferenceSHA1/blockstring/minified/direct-14         	27854104	        44.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/minified/gqlhash-14        	 5863072	       208.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/minified/vektah-14         	  110545	     10269 ns/op	   10905 B/op	     195 allocs/op
 
-BenchmarkReferenceSHA1/blockstring/formatted/direct-24          12384094                94.37 ns/op            0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/blockstring/formatted/gqlhash-24          2730768               434.1 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/blockstring/formatted/vektah-24            43952             25329 ns/op           10953 B/op        195 allocs/op
+BenchmarkReferenceSHA1/blockstring/formatted/direct-14        	27563870	        42.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/formatted/gqlhash-14       	 5406764	       225.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/formatted/vektah-14        	  103300	     10666 ns/op	   10953 B/op	     195 allocs/op
 
-BenchmarkReferenceSHA1/tiny/minified/direct-24                  17291330                71.16 ns/op            0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/tiny/minified/gqlhash-24                  7187283               154.9 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/tiny/minified/vektah-24                    55484             22294 ns/op            9449 B/op        174 allocs/op
+BenchmarkReferenceSHA1/tiny/minified/direct-14                	37450552	        33.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/minified/gqlhash-14               	14820181	        81.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/minified/vektah-14                	  122278	      9244 ns/op	    9449 B/op	     174 allocs/op
 
-BenchmarkReferenceSHA1/tiny/formatted/direct-24                 16904895                68.23 ns/op            0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/tiny/formatted/gqlhash-24                6539211               178.3 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/tiny/formatted/vektah-24                   54963             22998 ns/op            9449 B/op        174 allocs/op
+BenchmarkReferenceSHA1/tiny/formatted/direct-14               	39172748	        31.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/formatted/gqlhash-14              	13722361	        87.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/formatted/vektah-14               	  132538	      9356 ns/op	    9449 B/op	     174 allocs/op
 
-BenchmarkReferenceSHA1/medium/minified/direct-24                 7915527               147.7 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/medium/minified/gqlhash-24               1370991               885.0 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/medium/minified/vektah-24                 32888             37685 ns/op           17361 B/op        285 allocs/op
+BenchmarkReferenceSHA1/medium/minified/direct-14              	14299480	        82.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/minified/gqlhash-14             	 3132934	       407.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/minified/vektah-14              	   83083	     13969 ns/op	   17361 B/op	     285 allocs/op
 
-BenchmarkReferenceSHA1/medium/formatted/direct-24                5031510               231.2 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/medium/formatted/gqlhash-24              1043098              1171 ns/op               0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/medium/formatted/vektah-24               30879             39050 ns/op           17977 B/op        300 allocs/op
+BenchmarkReferenceSHA1/medium/formatted/direct-14             	 8527635	       137.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/formatted/gqlhash-14            	 2370624	       523.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/formatted/vektah-14             	   76917	     15946 ns/op	   17977 B/op	     300 allocs/op
 
-BenchmarkReferenceSHA1/big/minified/direct-24                    1307736               906.4 ns/op             0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/big/minified/gqlhash-24                   213897              5146 ns/op               0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/big/minified/vektah-24                     9511            106314 ns/op           53360 B/op        839 allocs/op
+BenchmarkReferenceSHA1/big/minified/direct-14                 	 1979839	       595.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/minified/gqlhash-14                	  629686	      1918 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/minified/vektah-14                 	   30684	     39336 ns/op	   53360 B/op	     839 allocs/op
 
-BenchmarkReferenceSHA1/big/formatted/direct-24                    897585              1291 ns/op               0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/big/formatted/gqlhash-24                  186909              6148 ns/op               0 B/op          0 allocs/op
-BenchmarkReferenceSHA1/big/formatted/vektah-24                    11332            112696 ns/op           54880 B/op        877 allocs/op
+BenchmarkReferenceSHA1/big/formatted/direct-14                	 1402633	       868.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/formatted/gqlhash-14               	  495696	      2502 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/formatted/vektah-14                	   26110	     44907 ns/op	   54880 B/op	     877 allocs/op
 PASS
-ok      github.com/romshark/gqlhash     36.408s
+ok  	github.com/romshark/gqlhash	34.943s
 ```
 
 </details>
