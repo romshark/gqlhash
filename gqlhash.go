@@ -40,6 +40,16 @@ var _ Hash = hash.Hash(nil)
 // Options configures how a document is hashed (see [parser.Options]).
 type Options = parser.Options
 
+// Ignore says how much of the input a document is hashed without
+// (see [parser.Ignore]).
+type Ignore = parser.Ignore
+
+const (
+	IgnoreNothing   = parser.IgnoreNothing
+	IgnoreInputs    = parser.IgnoreInputs
+	IgnoreVariables = parser.IgnoreVariables
+)
+
 // Position returns the 1-based line and column of offset in s (see [parser.Position]).
 func Position[S ~string | ~[]byte](s S, offset int) (line, column int) {
 	return parser.Position(s, offset)

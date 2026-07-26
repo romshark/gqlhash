@@ -756,11 +756,11 @@ func TestParseTypeFormatting(t *testing.T) {
 		t.Error("formatting must not change the hash of a nested list type")
 	}
 
-	// [parser.Options.IgnoreInputs] keeps the variable signature, so the type
+	// [parser.IgnoreInputs] keeps the variable signature, so the type
 	// is still hashed and must still be normalized. Under
-	// [parser.Options.IgnoreVariables] the whole definition is dropped, which
+	// [parser.IgnoreVariables] the whole definition is dropped, which
 	// makes even structurally different types equal.
-	ignoreInputs := parser.Options{IgnoreInputs: true}
+	ignoreInputs := parser.Options{Ignore: parser.IgnoreInputs}
 	if hash(t, ignoreInputs, canonical) !=
 		hash(t, ignoreInputs, `query Q($x: [ Int ! ] !) { f }`) {
 		t.Error("IgnoreInputs must normalize the type as well")
@@ -768,7 +768,7 @@ func TestParseTypeFormatting(t *testing.T) {
 	if hash(t, ignoreInputs, canonical) == hash(t, ignoreInputs, `query Q($x: Int) { f }`) {
 		t.Error("IgnoreInputs must keep distinguishing types")
 	}
-	ignoreVars := parser.Options{IgnoreVariables: true}
+	ignoreVars := parser.Options{Ignore: parser.IgnoreVariables}
 	if hash(t, ignoreVars, canonical) != hash(t, ignoreVars, `query Q($x: Int) { f }`) {
 		t.Error("IgnoreVariables must drop the type entirely")
 	}
@@ -971,7 +971,7 @@ func TestHPrefInStringValue(t *testing.T) {
 
 func TestParseIgnoreInputs(t *testing.T) {
 	// Exercises every value kind so the
-	// [parser.Options.IgnoreInputs] branches are covered.
+	// [parser.IgnoreInputs] branches are covered.
 	const dense = `query Q($v: Int = 7) {
 		f(
 			i: 42, fl: 3.14, s: "text", bs: """block""",
@@ -993,7 +993,7 @@ func TestParseIgnoreInputs(t *testing.T) {
 		f(i: 42) @dir(k: 9) { sub extra }
 	}`
 
-	ignore := parser.Options{IgnoreInputs: true}
+	ignore := parser.Options{Ignore: parser.IgnoreInputs}
 	full := parser.Options{}
 
 	// Ignoring inputs: identical structure with different values must match.
@@ -1004,7 +1004,7 @@ func TestParseIgnoreInputs(t *testing.T) {
 	if hash(t, ignore, dense) == hash(t, ignore, denseExtraField) {
 		t.Error("structure hash must still distinguish structure")
 	}
-	// Every argument value collapses entirely under [parser.Options.IgnoreInputs],
+	// Every argument value collapses entirely under [parser.IgnoreInputs],
 	// not just the content but the type and container structure too. Scalars of any type,
 	// lists of any length (incl. empty), input objects with any fields, and
 	// variable usages (nested or not) all become equivalent to a bare value.
@@ -1022,7 +1022,7 @@ func TestParseIgnoreInputs(t *testing.T) {
 		}
 	}
 	// The variable signature is kept, though: a query declaring a variable
-	// differs from one that doesn't (the boundary with [parser.Options.IgnoreVariables]).
+	// differs from one that doesn't (the boundary with [parser.IgnoreVariables]).
 	if hash(t, ignore, `query ($v: Int) { f }`) == hash(t, ignore, `query { f }`) {
 		t.Error("IgnoreInputs must keep the variable signature")
 	}
@@ -1046,9 +1046,9 @@ func TestParseIgnoreInputs(t *testing.T) {
 }
 
 func TestParseIgnoreVariables(t *testing.T) {
-	ignoreVars := parser.Options{IgnoreVariables: true}
+	ignoreVars := parser.Options{Ignore: parser.IgnoreVariables}
 
-	// [parser.Options.IgnoreVariables] is a superset of [parser.Options.IgnoreInputs]:
+	// [parser.IgnoreVariables] is a superset of [parser.IgnoreInputs]:
 	// variable definitions, variable usages AND literal input values all collapse.
 	// The `@dep` directive and default value on the base also exercise the
 	// parse-but-don't-hash path.
@@ -1070,9 +1070,9 @@ func TestParseIgnoreVariables(t *testing.T) {
 		t.Error("IgnoreVariables must ignore the variable definition signature")
 	}
 
-	// Superset check: whatever [parser.Options.IgnoreInputs] makes equal,
-	// [parser.Options.IgnoreVariables] does too.
-	inputs := parser.Options{IgnoreInputs: true}
+	// Superset check: whatever [parser.IgnoreInputs] makes equal,
+	// [parser.IgnoreVariables] does too.
+	inputs := parser.Options{Ignore: parser.IgnoreInputs}
 	q1, q2 := `{ f(a: 1, b: ENUM) }`, `{ f(a: 2, b: OTHER) }`
 	if hash(t, inputs, q1) != hash(t, inputs, q2) {
 		t.Fatal("precondition: IgnoreInputs should equate q1 and q2")
@@ -1322,4 +1322,48 @@ func TestPosition(t *testing.T) {
 	if line, column := parser.Position("", 0); line != 1 || column != 1 {
 		t.Errorf("expected 1, 1; received %d, %d", line, column)
 	}
+}
+
+// TestIgnoreDocExamples pins the examples documented on [parser.IgnoreInputs] and
+// [parser.IgnoreVariables]. A doc example is a claim about the hash,
+// so it belongs in a test.
+func TestIgnoreDocExamples(t *testing.T) {
+	equal := func(t *testing.T, ignore parser.Ignore, documents ...string) {
+		t.Helper()
+		o := parser.Options{Ignore: ignore}
+		want := hash(t, o, documents[0])
+		for _, d := range documents[1:] {
+			if got := hash(t, o, d); got != want {
+				t.Errorf("expected %q to hash like %q", d, documents[0])
+			}
+		}
+	}
+	differ := func(t *testing.T, ignore parser.Ignore, a, b string) {
+		t.Helper()
+		o := parser.Options{Ignore: ignore}
+		if hash(t, o, a) == hash(t, o, b) {
+			t.Errorf("expected %q and %q to differ", a, b)
+		}
+	}
+
+	// [parser.IgnoreInputs].
+	equal(t, parser.IgnoreInputs,
+		`{ user(id: 1, role: ADMIN) { name } }`,
+		`{ user(id: 42, role: GUEST) { name } }`,
+		`{ user(id: "42", role: GUEST) { name } }`)
+	differ(t, parser.IgnoreInputs,
+		`{ user(id: 1, role: ADMIN) { name } }`,
+		`query($id: ID) { user(id: $id, role: GUEST) { name } }`)
+	// The name of an argument is kept, so dropping the argument still differs.
+	differ(t, parser.IgnoreInputs, `{ f(x: 1) }`, `{ f }`)
+
+	// [parser.IgnoreVariables].
+	equal(t, parser.IgnoreVariables,
+		`query Q($x: Int = 1) { f(a: $x) }`,
+		`query Q($y: String) { f(a: $y) }`,
+		`query Q { f(a: 1) }`)
+	equal(t, parser.IgnoreVariables,
+		`query Q($x: Int) { f(x: $x) }`,
+		`query Q { f(x: 1) }`)
+	differ(t, parser.IgnoreVariables, `{ f(x: 1) }`, `{ f }`)
 }

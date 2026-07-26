@@ -85,8 +85,8 @@ func BenchmarkParseOptions(b *testing.B) {
 		o    parser.Options
 	}{
 		{"full", parser.Options{}},
-		{"ignore_inputs", parser.Options{IgnoreInputs: true}},
-		{"ignore_variables", parser.Options{IgnoreVariables: true}},
+		{"ignore_inputs", parser.Options{Ignore: parser.IgnoreInputs}},
+		{"ignore_variables", parser.Options{Ignore: parser.IgnoreVariables}},
 	}
 	src := readTestdata(b, "big.graphql")
 	for _, m := range modes {

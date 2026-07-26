@@ -527,7 +527,7 @@ func TestCompareErr(t *testing.T) {
 }
 
 func TestCompareOptions(t *testing.T) {
-	ignore := gqlhash.Options{IgnoreInputs: true}
+	ignore := gqlhash.Options{Ignore: gqlhash.IgnoreInputs}
 	f := func(t *testing.T, expect error, a, b string) {
 		t.Helper()
 		if got := gqlhash.Compare(
@@ -586,7 +586,7 @@ func TestAppendQueryHashOptions(t *testing.T) {
 	}
 	structure := func(s []byte) string {
 		h, err := gqlhash.AppendQueryHash(
-			nil, sha1.New(), gqlhash.Options{IgnoreInputs: true}, s,
+			nil, sha1.New(), gqlhash.Options{Ignore: gqlhash.IgnoreInputs}, s,
 		)
 		if err.Err != nil {
 			t.Fatal(err)
@@ -814,8 +814,8 @@ func BenchmarkOptions(b *testing.B) {
 		o    parser.Options
 	}{
 		{"full", parser.Options{}},
-		{"ignore_inputs", parser.Options{IgnoreInputs: true}},
-		{"ignore_variables", parser.Options{IgnoreVariables: true}},
+		{"ignore_inputs", parser.Options{Ignore: parser.IgnoreInputs}},
+		{"ignore_variables", parser.Options{Ignore: parser.IgnoreVariables}},
 	}
 	for _, q := range benchQueries {
 		in := []byte(q.Formatted)
@@ -863,10 +863,9 @@ func FuzzHashing(f *testing.F) {
 	// All option modes share the same parsing logic, so none may panic and they
 	// must agree on whether the input is valid (only the hashing differs).
 	opts := []parser.Options{
-		{},
-		{IgnoreInputs: true},
-		{IgnoreVariables: true},
-		{IgnoreInputs: true, IgnoreVariables: true},
+		{Ignore: parser.IgnoreNothing},
+		{Ignore: parser.IgnoreInputs},
+		{Ignore: parser.IgnoreVariables},
 	}
 	f.Fuzz(func(t *testing.T, a string) {
 		in := []byte(a)
@@ -875,7 +874,7 @@ func FuzzHashing(f *testing.F) {
 		// Public wrappers must not panic.
 		_, _ = gqlhash.AppendQueryHash(nil, h, gqlhash.Options{}, in)
 		_, _ = gqlhash.AppendQueryHash(
-			nil, h, gqlhash.Options{IgnoreInputs: true}, in,
+			nil, h, gqlhash.Options{Ignore: gqlhash.IgnoreInputs}, in,
 		)
 
 		var first error
