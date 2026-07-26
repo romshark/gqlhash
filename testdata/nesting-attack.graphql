@@ -1,13 +1,14 @@
-# A nesting attack: syntactically valid GraphQL that no schema would accept,
-# shaped to make a parser recurse as deeply as it can be made to.
+# A nesting attack: syntactically valid GraphQL that no schema accepts, nested as
+# deeply as a parser can be made to nest.
 #
-# gqlhash reads it with one flat state machine, so the only state that grows with
-# the nesting is a selection set depth counter, a list type depth counter and one
-# byte per open ListValue or InputObjectValue on the preallocated value stack -
-# never a Go stack frame.
+# Nothing grows with the nesting but a selection set depth counter, a list type
+# depth counter and one byte per open ListValue or InputObjectValue on the value
+# stack.
 #
-# nesting-attack.min.graphql is the same document minified: it must hash alike.
-
+# nesting-attack.min.graphql is the same document minified and hashes alike.
+#
+# Why it's not in the schema-validated benchmark set: a hash-based firewall
+# rejects a document like this before schema validation sees it.
 # Selection sets, 128 deep.
 query NestedSelectionSets {
 a {

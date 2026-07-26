@@ -2,8 +2,8 @@ package parser
 
 import "unicode/utf8"
 
-// bom is the UTF-8 encoding of UnicodeBOM (U+FEFF). bomFirstByte is kept
-// separate so [skipIgnorables] can dispatch on a single byte.
+// bom is the UTF-8 encoding of UnicodeBOM (U+FEFF). bomFirstByte is its first
+// byte, which [skipIgnorables] dispatches on.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#UnicodeBOM
@@ -41,8 +41,8 @@ func hasPrefixAt(s string, i int, prefix string) bool {
 	return len(s)-i >= len(prefix) && s[i:i+len(prefix)] == prefix
 }
 
-// isKeywordAt reports whether the whole word kw begins at s[i] and isn't just
-// the start of a longer name, so the enum "nullable" won't match "null".
+// isKeywordAt reports whether the whole word kw begins at s[i]. A longer name
+// doesn't match: the enum "nullable" is no "null".
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#Name
@@ -59,16 +59,14 @@ func isKeywordAt(s string, i int, kw string) bool {
 // value. Surrogates, overlong encodings, truncated sequences and values above
 // U+10FFFF all return 0.
 //
-// s[i] must be a byte of at least [utf8.RuneSelf]: the scanners only ask about
-// the bytes their lookup tables single out, and an ASCII byte is a
-// SourceCharacter of length one anyway.
+// Requirement: s[i] is at least [utf8.RuneSelf]. An ASCII byte is a
+// SourceCharacter one byte wide and no scanner asks.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#SourceCharacter
 func sourceCharacterLen(s string, i int) int {
-	// DecodeRuneInString reports every malformed encoding as (RuneError, 1),
-	// which a literal U+FFFD can't be confused with because it decodes to
-	// 3 bytes.
+	// DecodeRuneInString reports every malformed encoding as (RuneError, 1).
+	// A literal U+FFFD decodes to 3 bytes and is told apart by the size.
 	if r, size := utf8.DecodeRuneInString(s[i:]); r != utf8.RuneError || size > 1 {
 		return size
 	}
@@ -76,7 +74,7 @@ func sourceCharacterLen(s string, i int) int {
 }
 
 // nameEnd returns the index of the first byte at or after i that is no
-// NameContinue, which is where the Name that starts before i ends.
+// NameContinue.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#NameContinue
@@ -117,9 +115,8 @@ func nameEnd(s string, i int) int {
 // skipIgnorables returns the index of the first byte at or after i that isn't
 // part of an Ignored token.
 //
-// It stops at the first byte inside a comment that isn't valid UTF-8 as well.
-// Such a byte is no CommentChar, so the comment ends there and the caller
-// reports the leftover as an unexpected token.
+// A byte inside a comment that is no CommentChar, which is any byte that breaks
+// UTF-8, ends the skip. The caller reports it as an unexpected token.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#sec-Line-Terminators
@@ -127,18 +124,16 @@ func nameEnd(s string, i int) int {
 //   - https://spec.graphql.org/September2025/#sec-White-Space
 //   - https://spec.graphql.org/September2025/#UnicodeBOM
 func skipIgnorables(s string, i int) int {
-	// Between most tokens of a minified document there's nothing to skip at all.
-	// That case is what this function is kept small enough to be inlined into the
-	// state machine for, it's the hottest check of the parser.
+	// Why split in two: most tokens of a minified document have nothing to skip,
+	// and this body stays small enough to be inlined into the state machine.
 	if i < len(s) && lutIgnorable[s[i]] != ignorableNone {
 		return skipIgnorablesSlow(s, i)
 	}
 	return i
 }
 
-// skipIgnorablesSlow is [skipIgnorables] for the case that there is something to
-// skip, which includes the Ignored tokens wider than a byte: a Comment and a
-// UnicodeBOM.
+// skipIgnorablesSlow skips one or more Ignored tokens, including those wider
+// than one byte: a Comment and a UnicodeBOM.
 func skipIgnorablesSlow(s string, i int) int {
 	for {
 		// WhiteSpace, LineTerminators and commas, which are Ignored as well.
@@ -186,9 +181,9 @@ func skipIgnorablesSlow(s string, i int) int {
 	DISPATCH:
 		switch s[i] {
 		case '#':
-			// A CommentChar is a SourceCharacter but no LineTerminator, so the
-			// comment ends at the line break, which the loop above then skips
-			// (https://spec.graphql.org/September2025/#CommentChar).
+			// A CommentChar is a SourceCharacter but no LineTerminator
+			// (https://spec.graphql.org/September2025/#CommentChar). The comment
+			// ends at the line break, which the loop above skips.
 			i++
 			for {
 				for i+8 <= len(s) {
@@ -258,8 +253,10 @@ func skipIgnorablesSlow(s string, i int) int {
 
 // scanNumber scans the IntValue or FloatValue that begins at s[i], which must be
 // a NegativeSign or a Digit. It returns the index right after the number and
-// whether it's a FloatValue. A number that breaks a lexical rule is one broken
-// number and not several tokens, so a Digit, '.' or NameStart may not follow it.
+// whether it's a FloatValue.
+//
+// A Digit, '.' or NameStart may not follow the number: a number that breaks a
+// lexical rule is one broken token, not several valid ones.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#IntValue
@@ -313,8 +310,6 @@ func scanNumber(s string, i int) (end int, isFloat bool, errPos int, err error) 
 	}
 
 	if i < len(s) && (lutDigit[s[i]] || s[i] == '.' || lutNameStart[s[i]]) {
-		// A Digit, '.' or NameStart still belongs to the number, which makes it
-		// one broken number instead of two tokens.
 		return i, isFloat, i, ErrMalformedNumber
 	}
 	return i, isFloat, 0, nil
@@ -322,8 +317,7 @@ func scanNumber(s string, i int) (end int, isFloat bool, errPos int, err error) 
 
 // scanStringLine scans the contents of a single-line StringValue. i must be the
 // index right after the opening '"'. It returns the index right after the
-// closing '"' and whether the value holds any escape sequence, which tells
-// [writer.stringValue] whether it can write the source as it is.
+// closing '"' and whether the value holds any escape sequence.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#sec-String-Value
@@ -395,8 +389,8 @@ func scanStringLine(s string, i int) (end int, esc bool, errPos int, err error) 
 				if s[i+2] == '{' {
 					// Variable-width form `\u{HexDigit+}` (spec of September 2025).
 					j := i + 3
-					// Leading zeros are permitted, so accumulate but stop growing
-					// the value once it's certainly out of range to avoid overflow.
+					// Leading zeros are permitted. Stop accumulating once out of
+					// range: v must not overflow.
 					var v uint32
 					outOfRange := false
 					for ; j < len(s) && lutHex[s[j]]; j++ {
@@ -430,8 +424,8 @@ func scanStringLine(s string, i int) (end int, esc bool, errPos int, err error) 
 				leading := fixedWidthEscapeValue(s[i+2:])
 				if isLeadingSurrogate(leading) {
 					// A Leading Surrogate is only legal as the first half of a
-					// surrogate pair, which must be a second fixed-width escape
-					// holding a Trailing Surrogate.
+					// surrogate pair. The second half is another fixed-width
+					// escape holding a Trailing Surrogate.
 					if i+6 >= len(s) {
 						return i, esc, i + 1, ErrUnexpectedEOF
 					}
@@ -570,8 +564,7 @@ func scanStringBlock(s string, i int) (
 			// Ignore WhiteSpace.
 		default:
 			// A BlockStringCharacter is any SourceCharacter, control ones
-			// included. The escaping of the value keeps them off the hash
-			// prefixes.
+			// included.
 			n := sourceCharacterLen(s, i)
 			if n == 0 {
 				return i, prefixLen, false, i, ErrMalformedUTF8
@@ -717,8 +710,8 @@ var lutStringEscape = func() (t [256]bool) {
 	return t
 }()
 
-// lutStringEscapeSeq keeps every escape sequence ready, so writing one needs no
-// arithmetic. Adding 0x40 turns a control byte into a printable character.
+// lutStringEscapeSeq holds the escape sequence of every byte.
+// Adding 0x40 turns a control byte into a printable character.
 var lutStringEscapeSeq = func() (t [256][2]byte) {
 	for i := range t {
 		t[i] = [2]byte{'\\', byte(i) + 0x40}

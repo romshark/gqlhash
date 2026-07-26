@@ -143,8 +143,6 @@ func run(
 		panic(fmt.Errorf("unsupported hash function: %q", *fHashFunction))
 	}
 
-	// errHash is no error: assigning it to one would make it non-nil even when
-	// there's no error.
 	sum, errHash := gqlhash.AppendQueryHash(nil, hasher, gqlhash.Options{
 		IgnoreInputs:    *fIgnoreInputs,
 		IgnoreVariables: *fIgnoreVariables,
