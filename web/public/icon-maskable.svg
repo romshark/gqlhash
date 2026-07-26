@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!--
+    The maskable variant: same icon, but the background bleeds into the corners
+    because the platform applies its own shape and would otherwise show through.
+    The glyph stays inside the 80% safe circle maskable icons reserve, which is
+    also what iOS wants for an apple-touch-icon since it rounds the corners.
+  -->
+  <rect width="512" height="512" fill="#e10098" />
+  <path
+    d="M152 216H360M152 296H360M232 152L200 360M344 152L312 360"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="34"
+    stroke-linecap="round"
+  />
+</svg>

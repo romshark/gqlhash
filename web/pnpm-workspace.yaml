@@ -1,0 +1,4 @@
+# esbuild (a Vite dependency) needs its install script to place the native
+# binary. Everything else is blocked from running install scripts.
+allowBuilds:
+  esbuild: true

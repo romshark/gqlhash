@@ -1,0 +1,33 @@
+{
+  "name": "gqlhash-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Static demo page that runs gqlhash in the browser via WebAssembly",
+  "scripts": {
+    "wasm": "./scripts/build-wasm.sh",
+    "dev": "pnpm run wasm && vite",
+    "build": "pnpm run wasm && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "ci": "biome ci . && tsc --noEmit"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.5",
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2",
+    "vite": "^7.1.9"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.9.0",
+    "@codemirror/language": "^6.11.3",
+    "@codemirror/lint": "^6.9.1",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.39.1",
+    "@lezer/highlight": "^1.2.1",
+    "codemirror": "^6.0.2"
+  }
+}

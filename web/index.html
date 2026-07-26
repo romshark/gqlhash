@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Declares both schemes before any stylesheet is parsed, so the very first
+      frame the browser paints already uses a dark canvas in dark mode instead
+      of flashing white.
+    -->
+    <meta name="color-scheme" content="light dark" />
+    <title>gqlhash — GraphQL document hashing in the browser</title>
+    <meta
+      name="description"
+      content="Hash GraphQL documents in your browser with gqlhash, compiled to WebAssembly. Formatting differences are ignored."
+    />
+    <!-- Tints the browser UI per scheme, the way the page itself is tinted. -->
+    <meta
+      name="theme-color"
+      content="#f9f9fb"
+      media="(prefers-color-scheme: light)"
+    />
+    <meta
+      name="theme-color"
+      content="#14121a"
+      media="(prefers-color-scheme: dark)"
+    />
+    <!--
+      The SVG icon carries a prefers-color-scheme rule of its own, so the glyph
+      follows the tab strip. The .ico is the fallback for browsers that don't
+      read SVG icons.
+    -->
+    <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
+    <link rel="alternate icon" href="%BASE_URL%favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="apple-touch-icon" href="%BASE_URL%apple-touch-icon.png" />
+    <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
+    <!--
+      Linked here rather than imported from main.ts: as a render-blocking
+      stylesheet it's in place before the splash paints. Importing it from the
+      entry module would let the unstyled markup show first, which the dev
+      server does by injecting the CSS only once the module runs.
+    -->
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="splash" class="splash">
+      <div class="splash-inner">
+        <div class="splash-logo">gql<span>hash</span></div>
+        <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+        <p class="splash-status" id="splash-status">Loading WebAssembly…</p>
+      </div>
+    </div>
+
+    <div id="app" class="app" hidden>
+      <div class="layout">
+        <div class="sidebar">
+          <header class="brand">
+            <h1>gql<span>hash</span></h1>
+            <p>
+              Hashes GraphQL documents, ignoring formatting differences. Runs
+              entirely in your browser — nothing is uploaded.
+            </p>
+          </header>
+
+          <section class="controls" aria-label="Hashing options">
+            <div class="control">
+              <label class="control-label" for="hash-function"
+                >Hash function</label
+              >
+              <select
+                id="hash-function"
+                aria-describedby="hash-function-hint"
+              ></select>
+              <p class="hint" id="hash-function-hint">
+                Algorithm the canonical document is digested with. Widths are in
+                the labels.
+              </p>
+            </div>
+            <div class="control">
+              <label class="control-label" for="format">Output format</label>
+              <select id="format" aria-describedby="format-hint"></select>
+              <p class="hint" id="format-hint">
+                Encoding the digest is printed in.
+              </p>
+            </div>
+            <fieldset class="control control-flags">
+              <legend class="control-label">Options</legend>
+              <div class="checks">
+                <div class="check-row">
+                  <label class="check">
+                    <input
+                      type="checkbox"
+                      id="ignore-inputs"
+                      aria-describedby="ignore-inputs-hint"
+                    />
+                    <code>-ignore-inputs</code>
+                  </label>
+                  <p class="hint check-hint" id="ignore-inputs-hint">
+                    Leaves out argument and default values, keeping only the
+                    variable signature.
+                  </p>
+                </div>
+                <div class="check-row">
+                  <label class="check">
+                    <input
+                      type="checkbox"
+                      id="ignore-variables"
+                      aria-describedby="ignore-variables-hint"
+                    />
+                    <code>-ignore-variables</code>
+                  </label>
+                  <p class="hint check-hint" id="ignore-variables-hint">
+                    Leaves out variable definitions and usages too. Implies
+                    <code>-ignore-inputs</code>.
+                  </p>
+                </div>
+              </div>
+            </fieldset>
+          </section>
+        </div>
+
+        <div class="content">
+          <section class="result" aria-live="polite">
+            <div class="result-head">
+              <label class="result-label" for="hash-output">Hash</label>
+              <span class="result-status" id="status"></span>
+              <button
+                class="copy-button"
+                id="copy"
+                type="button"
+                title="Copy hash to clipboard"
+              >
+                Copy
+              </button>
+            </div>
+            <output class="hash" id="hash-output" for="editor"></output>
+            <p class="error" id="error" hidden></p>
+          </section>
+
+          <main class="editor-pane">
+            <div class="editor-head">
+              <span>GraphQL document</span>
+              <button class="ghost-button" id="reset" type="button">
+                Reset example
+              </button>
+            </div>
+            <div id="editor" class="editor"></div>
+          </main>
+        </div>
+      </div>
+
+      <footer class="footer">
+        <a
+          class="footer-link"
+          href="https://github.com/romshark/gqlhash"
+          target="_blank"
+          rel="noopener noreferrer"
+          >github.com/romshark/gqlhash</a
+        >
+        <span class="footer-sep">·</span>
+        <span class="footer-version" id="version" title="gqlhash module version"
+          >…</span
+        >
+        <span class="footer-sep">·</span>
+        <span>MIT License · Copyright (c) 2026 Roman Scharkov</span>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

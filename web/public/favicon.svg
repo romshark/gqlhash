@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!--
+    The glyph follows the tab strip: brand magenta on light, the lighter tint the
+    dark scheme uses elsewhere. Drawn as strokes rather than a "#" character so
+    it rasterizes identically everywhere, with no font to substitute.
+  -->
+  <style>
+    .glyph {
+      stroke: #e10098;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .glyph {
+        stroke: #ff6ec7;
+      }
+    }
+  </style>
+  <path
+    class="glyph"
+    d="M11 25H53M11 41H53M27 8L21 56M45 8L39 56"
+    fill="none"
+    stroke-width="7"
+    stroke-linecap="round"
+  />
+</svg>

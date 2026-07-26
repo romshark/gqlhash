@@ -174,7 +174,7 @@ func run(
 func printVersionInfoAndExit(w io.Writer) (exitCode int) {
 	_, _ = fmt.Fprintf(w, "gqlhash v%s\n\n", Version)
 	_, _ = fmt.Fprintln(w, "MIT License")
-	_, _ = fmt.Fprint(w, "Copyright (c) 2024 Roman Scharkov (github.com/romshark)\n\n")
+	_, _ = fmt.Fprint(w, "Copyright (c) 2026 Roman Scharkov (github.com/romshark)\n\n")
 
 	if info, ok := debug.ReadBuildInfo(); ok {
 		_, _ = fmt.Fprintf(w, "%v\n", info)
