@@ -45,11 +45,6 @@ const (
 //
 //   - https://spec.graphql.org/September2025/#Document
 func parse(p *state, dst io.Writer, o Options, src string) Error {
-	// [Options.IgnoreVariables] is a superset of [Options.IgnoreInputs].
-	if o.IgnoreVariables {
-		o.IgnoreInputs = true
-	}
-
 	var (
 		w     = writer{dst: dst, buf: p.buf[:0]}
 		stack = p.stack[:0]
@@ -163,7 +158,7 @@ DEFINITION:
 			e, errPos = ErrUnexpectedEOF, i
 			goto ERROR
 		}
-		if o.IgnoreVariables {
+		if o.Ignore >= IgnoreVariables {
 			w.mute++
 		}
 		goto VARDEF
@@ -329,7 +324,7 @@ TYPE_AFTER:
 		i = skipIgnorables(src, i+1)
 		constant = true
 		valRet = retValVarDefDefault
-		if o.IgnoreInputs {
+		if o.Ignore >= IgnoreInputs {
 			w.mute++
 		}
 		goto VALUE
@@ -337,7 +332,7 @@ TYPE_AFTER:
 	goto VARDEF_DIRECTIVES
 
 VARDEF_AFTER_DEFAULT:
-	if o.IgnoreInputs {
+	if o.Ignore >= IgnoreInputs {
 		w.mute--
 	}
 	i = skipIgnorables(src, i)
@@ -356,7 +351,7 @@ VARDEF_END:
 	if src[i] != ')' {
 		goto VARDEF
 	}
-	if o.IgnoreVariables {
+	if o.Ignore >= IgnoreVariables {
 		w.mute--
 	}
 	i = skipIgnorables(src, i+1)
@@ -428,13 +423,13 @@ ARGS_NEXT:
 	}
 	i = skipIgnorables(src, i+1)
 	valRet = retValArgument
-	if o.IgnoreInputs {
+	if o.Ignore >= IgnoreInputs {
 		w.mute++
 	}
 	goto VALUE
 
 ARGS_AFTER_VALUE:
-	if o.IgnoreInputs {
+	if o.Ignore >= IgnoreInputs {
 		w.mute--
 	}
 	i = skipIgnorables(src, i)

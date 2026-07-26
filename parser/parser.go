@@ -164,34 +164,36 @@ const (
 	HPrefValueVariable         byte = 0x1f
 )
 
-// Options configures what the canonical form leaves out.
-type Options struct {
-	// IgnoreInputs produces the same hash for two documents that differ only in
-	// their input values. Every argument value (literals, lists, input objects
-	// and variable usages alike) is ignored; only the variable signature (the
-	// definitions in the operation) is kept.
+// Ignore says how much of the input a document is hashed without. The values are
+// ordered: each one leaves out what the one before it leaves out, and more.
+type Ignore uint8
+
+const (
+	// IgnoreNothing keeps every input value and every variable.
+	// Only formatting, comments and descriptions are left out.
+	IgnoreNothing Ignore = iota
+
+	// IgnoreInputs leaves out every argument value: literals, lists, input
+	// objects and variable usages alike. The name of an argument is kept, only
+	// its value is left out, so `f(x: 1)` and `f` still differ. The variable
+	// signature, which is the definitions in the operation, is kept as well.
 	//
-	// For example, these 3 queries produce the same hash:
+	// These 3 queries produce the same hash:
 	//
 	//	{ user(id: 1, role: ADMIN) { name } }
 	//	{ user(id: 42, role: GUEST) { name } }
 	//	{ user(id: "42", role: GUEST) { name } }
 	//
-	// The following query differs though, because it declares a variable:
+	// This one differs, because it declares a variable:
 	//
 	//	query($id: ID) { user(id: $id, role: GUEST) { name } }
-	//
-	// IgnoreInputs is a subset of [Options.IgnoreVariables].
-	IgnoreInputs bool
+	IgnoreInputs
 
-	// IgnoreVariables skips hashing variables entirely: both variable definitions and
-	// variable usages. Two documents that differ only in their variable
-	// definitions and references then produce the same hash.
+	// IgnoreVariables leaves out what [IgnoreInputs] leaves out and the variable
+	// definitions on top of that, so nothing of a variable is hashed: neither
+	// the signature nor a usage.
 	//
-	// [Options.IgnoreInputs] already ignores variable usages; IgnoreVariables
-	// additionally ignores the variable definitions (the signature).
-	//
-	// For example, these two queries produce the same hash:
+	// These 3 queries produce the same hash:
 	//
 	//	query Q($x: Int = 1) { f(a: $x) }
 	//	query Q($y: String) { f(a: $y) }
@@ -199,11 +201,15 @@ type Options struct {
 	//
 	// and a parameterized operation matches its unparameterized form:
 	//
-	//	query Q($x: Int) { f }
-	//	query Q { f }
-	//
-	// IgnoreVariables is a superset of [Options.IgnoreInputs].
-	IgnoreVariables bool
+	//	query Q($x: Int) { f(x: $x) }
+	//	query Q { f(x: 1) }
+	IgnoreVariables
+)
+
+// Options configures the parser.
+type Options struct {
+	// Ignore is how much of the input to leave out. The zero value is [IgnoreNothing].
+	Ignore Ignore
 }
 
 // Default sizes of the reusable buffers of a [Parser].
@@ -278,7 +284,7 @@ func Parse[S ~string | ~[]byte](w io.Writer, options Options, s S) Error {
 // Parser is a reusable parser instance. Reusing one is more efficient than
 // calling [Parse], which takes its buffers from a global pool.
 //
-// A Parser is not safe for concurrent use.
+// WARNING: A Parser is not safe for concurrent use.
 type Parser[S ~string | ~[]byte] struct{ s *state }
 
 // NewParser creates a new reusable parser instance. bufferSize and

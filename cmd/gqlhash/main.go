@@ -147,9 +147,18 @@ func run(
 		panic(fmt.Errorf("unsupported hash function: %q", *fHashFunction))
 	}
 
+	// -ignore-variables leaves out what -ignore-inputs leaves out, so the two
+	// flags together are the wider one.
+	ignore := gqlhash.IgnoreNothing
+	switch {
+	case *fIgnoreVariables:
+		ignore = gqlhash.IgnoreVariables
+	case *fIgnoreInputs:
+		ignore = gqlhash.IgnoreInputs
+	}
+
 	sum, errHash := gqlhash.AppendQueryHash(nil, hasher, gqlhash.Options{
-		IgnoreInputs:    *fIgnoreInputs,
-		IgnoreVariables: *fIgnoreVariables,
+		Ignore: ignore,
 	}, input)
 	if errHash.Err != nil {
 		// A hash never fails a write, so the error is a syntax error and carries
