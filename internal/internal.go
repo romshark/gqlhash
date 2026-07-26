@@ -1,15 +1,11 @@
 package internal
 
-import "github.com/romshark/gqlhash/parser"
-
-// NoopHash is a no-op hasher for testing purposes.
+// NoopHash is a hasher that discards its input. Its Sum is constant.
 type NoopHash struct{}
 
 func (NoopHash) Write(d []byte) (int, error) { return len(d), nil }
 func (NoopHash) Reset()                      { /* No-op */ }
 func (NoopHash) Sum([]byte) []byte           { return []byte("mock-hash-sum") }
-
-var _ parser.Hash = NoopHash{}
 
 var TestUnexpectedEOF = []string{
 	"",
@@ -49,9 +45,8 @@ var TestUnexpectedEOF = []string{
 	"query Foo ($v:T={x:",
 	"query Foo ($v:T={x:1",
 	"query Foo ($v:T=12",
-	// An incomplete fraction or exponent (e.g. "12.", "12e", "12.3E+") is an
-	// unexpected token error rather than EOF, so those live in
-	// TestErrUnexpectedToken instead.
+	// An incomplete fraction or exponent ("12.", "12e", "12.3E+") is an
+	// unexpected token and not EOF, so those live in TestErrUnexpectedToken.
 	"query Foo ($v:T=12.3E-4",
 	"query Foo ($v:[",
 	"query Foo ($v:[T",
@@ -126,10 +121,9 @@ var TestErrUnexpectedToken = []string{
 	`query Foo ($s:ID="` + "\u0001",
 	`query Foo ($s:ID="` + "\u000b",
 	// `query Foo($d:[T]="\u?`, // This Produces [parser.ErrUnexpectedEOF]
-	// A variable definition whose name is missing or malformed. The '$' must be
-	// followed by a Name (https://spec.graphql.org/September2025/#Variable),
-	// so the variable definition list is never closed and the document is invalid,
-	// whatever follows.
+	// A variable definition whose name is missing or malformed. A '$' takes a
+	// Name (https://spec.graphql.org/September2025/#Variable), so the definition
+	// list is never closed and the document is invalid whatever follows.
 	"query($ {f}",
 	"query($@dir {f}",
 	"query($ @dir(x:1) {f}",
@@ -171,7 +165,7 @@ var TestErrUnexpectedToken = []string{
 	"query Foo {...@dir(x:-1.2e-?",
 	"query Foo {...@dir(x:-1.2e-4?",
 	// A variable definition's default value and directives take Value[Const],
-	// which excludes variable usages
+	// which has no variable usages
 	// (https://spec.graphql.org/September2025/#VariableDefinition).
 	"query Q($x:Int=$y){f}",
 	"query Q($x:Int=[$y]){f}",
@@ -192,8 +186,8 @@ var TestErrUnexpectedToken = []string{
 	"{f(a:1e2foo)}",
 	"{f(a:- foo)}",
 	"{f(a:1.2.3)}",
-	// A '-' needs a digit after it, so a '-' alone is an unexpected token, even
-	// at EOF, just like a fraction or exponent without digits.
+	// A '-' takes a digit, so a '-' alone is an unexpected token even at EOF,
+	// like a fraction or exponent without digits.
 	"query Foo ($v:T=-",
 	// Incomplete fraction or exponent at EOF: a digit is required.
 	"query Foo ($v:T=12e",

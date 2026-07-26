@@ -1,6 +1,6 @@
-// Package gqlhash provides GraphQL query hashing functions for
-// the latest GraphQL specification: https://spec.graphql.org/September2025/
-// that ignore formatting differences.
+// Package gqlhash hashes GraphQL executable documents of the latest GraphQL
+// specification (https://spec.graphql.org/September2025/), ignoring differences
+// in formatting. It hashes the canonical form that [parser.Parse] writes.
 package gqlhash
 
 import (
@@ -27,24 +27,31 @@ var (
 	ErrQueriesDiffer        = errors.New("queries differ")
 )
 
-// Hash is a subset of the standard [hash.Hash].
-type Hash = parser.Hash
+// Hash is the subset of the standard [hash.Hash] this package needs.
+// [parser.Parse] takes an [io.Writer] instead.
+type Hash interface {
+	Reset()
+	Sum([]byte) []byte
+	Write([]byte) (int, error)
+}
+
+var _ Hash = hash.Hash(nil)
 
 // Options configures how a document is hashed (see [parser.Options]).
 type Options = parser.Options
 
-// Compare returns the zero [Error] if GraphQL queries a and b are equal comparing
-// their hashes while ignoring comments, spaces, tabs, line-breaks and
-// carriage-returns. Err is [ErrQueriesDiffer] if the queries are valid GraphQL
-// but different. The order of fields must be preserved, otherwise a difference
-// will be observed. Applies options (see [Options]).
+// Compare returns the zero [Error] if the documents a and b have the same hash,
+// and an [Error] carrying [ErrQueriesDiffer] if both are valid GraphQL but
+// differ. Applies options (see [Options]).
+//
+// Order is significant: two documents with the same fields in a different order
+// differ.
 func Compare[S ~string | ~[]byte](h hash.Hash, options Options, a, b S) Error {
 	return CompareWithBuffer(nil, h, options, a, b)
 }
 
-// CompareWithBuffer is identical to [Compare] but allows reusing a buffer
-// to reduce dynamic memory allocation. Ideally, provide a buffer
-// with the capacity of `h.Size()*2`.
+// CompareWithBuffer is [Compare] with a reusable buffer for the two sums.
+// A buffer of capacity h.Size()*2 avoids the allocation.
 func CompareWithBuffer[S ~string | ~[]byte](
 	buffer []byte, h hash.Hash, options Options, a, b S,
 ) Error {
@@ -69,15 +76,14 @@ func CompareWithBuffer[S ~string | ~[]byte](
 	return Error{}
 }
 
-// AppendQueryHash parses s and appends its hash to buffer ignoring comments,
-// spaces, tabs, line-breaks and carriage-returns, applying options.
+// AppendQueryHash reads the document s and appends its hash to buffer, applying
+// options. It resets h.
 func AppendQueryHash[S ~string | ~[]byte](
 	buffer []byte, h Hash, options Options, s S,
 ) ([]byte, Error) {
 	h.Reset()
 	if err := parser.Parse(h, options, s); err.Err != nil {
-		// Returning err as an error allocates, which is why the parser hands
-		// it back as it is.
+		// Why no error: returning err as one allocates.
 		return nil, err
 	}
 	return h.Sum(buffer), Error{}

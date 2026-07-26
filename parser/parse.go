@@ -1,19 +1,21 @@
 package parser
 
-// The frames of the value stack, which is what makes ListValues and
-// InputObjectValues nest without recursion.
+import "io"
+
+// Frames of the value stack, one per open ListValue or InputObjectValue.
 const (
 	frameList   = 1
 	frameObject = 2
 )
 
 // Where the directives, arguments and values of a production continue once
-// they're read. Neither of the three nests within itself, so one variable per
-// kind is enough and no return stack is needed.
+// they're read.
+//
+// Why one variable per kind instead of a return stack: none of the three nests
+// within itself.
 const (
 	// retDirSelectionSet is the directives of an OperationDefinition, a
-	// FragmentDefinition or an InlineFragment, all of which a SelectionSet
-	// follows.
+	// FragmentDefinition or an InlineFragment. A SelectionSet follows all three.
 	retDirSelectionSet = iota
 	retDirVarDef
 	retDirField
@@ -30,26 +32,26 @@ const (
 	retValVarDefDefault
 )
 
-// parse reads a Document as one flat state machine: the productions of the
-// grammar are labels and the transitions between them are gotos, so reading a
-// document costs no function calls and no stack frames beyond the leaf scanners.
+// parse reads a Document. Grammar productions are labels, transitions between
+// them are gotos.
 //
-// Only two productions actually nest - SelectionSet, and ListValue with
-// InputObjectValue - and both are tracked without recursion: selection sets by
-// their depth alone, values by the preallocated stack of p.
+// SelectionSet, ListValue and InputObjectValue are the only productions that
+// nest. Selection sets are tracked by depth, values by the stack of p.
+//
+// Why a flat state machine: reading a document costs no function calls and no
+// stack frames beyond the leaf scanners.
 //
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#Document
-func parse(p *state, h Hash, o Options, src string) Error {
-	// [Options.IgnoreVariables] is a superset of [Options.IgnoreInputs]:
-	// ignoring variables also ignores all input values.
+func parse(p *state, dst io.Writer, o Options, src string) Error {
+	// [Options.IgnoreVariables] is a superset of [Options.IgnoreInputs].
 	if o.IgnoreVariables {
 		o.IgnoreInputs = true
 	}
 
 	var (
-		w     = writer{h: h, buf: p.buf[:0]}
+		w     = writer{dst: dst, buf: p.buf[:0]}
 		stack = p.stack[:0]
 
 		i      int   // Index of the byte to read next.
@@ -65,8 +67,8 @@ func parse(p *state, h Hash, o Options, src string) Error {
 		argRet uint8 // Where the arguments currently read continue.
 		valRet uint8 // Where the outermost value currently read continues.
 
-		// constant is true where the grammar asks for a Value[Const], which
-		// admits no variable usage (https://spec.graphql.org/September2025/#Value).
+		// constant marks a Value[Const], which admits no variable usage
+		// (https://spec.graphql.org/September2025/#Value).
 		constant bool
 
 		described  bool // Whether the definition being read has a Description.
@@ -84,9 +86,10 @@ func parse(p *state, h Hash, o Options, src string) Error {
 	}
 
 DEFINITION:
-	// A Description documents the definition. It must not affect execution, so
-	// it's read but never hashed
+	// Description, read and discarded
 	// (https://spec.graphql.org/September2025/#sec-Descriptions).
+	//
+	// Requirement: a description must not affect execution.
 	described = false
 	if src[i] == '"' {
 		described = true
@@ -109,8 +112,7 @@ DEFINITION:
 		// Anonymous operation
 		// (https://spec.graphql.org/September2025/#sec-Anonymous-Operation-Definitions).
 		if described {
-			// Query shorthand is no OperationDefinition with an OperationType,
-			// which is the only form that takes a description.
+			// Query shorthand takes no Description: it has no OperationType.
 			e, errPos = ErrUnexpectedToken, i
 			goto ERROR
 		}
@@ -226,9 +228,8 @@ FRAGMENT:
 	goto DIRECTIVES
 
 VARDEF:
-	// VariableDefinition. Both ways here check for EOF first, so there's at
-	// least one byte left to read
-	// (https://spec.graphql.org/September2025/#VariableDefinition).
+	// VariableDefinition (https://spec.graphql.org/September2025/#VariableDefinition).
+	// Both entry points check for EOF, so one byte is left to read.
 	if src[i] == '"' {
 		// A variable definition takes a Description too.
 		if hasPrefixAt(src, i, `"""`) {
@@ -275,9 +276,8 @@ VARDEF:
 	goto TYPE
 
 TYPE:
-	// Type. Only the names, brackets and '!' are hashed, never the Ignored
-	// tokens between them, so formatting within a type reference doesn't change
-	// the hash (https://spec.graphql.org/September2025/#Type).
+	// Type (https://spec.graphql.org/September2025/#Type). Only the names,
+	// brackets and '!' are written, not the Ignored tokens between them.
 	if i == len(src) {
 		e, errPos = ErrUnexpectedEOF, i
 		goto ERROR
@@ -319,8 +319,7 @@ TYPE_AFTER:
 	}
 
 	// The default value and the directives of a variable definition take
-	// Value[Const], which excludes variable usages
-	// (https://spec.graphql.org/September2025/#VariableDefinition).
+	// Value[Const] (https://spec.graphql.org/September2025/#VariableDefinition).
 	i = skipIgnorables(src, i)
 	if i == len(src) {
 		e, errPos = ErrUnexpectedEOF, i
@@ -399,7 +398,7 @@ DIRECTIVES:
 		i = skipIgnorables(src, i)
 		goto AFTER_SELECTION
 	}
-	// retDirSelectionSet.
+	// retDirSelectionSet: a SelectionSet follows.
 	i = skipIgnorables(src, i)
 	goto SEL_SET
 
@@ -490,8 +489,7 @@ VALUE:
 			}
 			w.pref(HPrefValueString)
 			if hasContent {
-				// BlockStringValue joins the lines with a single line feed,
-				// which is what normalizes LF, CRLF and CR to the same hash.
+				// BlockStringValue joins the lines with a single line feed.
 				w.blockStringValue(src[start:i-3], prefixLen)
 			}
 			goto AFTER_VALUE
@@ -510,7 +508,7 @@ VALUE:
 		w.pref(HPrefValueList)
 		i = skipIgnorables(src, i+1)
 		if i < len(src) && src[i] == ']' {
-			// An empty list has no items to separate, hence no list end either.
+			// No list end for an empty list: there are no items to separate.
 			i++
 			goto AFTER_VALUE
 		}
@@ -523,7 +521,7 @@ VALUE:
 		w.pref(HPrefValueInputObject)
 		i = skipIgnorables(src, i+1)
 		if i < len(src) && src[i] == '}' {
-			// An empty input object has no fields, hence no object end either.
+			// No object end for an empty input object: there are no fields.
 			i++
 			goto AFTER_VALUE
 		}
@@ -531,8 +529,7 @@ VALUE:
 		goto OBJECT_FIELD
 
 	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		// IntValue and FloatValue share the IntegerPart, so it's read before the
-		// two can be told apart
+		// IntValue or FloatValue, which share the IntegerPart
 		// (https://spec.graphql.org/September2025/#sec-Int-Value).
 		start = i
 		i, isFloat, errPos, e = scanNumber(src, i)
@@ -647,9 +644,9 @@ SELECTION:
 	if src[i] == '.' && hasPrefixAt(src, i, "...") {
 		i = skipIgnorables(src, i+len("..."))
 		if isKeywordAt(src, i, "on") {
-			// InlineFragment with a TypeCondition. A FragmentSpread can't be
-			// named "on", so a bare "on" keyword always begins a type condition
+			// InlineFragment with a TypeCondition
 			// (https://spec.graphql.org/September2025/#InlineFragment).
+			// A bare "on" is unambiguous: no FragmentSpread is named "on".
 			i = skipIgnorables(src, i+len("on"))
 			if i == len(src) {
 				e, errPos = ErrUnexpectedEOF, i
@@ -759,13 +756,18 @@ AFTER_SELECTION:
 	goto AFTER_SELECTION
 
 DONE:
-	w.flush()
+	e = w.flush()
 	p.stack = stack
 	if cap(w.buf) > maxRetainedBufferSize {
-		// Don't keep an outsized buffer around just because one document needed it.
+		// Why release it: one oversized document must not make the parser hold
+		// on to an oversized buffer.
 		w.buf = make([]byte, 0, DefaultBufferSize)
 	}
 	p.buf = w.buf
+	if e != nil {
+		// A write error is no syntax error and has no position in src.
+		return Error{Err: e}
+	}
 	return Error{}
 
 ERROR:

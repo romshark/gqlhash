@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -37,8 +38,8 @@ var badUTF8 = map[string]string{
 	"above U+10FFFF":            "\xf4\x90\x80\x80",
 }
 
-// recorder is a [parser.Hash] that keeps the canonical token stream it's given
-// instead of hashing it, which is what makes the stream itself testable.
+// recorder is an [io.Writer] that keeps the canonical form instead of hashing
+// it.
 type recorder struct{ stream []byte }
 
 func (r *recorder) Write(b []byte) (int, error) {
@@ -46,20 +47,18 @@ func (r *recorder) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (r *recorder) Reset()              { r.stream = r.stream[:0] }
-func (r *recorder) Sum(b []byte) []byte { return append(b, r.stream...) }
-func (r *recorder) String() string      { return string(r.stream) }
+func (r *recorder) String() string { return string(r.stream) }
 
-var _ parser.Hash = new(recorder)
+var _ io.Writer = new(recorder)
 
-// parse reads input and returns the canonical token stream and the error.
+// parse reads input and returns its canonical form and the error.
 func parse(o parser.Options, input string) (string, parser.Error) {
 	r := new(recorder)
 	err := parser.Parse(r, o, input)
 	return r.String(), err
 }
 
-// stream builds a canonical token stream from prefix bytes and text.
+// stream builds a canonical form from prefix bytes and text.
 func stream(parts ...any) string {
 	var b []byte
 	for _, p := range parts {
@@ -75,8 +74,8 @@ func stream(parts ...any) string {
 	return string(b)
 }
 
-// hash returns the SHA-1 sum of the canonical token stream of input, which is
-// what two documents are compared by. Fails the test if input is invalid.
+// hash returns the SHA-1 sum of the canonical form of input.
+// Fails the test if input is invalid.
 func hash(t *testing.T, options parser.Options, input string) string {
 	t.Helper()
 	h := sha1.New()
@@ -373,8 +372,7 @@ func TestParse(t *testing.T) {
 	}
 }
 
-// TestParseCanonicalStream makes sure the canonical token stream of a document
-// is exactly what the hash sees, for every kind of token.
+// TestParseCanonicalStream pins the canonical form of every kind of token.
 func TestParseCanonicalStream(t *testing.T) {
 	f := func(t *testing.T, expect string, inputs ...string) {
 		t.Helper()
@@ -498,8 +496,8 @@ func TestParseCanonicalStream(t *testing.T) {
 	), "{f(l:[] o:{})}", "{f(l:[,] o:{,})}", "{f(l:[ ] o:{ })}")
 }
 
-// TestParseStringValue makes sure a string is hashed by the value it stands for
-// and not by the way it's spelled
+// TestParseStringValue asserts that a string is written as the value it stands
+// for and not as it's spelled
 // (https://spec.graphql.org/September2025/#sec-String-Value).
 // stringValueOf returns the bytes the string value input is hashed as, read as
 // the only argument of a minimal document.
@@ -728,8 +726,8 @@ func TestParseValueErrorsEOF(t *testing.T) {
 	}
 }
 
-// TestParseTypeFormatting makes sure Ignored tokens inside a variable type
-// reference don't change the hash while structural differences still do
+// TestParseTypeFormatting asserts that Ignored tokens inside a variable type
+// reference leave the hash alone while structural differences change it
 // (https://spec.graphql.org/September2025/#Type).
 func TestParseTypeFormatting(t *testing.T) {
 	o := parser.Options{}
@@ -801,8 +799,7 @@ func TestParseTypeFormatting(t *testing.T) {
 	}
 }
 
-// TestErrorPosition makes sure a [parser.Error] points at the character where
-// parsing stopped.
+// TestErrorPosition pins the character a [parser.Error] points at.
 func TestErrorPosition(t *testing.T) {
 	f := func(t *testing.T, expectLine, expectColumn int, input string) {
 		t.Helper()
@@ -890,7 +887,7 @@ func TestParseErrUnexpectedToken(t *testing.T) {
 	}
 }
 
-// hashPrefixes lists every prefix of the canonical token stream.
+// hashPrefixes lists every prefix of the canonical form.
 var hashPrefixes = []byte{
 	parser.HPrefQuery,
 	parser.HPrefMutation,
@@ -921,8 +918,8 @@ var hashPrefixes = []byte{
 	parser.HPrefValueVariable,
 }
 
-// TestHPrefInStringValue makes sure no prefix of the canonical token stream can
-// appear in a string value as it is.
+// TestHPrefInStringValue asserts that no prefix of the canonical form can appear
+// in a string value unescaped.
 func TestHPrefInStringValue(t *testing.T) {
 	for _, hpref := range hashPrefixes {
 		// A single-line string rejects the byte, it's a control character.
@@ -1093,7 +1090,7 @@ func TestParseIgnoreVariables(t *testing.T) {
 	}
 }
 
-// TestParseInputTypes makes sure every input type produces the same result.
+// TestParseInputTypes asserts that every input type produces the same result.
 func TestParseInputTypes(t *testing.T) {
 	type namedString string
 	type namedBytes []byte
@@ -1152,7 +1149,7 @@ func TestParseInputTypes(t *testing.T) {
 	}
 }
 
-// TestParserReuse makes sure a reused parser produces the same result as a fresh
+// TestParserReuse asserts that a reused parser produces the result of a fresh
 // one, whatever it read before, and that it stops allocating.
 func TestParserReuse(t *testing.T) {
 	inputs := []string{
@@ -1193,7 +1190,7 @@ func TestParserReuse(t *testing.T) {
 	}
 }
 
-// TestParseConcurrent makes sure the buffers the package-level [parser.Parse]
+// TestParseConcurrent asserts that the buffers the package-level [parser.Parse]
 // takes from its pool are never shared between goroutines.
 func TestParseConcurrent(t *testing.T) {
 	inputs := []string{
@@ -1234,5 +1231,57 @@ func TestParseConcurrent(t *testing.T) {
 	close(errs)
 	for e := range errs {
 		t.Error(e)
+	}
+}
+
+// failWriter fails every write, like a file that ran out of space.
+type failWriter struct{ err error }
+
+func (w failWriter) Write([]byte) (int, error) { return 0, w.err }
+
+// TestParseWriteError asserts that the error of the destination reaches the
+// caller.
+func TestParseWriteError(t *testing.T) {
+	wantErr := errors.New("no space left on device")
+	w := failWriter{err: wantErr}
+
+	for _, input := range []string{
+		`{f}`,
+		`query Q($x: Int = 1) { f(a: [1, {k: "s"}]) @d { b } }`,
+		`{f(a:"` + strings.Repeat("x", 9000) + `")}`, // Outgrows the buffer.
+	} {
+		e := parser.Parse(w, parser.Options{}, input)
+		if e.Err != wantErr {
+			t.Errorf("expected %v; received: %v; input: %.32q", wantErr, e, input)
+		}
+		if !errors.Is(e, wantErr) {
+			t.Error("expected errors.Is to match the write error")
+		}
+		// A write error has no position in the document, so none is reported and
+		// the message stays the message of the writer.
+		if e.Offset != 0 || e.Line != 0 || e.Column != 0 {
+			t.Errorf("expected no position; received %+v", e)
+		}
+		if e.Error() != wantErr.Error() {
+			t.Errorf("expected message %q; received %q", wantErr, e.Error())
+		}
+	}
+
+	// An invalid document is rejected before anything is written, so the syntax
+	// error wins over the write error.
+	if e := parser.Parse(w, parser.Options{}, `{`); e.Err != parser.ErrUnexpectedEOF {
+		t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, e)
+	}
+
+	// The parser stays usable after a failed write.
+	r := new(recorder)
+	if e := parser.Parse(r, parser.Options{}, `{f}`); e.Err != nil {
+		t.Errorf("unexpected error: %v", e)
+	}
+	if want := stream(
+		parser.HPrefQuery, parser.HPrefSelectionSet,
+		parser.HPrefField, "f", parser.HPrefSelectionSetEnd,
+	); r.String() != want {
+		t.Errorf("expected stream %q; received %q", want, r.String())
 	}
 }

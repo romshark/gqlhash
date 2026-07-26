@@ -2,16 +2,16 @@ package parser_test
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
-	"github.com/romshark/gqlhash/internal"
 	"github.com/romshark/gqlhash/parser"
 )
 
-// TestParseScanOffsets exercises the unrolled scanners at every offset a token
-// can end at, which is where an off-by-one would hide. Every document below is
-// valid, so a misstep of a scanner shows up as a syntax error or a wrong stream.
+// TestParseScanOffsets runs every kind of token at every length the unrolled
+// scanners can end a chunk at. Every document below is valid: a misstep shows up
+// as a syntax error or a wrong stream.
 func TestParseScanOffsets(t *testing.T) {
 	for n := 1; n <= 20; n++ {
 		name := strings.Repeat("a", n)
@@ -52,8 +52,8 @@ func TestParseScanOffsets(t *testing.T) {
 			}
 		}
 
-		// A malformed byte at this offset of a comment ends the comment, which
-		// leaves the byte as an unexpected token.
+		// A malformed byte at this offset ends the comment. The byte is then an
+		// unexpected token.
 		input := "{f}#" + strings.Repeat("c", n) + "\xff"
 		if _, err := parse(parser.Options{}, input); !errors.Is(
 			err.Err, parser.ErrUnexpectedToken,
@@ -62,8 +62,8 @@ func TestParseScanOffsets(t *testing.T) {
 				n, err, input)
 		}
 
-		// A string value of this length: plain, with a multi-byte character,
-		// with an escape sequence and with one that has to be escaped again.
+		// A string value of this length: plain, with a multi-byte character, with
+		// an escape sequence, and with one that is escaped again on the way out.
 		for _, c := range []struct {
 			expect string
 			inputs []string
@@ -91,9 +91,8 @@ func TestParseScanOffsets(t *testing.T) {
 	}
 }
 
-// TestParseHugeDocument makes sure a document whose canonical stream outgrows the
-// retained buffer size is read correctly and doesn't make the parser hold on to
-// an outsized buffer.
+// TestParseHugeDocument reads a document whose canonical form outgrows
+// maxRetainedBufferSize. The parser must not hold on to the oversized buffer.
 func TestParseHugeDocument(t *testing.T) {
 	huge := strings.Repeat("x", 2<<20)
 	input := `{f(a:"` + huge + `")}`
@@ -115,15 +114,15 @@ func TestParseHugeDocument(t *testing.T) {
 		}
 	}
 
-	// The same for a document that turns out to be invalid only after its
-	// oversized value was written.
+	// The same for a document that turns out to be invalid after its oversized
+	// value was written.
 	if err := p.Parse(new(recorder), parser.Options{}, input[:len(input)-1]+"?)}"); err.Err ==
 		nil {
 		t.Error("expected a syntax error")
 	}
 
 	// The parser must be usable, and allocation-free, afterwards.
-	h := internal.NoopHash{}
+	h := io.Discard
 	_ = p.Parse(h, parser.Options{}, `{f}`)
 	if n := testing.AllocsPerRun(100, func() {
 		_ = p.Parse(h, parser.Options{}, `{f}`)
@@ -160,10 +159,9 @@ func TestError(t *testing.T) {
 	}
 }
 
-// TestParseNestingAttack reads testdata/nesting-attack.graphql, a document
-// shaped to make a parser recurse as deeply as it can be made to. The state
-// machine has no recursion to exhaust, so the only thing that grows with the
-// nesting is the value stack, one byte per open ListValue or InputObjectValue.
+// TestParseNestingAttack reads testdata/nesting-attack.graphql. Nothing grows
+// with the nesting but the value stack, one byte per open ListValue or
+// InputObjectValue.
 func TestParseNestingAttack(t *testing.T) {
 	src := readTestdata(t, "nesting-attack.graphql")
 
@@ -174,8 +172,7 @@ func TestParseNestingAttack(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// The minified variant is the same document, so it must produce the very
-	// same canonical stream however deeply it nests.
+	// The minified variant is the same document and produces the same form.
 	min, errMin := parse(parser.Options{}, readTestdata(t, "nesting-attack.min.graphql"))
 	if errMin.Err != nil {
 		t.Fatalf("minified: unexpected error: %v", errMin)
@@ -202,7 +199,7 @@ func TestParseNestingAttack(t *testing.T) {
 			t.Error("stream differs between runs")
 		}
 	}
-	h := internal.NoopHash{}
+	h := io.Discard
 	_ = p.Parse(h, parser.Options{}, src)
 	if n := testing.AllocsPerRun(20, func() {
 		_ = p.Parse(h, parser.Options{}, src)
@@ -210,7 +207,7 @@ func TestParseNestingAttack(t *testing.T) {
 		t.Errorf("expected no allocations; received %v", n)
 	}
 
-	// Nesting far deeper than any recursive parser would survive.
+	// Nesting deeper than a recursive parser survives.
 	const deep = 100_000
 	for _, input := range []string{
 		strings.Repeat("{a", deep) + "b" + strings.Repeat("}", deep),
@@ -220,7 +217,7 @@ func TestParseNestingAttack(t *testing.T) {
 		"query Q($v:" + strings.Repeat("[", deep) + "Int" +
 			strings.Repeat("]", deep) + "){f}",
 	} {
-		if e := p.Parse(internal.NoopHash{}, parser.Options{}, input); e.Err != nil {
+		if e := p.Parse(io.Discard, parser.Options{}, input); e.Err != nil {
 			t.Errorf("%d levels deep: %v", deep, e)
 		}
 	}
@@ -232,7 +229,7 @@ func TestParseNestingAttack(t *testing.T) {
 		"{f(a:" + strings.Repeat("{k:", deep),
 		"query Q($v:" + strings.Repeat("[", deep),
 	} {
-		if e := p.Parse(internal.NoopHash{}, parser.Options{}, input); e.Err !=
+		if e := p.Parse(io.Discard, parser.Options{}, input); e.Err !=
 			parser.ErrUnexpectedEOF {
 			t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, e)
 		}

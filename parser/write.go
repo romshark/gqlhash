@@ -1,34 +1,36 @@
 package parser
 
 import (
+	"io"
 	"strings"
 	"unicode/utf8"
 )
 
-// writer assembles the canonical token stream in buf and hands it to h in one
-// piece once the document is read. Buffering turns every prefix and name into an
-// append instead of a [Hash.Write] call, which is what makes writing a token
-// cheap enough to be inlined, and it leaves the hash function with one large
-// write instead of a few hundred tiny ones.
+// writer assembles the canonical token stream in buf and hands it to dst in one
+// piece once the document is read. buf grows into whatever the largest document
+// needs and is then reused.
 //
-// buf grows into whatever the largest document needs and is then reused, so a
-// parser stops allocating after its first few documents.
+// Why buffer: a prefix or a name becomes an append instead of a Write call,
+// which keeps a token small enough to be inlined, and a hash function sees one
+// large write instead of a few hundred small ones.
 type writer struct {
-	h   Hash
+	dst io.Writer
 	buf []byte
 
-	// mute counts the reasons not to write anything: a Description, which is
-	// documentation and must not affect execution, and the sections that
+	// mute counts the reasons not to write: a Description and the sections that
 	// [Options] marks as ignored.
 	mute int
 }
 
-// flush hands the buffered stream to the hash and empties the buffer.
-func (w *writer) flush() {
-	if len(w.buf) > 0 {
-		_, _ = w.h.Write(w.buf)
-		w.buf = w.buf[:0]
-	}
+// flush hands the buffered stream to the destination and empties the buffer.
+// It's called once per document.
+//
+// Every document writes at least the prefix of its first definition, so buf
+// holds something.
+func (w *writer) flush() error {
+	_, err := w.dst.Write(w.buf)
+	w.buf = w.buf[:0]
+	return err
 }
 
 // pref writes a single byte, which is one of the HPref prefixes or a punctuator
@@ -46,8 +48,8 @@ func (w *writer) str(s string) {
 	}
 }
 
-// tok writes prefix followed by s, which is the common case of a prefix
-// introducing a name.
+// tok writes prefix followed by s, the common case of a prefix introducing a
+// name.
 func (w *writer) tok(prefix byte, s string) {
 	if w.mute != 0 {
 		return
@@ -58,8 +60,8 @@ func (w *writer) tok(prefix byte, s string) {
 // nameTok writes prefix followed by the Name that begins at s[i], which must be
 // a NameStart, and returns the index right after that Name.
 //
-// Scanning the name and writing it is one step, which is what keeps a token down
-// to a single call: a Name is the most frequent token of a document by far.
+// Why scan and write in one step: a Name is the most frequent token of a
+// document, and this keeps it down to a single call.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#Name
@@ -116,8 +118,8 @@ func (w *writer) nameStr(s string, i int) int {
 	return i
 }
 
-// esc writes b as a backslash escape, which is what keeps a string value from
-// containing a byte that looks like a hash prefix.
+// esc writes b as a backslash escape. No string value can hold a byte that
+// looks like a hash prefix.
 func (w *writer) esc(b byte) {
 	if w.mute == 0 {
 		w.buf = append(w.buf, lutStringEscapeSeq[b][0], lutStringEscapeSeq[b][1])
@@ -134,8 +136,7 @@ func (w *writer) strByte(b byte) {
 	w.pref(b)
 }
 
-// strRune writes r as UTF-8, byte by byte, so a byte that looks like a hash
-// prefix gets escaped.
+// strRune writes r as UTF-8, byte by byte, escaping the bytes that need it.
 func (w *writer) strRune(r rune) {
 	var b [utf8.UTFMax]byte
 	n := utf8.EncodeRune(b[:], r)
@@ -145,17 +146,17 @@ func (w *writer) strRune(r rune) {
 }
 
 // stringValue writes a single-line string with its escape sequences evaluated,
-// so two spellings of one value hash alike. s is the source between the quotes,
-// already validated by [scanStringLine], and esc says whether it holds any
-// escape sequence at all.
+// so two spellings of one value produce the same bytes. s is the source between
+// the quotes as [scanStringLine] validated it, esc says whether it holds any
+// escape sequence.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#sec-String-Value
 func (w *writer) stringValue(s string, esc bool) {
 	if !esc {
-		// Without an escape sequence the value stands for itself: a control byte
-		// is rejected in a single-line string, and it's the only other byte that
-		// would need escaping.
+		// Without an escape sequence the value stands for itself. A control
+		// byte, the only other byte that needs escaping, is rejected in a
+		// single-line string.
 		w.str(s)
 		return
 	}
@@ -216,8 +217,8 @@ func (w *writer) stringValue(s string, esc bool) {
 // blockStringValue writes the BlockStringValue of s, the raw content between the
 // `"""` delimiters as [scanStringBlock] validated it. prefixLen bytes of common
 // indentation are stripped from every line but the first, leading and trailing
-// blank lines are dropped and the lines are joined by a single line feed, which
-// is what makes LF, CRLF and CR hash alike.
+// blank lines are dropped, and the lines are joined by a single line feed. LF,
+// CRLF and CR therefore produce the same bytes.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#BlockStringValue()
@@ -252,8 +253,8 @@ func (w *writer) blockStringValue(s string, prefixLen int) {
 			}
 		}
 		if blank && !contentSeen {
-			// Leading blank lines are dropped. Trailing ones are already gone,
-			// so any blank line seen after content is an interior line and stays.
+			// A leading blank line is dropped. Trailing ones are gone already,
+			// so a blank line after content is interior and stays.
 			continue
 		}
 		if !blank {
@@ -294,14 +295,14 @@ func (w *writer) blockStringLine(s string) {
 // trimEmptyLinesSuffix removes any trailing empty lines from s.
 // An empty line is a line that holds nothing but WhiteSpace.
 //
-// s must hold at least one byte that is neither WhiteSpace nor a
+// Requirement: s holds at least one byte that is neither WhiteSpace nor a
 // LineTerminator, which is what [scanStringBlock] reports as content.
 func trimEmptyLinesSuffix(s string) string {
 	e := len(s)
 	for {
-		// Find the LineTerminator that ends the second-to-last line. Scanning
-		// for its last byte keeps CRLF intact: the '\n' is found first and the
-		// preceding '\r' is picked up below.
+		// The LineTerminator that ends the second-to-last line. Scanning for its
+		// last byte keeps CRLF intact: '\n' is found first, the preceding '\r'
+		// is picked up below.
 		termEnd := -1
 		for i := e - 1; i >= 0; i-- {
 			if s[i] == '\n' || s[i] == '\r' {
@@ -351,8 +352,8 @@ func hexByteValue(b byte) uint32 {
 	return uint32(b-'A') + 10
 }
 
-// isUnicodeScalarValue returns true if v is within the Unicode scalar value
-// range, which excludes the surrogate code points 0xD800-0xDFFF.
+// isUnicodeScalarValue returns true if v is a Unicode scalar value. The
+// surrogate code points 0xD800-0xDFFF are not.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#sec-Unicode

@@ -19,8 +19,7 @@ import (
 // (https://spec.graphql.org/September2025/#UnicodeBOM).
 const bom = "\xef\xbb\xbf"
 
-// MockHash is a mock hasher that records the canonical token stream it's given
-// instead of hashing it, which is what makes the stream itself testable.
+// MockHash records the canonical form instead of hashing it.
 type MockHash struct{ Stream []byte }
 
 func (m *MockHash) Write(data []byte) (int, error) {
@@ -36,7 +35,10 @@ func (m *MockHash) Sum(b []byte) []byte {
 	return h.Sum(b)
 }
 
-var _ parser.Hash = new(MockHash)
+var (
+	_ gqlhash.Hash = new(MockHash)
+	_ gqlhash.Hash = internal.NoopHash{}
+)
 
 type HashTest struct {
 	Name         string
@@ -323,8 +325,8 @@ func MakeStream(v ...any) string {
 	return string(b)
 }
 
-// TestInputTypes makes sure the functions take a document as a string just as
-// well as a []byte, and that both produce the same hash.
+// TestInputTypes asserts that the functions take a document as a string and as a
+// []byte, and that both produce the same hash.
 func TestInputTypes(t *testing.T) {
 	const a, b = `{ foo bar }`, "{\n\tfoo\n\tbar\n}"
 
@@ -659,8 +661,7 @@ var benchQueries = []struct {
 	},
 	{
 		// Deeply nested selection sets, inline fragments, list values, input
-		// object values and list types, which is what makes a recursive parser
-		// recurse and gqlhash grow nothing but a counter and its value stack.
+		// object values and list types.
 		Name:          "nesting_attack",
 		Schema:        benchSchema,
 		Formatted:     benchQueryNestingAttack,
