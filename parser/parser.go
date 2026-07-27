@@ -211,16 +211,14 @@ type Options struct {
 	Ignore Ignore
 }
 
-// Default sizes of the reusable buffers of a [Parser].
+// Default sizes a [Parser] starts at, see [NewParser].
 const (
-	// DefaultBufferSize is the initial size of the buffer the canonical token
-	// stream is assembled in before it's handed to the [io.Writer]. The buffer
-	// grows into whatever a document needs, so this only decides how many
-	// documents a fresh parser allocates for.
+	// DefaultBufferSize is how many bytes of canonical form a fresh parser holds.
+	// It's a starting size and no limit.
 	DefaultBufferSize = 4096
 
-	// DefaultValueStackSize is the number of nested ListValues and
-	// InputObjectValues a parser can read without growing its stack.
+	// DefaultValueStackSize is how deeply ListValues and InputObjectValues may
+	// nest in a fresh parser. It's a starting size and no limit.
 	DefaultValueStackSize = 32
 
 	// maxRetainedBufferSize is the largest buffer a parser keeps between calls.
@@ -261,8 +259,8 @@ var pool = sync.Pool{New: func() any {
 //
 // The canonical form leaves out comments, spaces, tabs, line-breaks,
 // carriage-returns and descriptions, so two documents that differ only in
-// formatting produce the same bytes. It's assembled in full and handed to w in a
-// single Write. Nothing is written for a document that turns out to be invalid.
+// formatting produce the same bytes. w receives it in a single Write, and
+// nothing at all for a document that turns out to be invalid.
 //
 // The returned [Error] is the zero value if s is a valid document, and carries
 // the error of w if the write failed. Parse never resets w, so several documents
@@ -272,8 +270,7 @@ var pool = sync.Pool{New: func() any {
 // takes a conversion: Parse(w, options, []byte(raw)). The conversion copies
 // nothing.
 //
-// Unlike [Parser.Parse] this function takes its buffers from a global pool and
-// can therefore be less efficient.
+// Reuse a [Parser] where this is called per request, it can be more efficient.
 //
 // Reference:
 //
@@ -287,19 +284,19 @@ func Parse[S string | []byte](w io.Writer, options Options, s S) Error {
 }
 
 // Parser is a reusable parser instance. Reusing one is more efficient than
-// calling [Parse], which takes its buffers from a global pool.
+// calling [Parse].
 //
 // WARNING: A Parser is not safe for concurrent use.
 type Parser[S string | []byte] struct{ s *state }
 
 // NewParser creates a new reusable parser instance. bufferSize and
-// valueStackSize preallocate the two buffers a parser needs; both fall back to
-// [DefaultBufferSize] and [DefaultValueStackSize] when less than 1.
+// valueStackSize are the starting sizes, see [DefaultBufferSize] and
+// [DefaultValueStackSize], which both stand in when less than 1.
 func NewParser[S string | []byte](bufferSize, valueStackSize int) *Parser[S] {
 	return &Parser[S]{s: newState(bufferSize, valueStackSize)}
 }
 
-// Parse is identical to the [Parse] function but reuses the buffers of p.
+// Parse is identical to the [Parse] function.
 func (p *Parser[S]) Parse(w io.Writer, options Options, s S) Error {
 	return parse(p.s, w, options, asString(s))
 }

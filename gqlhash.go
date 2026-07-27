@@ -25,11 +25,13 @@ var (
 	ErrUnescapedControlChar = parser.ErrUnescapedControlChar
 )
 
-// Hash is what [AppendHash] and [Hasher] need of a [hash.Hash]. [Compare]
-// takes the full interface, because it needs Size. [parser.Parse] takes an
-// [io.Writer].
+// Hash is what this package needs of a [hash.Hash], which every implementation
+// of that interface satisfies.
+//
+// Sum must append the digest to its argument, as [hash.Hash] requires.
 type Hash interface {
 	Reset()
+	Size() int
 	Sum([]byte) []byte
 	Write([]byte) (int, error)
 }
@@ -62,7 +64,7 @@ func Position[S string | []byte](s S, offset int) (line, column int) {
 // Order is significant: two documents with the same fields in a different order
 // differ.
 func Compare[S string | []byte](
-	h hash.Hash, options Options, a, b S,
+	h Hash, options Options, a, b S,
 ) (equal bool, err Error) {
 	return CompareWithBuffer(nil, h, options, a, b)
 }
@@ -70,15 +72,13 @@ func Compare[S string | []byte](
 // CompareWithBuffer is [Compare] with a reusable buffer for the two sums.
 // A buffer of capacity h.Size()*2 avoids the allocation.
 func CompareWithBuffer[S string | []byte](
-	buffer []byte, h hash.Hash, options Options, a, b S,
+	buffer []byte, h Hash, options Options, a, b S,
 ) (equal bool, err Error) {
 	size := h.Size()
-	if buffer == nil {
+	if cap(buffer) < size*2 {
 		buffer = make([]byte, 0, size*2)
-	} else {
-		buffer = buffer[:0]
 	}
-	if buffer, err = AppendHash(buffer, h, options, a); err.Err != nil {
+	if buffer, err = AppendHash(buffer[:0], h, options, a); err.Err != nil {
 		return false, err
 	}
 	if buffer, err = AppendHash(buffer, h, options, b); err.Err != nil {
@@ -87,9 +87,8 @@ func CompareWithBuffer[S string | []byte](
 	return bytes.Equal(buffer[:size], buffer[size:]), Error{}
 }
 
-// Hasher hashes documents with buffers of its own: a parser, the hash it writes
-// into and a buffer for the two sums of [Hasher.Compare]. Nothing is taken from
-// a global pool, which is what a server on a per-request path wants.
+// Hasher hashes and compares documents without allocating. Reuse one on a
+// per-request path instead of calling [AppendHash] and [Compare].
 //
 // WARNING: A Hasher is not safe for concurrent use. Use one per goroutine.
 type Hasher[S string | []byte] struct {
@@ -99,17 +98,18 @@ type Hasher[S string | []byte] struct {
 	sums    []byte
 }
 
-// NewHasher returns a [Hasher] writing into h. Its parser starts at
-// the default sizes and grows into whatever the documents need.
+// NewHasher returns a [Hasher] writing into h and applying options.
 func NewHasher[S string | []byte](h Hash, options Options) *Hasher[S] {
 	return &Hasher[S]{
 		parser:  parser.NewParser[S](0, 0),
 		hash:    h,
 		options: options,
+		sums:    make([]byte, 0, h.Size()*2),
 	}
 }
 
-// Append reads the document s and appends its hash to buffer. It resets the hash of h.
+// Append reads the document s and appends its hash to buffer. It resets the hash
+// of h.
 func (h *Hasher[S]) Append(buffer []byte, s S) ([]byte, Error) {
 	h.hash.Reset()
 	if err := h.parser.Parse(h.hash, h.options, s); err.Err != nil {
@@ -118,8 +118,7 @@ func (h *Hasher[S]) Append(buffer []byte, s S) ([]byte, Error) {
 	return h.hash.Sum(buffer), Error{}
 }
 
-// Compare is [Compare] with the buffers of h. It needs no Size, because it takes
-// the length of the first sum.
+// Compare is [Compare] with the hash and the options of h.
 func (h *Hasher[S]) Compare(a, b S) (equal bool, err Error) {
 	h.hash.Reset()
 	if err := h.parser.Parse(h.hash, h.options, a); err.Err != nil {
@@ -144,7 +143,7 @@ func (h *Hasher[S]) Compare(a, b S) (equal bool, err Error) {
 // AppendHash reads the document s and appends its hash to buffer, applying
 // options. It resets h.
 //
-// It takes its parser from a global pool.
+// On a per-request path use a [Hasher], which allocates nothing.
 func AppendHash[S string | []byte](
 	buffer []byte, h Hash, options Options, s S,
 ) ([]byte, Error) {
