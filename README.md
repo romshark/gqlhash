@@ -127,7 +127,7 @@ Every release ships both. `gqlhash` (~2MB) carries no HTTP server and no metrics
 ## Usage
 
 > [!IMPORTANT]
-> The CLI spawns a process per invocation. It's for scripts, CI pipelines and local use, not for a per-request path. A Go server uses the package functions ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Compare), [CompareWithBuffer](https://pkg.go.dev/github.com/romshark/gqlhash/v2#CompareWithBuffer), [AppendQueryHash](https://pkg.go.dev/github.com/romshark/gqlhash/v2#AppendQueryHash)), which all take a `string` or a `[]byte` document. A [parser.Parser](https://pkg.go.dev/github.com/romshark/gqlhash/v2/parser#Parser) per goroutine reuses its buffers instead of taking them from a global pool.
+> The CLI spawns a process per invocation. It's for scripts, CI pipelines and local use, not for a per-request path. A Go server uses the package functions ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Compare), [AppendHash](https://pkg.go.dev/github.com/romshark/gqlhash/v2#AppendHash)), which take a `string` or a `[]byte` document. On a per-request path it uses a [Hasher](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Hasher) per goroutine, which holds its parser and its buffers instead of taking them from a global pool and allocates nothing per call.
 
 gqlhash reads the document from stdin until EOF and prints its SHA1 hash as a hexadecimal string to stdout:
 

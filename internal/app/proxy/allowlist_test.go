@@ -55,8 +55,7 @@ func TestLoaderLoad(t *testing.T) {
 		t.Errorf("expected 3 documents; received %d", n)
 	}
 
-	// A document is found by the hash of its canonical form, whatever its
-	// formatting.
+	// A document is found by the hash of its canonical form, whatever its formatting.
 	key := hashOf(t, "{\n\t# comment\n\tfoo\n}")
 	if e := store.Load().Lookup(key); e == nil {
 		t.Error("expected the reformatted document to be found")
@@ -75,8 +74,8 @@ func TestLoaderEmptyDirectory(t *testing.T) {
 	loader := NewLoader(store, dir, false, sha256.New, gqlhash.Options{},
 		zerolog.New(logs))
 
-	// An empty allowlist rejects every request, so it's reported. It doesn't
-	// keep the proxy from serving.
+	// An empty allowlist rejects every request, so it's reported.
+	// It doesn't keep the proxy from serving.
 	if err := loader.Load(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -248,7 +247,7 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 func hashOf(t *testing.T, document string) []byte {
 	t.Helper()
 	h := sha256.New()
-	sum, err := gqlhash.AppendQueryHash(nil, h, gqlhash.Options{}, document)
+	sum, err := gqlhash.AppendHash(nil, h, gqlhash.Options{}, document)
 	if err.IsErr() {
 		t.Fatalf("hashing %q: %v", document, err)
 	}

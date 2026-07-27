@@ -59,7 +59,7 @@ func Run(
 		return 1
 	}
 
-	sum, errHash := gqlhash.AppendQueryHash(nil, config.NewHasher(cfg.Hash),
+	sum, errHash := gqlhash.AppendHash(nil, config.NewHasher(cfg.Hash),
 		gqlhash.Options{Ignore: cfg.Ignore}, input)
 	if errHash.IsErr() {
 		// A hash never fails a write, so the error is a syntax error and carries
