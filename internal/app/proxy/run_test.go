@@ -779,7 +779,7 @@ func TestBuildWiring(t *testing.T) {
 		t.Errorf("Exact: expected %t; received %t", cfg.Exact, c.Loader.exact)
 	}
 	h := config.NewHasher(cfg.Hash)
-	sum, errHash := gqlhash.AppendQueryHash(nil, h,
+	sum, errHash := gqlhash.AppendHash(nil, h,
 		gqlhash.Options{Ignore: cfg.Ignore}, "{ a }")
 	if errHash.IsErr() {
 		t.Fatal(errHash)
