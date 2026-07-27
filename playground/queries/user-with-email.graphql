@@ -1,0 +1,9 @@
+# The same field set as get-user.graphql plus the email, which makes it a
+# different document and therefore a separate entry.
+query GetUserWithEmail($id: ID!) {
+  user(id: $id) {
+    id
+    name
+    email
+  }
+}

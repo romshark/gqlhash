@@ -19,6 +19,27 @@ builds:
     main: ./cmd/gqlhash
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.Version={{ .Version }}
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+  # The proxy is a command of its own, and most of its size is the HTTP server
+  # and the metrics client that the hashing command doesn't carry.
+  - id: gqlhash-proxy
+    binary: gqlhash-proxy
+    main: ./cmd/gqlhash-proxy
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
     ldflags:
       - -s -w -X main.Version={{ .Version }}
     goos:
@@ -30,7 +51,7 @@ builds:
       - arm64
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     # this name template makes the OS and Arch compatible with the results of `uname`.
     name_template: >-
       {{ .ProjectName }}_
@@ -42,7 +63,7 @@ archives:
     # use zip for windows archives
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
 
 changelog:
   sort: asc

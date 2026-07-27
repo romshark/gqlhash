@@ -1,0 +1,33 @@
+# A GraphQL API with gqlhash-proxy in front of it. See README.md next to this file.
+services:
+  api:
+    build:
+      context: ./api
+    # The API is published so a request can be compared against one that goes
+    # through the proxy. A deployment would keep it unreachable.
+    ports:
+      - "4000:4000"
+    command: ["-listen", ":4000"]
+
+  proxy:
+    build:
+      context: ..
+      dockerfile: playground/Dockerfile
+    depends_on:
+      - api
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      # The allowlist is mounted, so editing a file here reloads the proxy.
+      - ./queries:/queries:ro
+    command:
+      - "-listen=:8080"
+      - "-upstream=http://api:4000/graphql"
+      - "-allowlist=/queries"
+      - "-watch"
+      - "-watch-interval=2s"
+      - "-metrics=:9090"
+      - "-status=/healthz"
+      - "-log-json=false"
+      - "-log-level=debug"

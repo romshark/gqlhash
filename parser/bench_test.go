@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/romshark/gqlhash/parser"
+	"github.com/romshark/gqlhash/v2/parser"
 )
 
 // benchDocuments are the documents of testdata: formatted, minified and nested.
