@@ -36,7 +36,7 @@ import (
 var errDiffer = errors.New("documents differ")
 
 // compare is [gqlhash.Compare] with equal=false folded into [errDiffer].
-func compare[S string | []byte](h hash.Hash, o gqlhash.Options, a, b S) gqlhash.Error {
+func compare[S string | []byte](h gqlhash.Hash, o gqlhash.Options, a, b S) gqlhash.Error {
 	equal, err := gqlhash.Compare(h, o, a, b)
 	if err.IsErr() {
 		return err
@@ -49,7 +49,7 @@ func compare[S string | []byte](h hash.Hash, o gqlhash.Options, a, b S) gqlhash.
 
 // compareWithBuffer is [compare] for [gqlhash.CompareWithBuffer].
 func compareWithBuffer[S string | []byte](
-	buffer []byte, h hash.Hash, o gqlhash.Options, a, b S,
+	buffer []byte, h gqlhash.Hash, o gqlhash.Options, a, b S,
 ) gqlhash.Error {
 	equal, err := gqlhash.CompareWithBuffer(buffer, h, o, a, b)
 	if err.IsErr() {
@@ -359,6 +359,37 @@ func TestCompareErr(t *testing.T) {
 	received = compare(sha1.New(), gqlhash.Options{}, []byte(`{x}`), []byte(``))
 	if received.Err != gqlhash.ErrUnexpectedEOF {
 		t.Errorf("expected %v; received: %v", gqlhash.ErrUnexpectedEOF, received)
+	}
+}
+
+// TestNarrowHash pins that every function takes [gqlhash.Hash] and none of them
+// needs Size: [internal.NoopHash] is no [hash.Hash] and still goes everywhere.
+func TestNarrowHash(t *testing.T) {
+	h := internal.NoopHash{}
+
+	sum, err := gqlhash.AppendHash(nil, h, gqlhash.Options{}, "{x}")
+	if err.IsErr() || string(sum) != "mock-hash-sum" {
+		t.Errorf("AppendHash: %q, %v", sum, err)
+	}
+
+	// The sum is constant, so any two valid documents count as equal and an
+	// invalid one still fails.
+	if equal, err := gqlhash.Compare(h, gqlhash.Options{}, "{x}", "{y}"); err.IsErr() ||
+		!equal {
+		t.Errorf("Compare: equal %t, %v", equal, err)
+	}
+	if equal, err := gqlhash.CompareWithBuffer(make([]byte, 0, 16), h,
+		gqlhash.Options{}, "{x}", "{y}"); err.IsErr() || !equal {
+		t.Errorf("CompareWithBuffer: equal %t, %v", equal, err)
+	}
+	if _, err := gqlhash.Compare(h, gqlhash.Options{}, "{x}", "{"); !errors.Is(
+		err.Err, gqlhash.ErrUnexpectedEOF,
+	) {
+		t.Errorf("Compare: expected the EOF of the second document; received %v", err)
+	}
+	if equal, err := gqlhash.NewHasher[string](h, gqlhash.Options{}).
+		Compare("{x}", "{y}"); err.IsErr() || !equal {
+		t.Errorf("Hasher.Compare: equal %t, %v", equal, err)
 	}
 }
 

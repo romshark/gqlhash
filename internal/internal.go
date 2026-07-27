@@ -1,11 +1,15 @@
 package internal
 
-// NoopHash is a hasher that discards its input. Its Sum is constant.
+// NoopHash is a hasher that discards its input. Its digest is constant.
 type NoopHash struct{}
 
 func (NoopHash) Write(d []byte) (int, error) { return len(d), nil }
 func (NoopHash) Reset()                      { /* No-op */ }
-func (NoopHash) Sum([]byte) []byte           { return []byte("mock-hash-sum") }
+
+// Sum appends the constant digest to b, as [hash.Hash] requires.
+func (NoopHash) Sum(b []byte) []byte { return append(b, "mock-hash-sum"...) }
+
+func (NoopHash) Size() int { return len("mock-hash-sum") }
 
 var TestUnexpectedEOF = []string{
 	"",

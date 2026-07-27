@@ -195,14 +195,14 @@ func ParseProxy(
 			"Ceiling over -upstream-max-idle-conns-per-host, 0 for none")
 		fHTTP2 = cli.Bool("upstream-http2", true,
 			"Allow HTTP/2 to an https upstream, which multiplexes the requests\n"+
-				"onto one connection instead of drawing from the pool.\n"+
+				"onto one connection instead of one connection each.\n"+
 				"An http upstream is HTTP/1.1 either way, h2c is never used.")
 		fVersion = cli.Bool("version", false, "Print the version to stdout and exit")
 		fStatus  = cli.String("status", "", "Path to serve the status on, if any")
 		fMetrics = cli.String("metrics", "",
 			"Address to serve Prometheus metrics on, such as 127.0.0.1:9090.\n"+
-				"Empty leaves them off, which also keeps the timing of a request\n"+
-				"out of the hot path. The path is /metrics.")
+				"Empty leaves them off and a request pays nothing for them.\n"+
+				"The path is /metrics.")
 		fShutdown = cli.Duration("shutdown-timeout", 10*time.Second,
 			"How long to wait for in-flight requests on shutdown")
 	)
