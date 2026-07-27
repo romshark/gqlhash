@@ -10,9 +10,12 @@ import (
 // piece once the document is read. buf grows into whatever the largest document
 // needs and is then reused.
 //
-// Why buffer: a prefix or a name becomes an append instead of a Write call,
-// which keeps a token small enough to be inlined, and a hash function sees one
-// large write instead of a few hundred small ones.
+// Why buffer instead of writing each token to dst: a hash consumes fixed-size
+// blocks, 64 bytes for SHA-1, so many small writes keep it in its partial-block
+// path, copying every fragment into its own buffer first. One large write lets
+// its block loop run over buf directly. Token-by-token writes measure 38%
+// slower for testdata/big.graphql with SHA-1 (2355 ns against 3256 ns), and no
+// different with [io.Discard], so the Write calls themselves are not the cost.
 type writer struct {
 	dst io.Writer
 	buf []byte

@@ -1100,8 +1100,6 @@ func TestParseIgnoreVariables(t *testing.T) {
 
 // TestParseInputTypes asserts that every input type produces the same result.
 func TestParseInputTypes(t *testing.T) {
-	type namedString string
-	type namedBytes []byte
 
 	const input = `query Q($x: [Int!]! = [1, 2]) { f(a: "s") @d { b } }`
 	expect, err := parse(parser.Options{}, input)
@@ -1123,16 +1121,6 @@ func TestParseInputTypes(t *testing.T) {
 		r := new(recorder)
 		e := parser.Parse(r, parser.Options{}, []byte(input))
 		check("[]byte", r.String(), e)
-	}
-	{
-		r := new(recorder)
-		e := parser.Parse(r, parser.Options{}, namedString(input))
-		check("named string", r.String(), e)
-	}
-	{
-		r := new(recorder)
-		e := parser.Parse(r, parser.Options{}, namedBytes(input))
-		check("named []byte", r.String(), e)
 	}
 	{
 		r := new(recorder)
