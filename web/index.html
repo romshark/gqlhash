@@ -9,10 +9,10 @@
       of flashing white.
     -->
     <meta name="color-scheme" content="light dark" />
-    <title>gqlhash — GraphQL document hashing in the browser</title>
+    <title>gqlhash — compare GraphQL documents by hash</title>
     <meta
       name="description"
-      content="Hash GraphQL documents in your browser with gqlhash, compiled to WebAssembly. Formatting differences are ignored."
+      content="Hash and compare two GraphQL documents in your browser with gqlhash, compiled to WebAssembly. Formatting differences are ignored."
     />
     <!-- Tints the browser UI per scheme, the way the page itself is tinted. -->
     <meta
@@ -52,101 +52,131 @@
     </div>
 
     <div id="app" class="app" hidden>
-      <div class="layout">
-        <div class="sidebar">
-          <header class="brand">
-            <h1>gql<span>hash</span></h1>
-            <p>
-              Hashes GraphQL documents, ignoring formatting differences. Runs
-              entirely in your browser — nothing is uploaded.
-            </p>
-          </header>
+      <header class="brand">
+        <h1>gql<span>hash</span></h1>
+      </header>
 
-          <section class="controls" aria-label="Hashing options">
-            <div class="control">
-              <label class="control-label" for="hash-function"
-                >Hash function</label
-              >
-              <select
-                id="hash-function"
-                aria-describedby="hash-function-hint"
-              ></select>
-              <p class="hint" id="hash-function-hint">
-                Algorithm the canonical document is digested with. Widths are in
-                the labels.
-              </p>
-            </div>
-            <div class="control">
-              <label class="control-label" for="format">Output format</label>
-              <select id="format" aria-describedby="format-hint"></select>
-              <p class="hint" id="format-hint">
-                Encoding the digest is printed in.
-              </p>
-            </div>
-            <fieldset class="control control-flags">
-              <legend class="control-label">Options</legend>
-              <div class="checks">
-                <div class="check-row">
-                  <label class="check">
-                    <input
-                      type="checkbox"
-                      id="ignore-inputs"
-                      aria-describedby="ignore-inputs-hint"
-                    />
-                    <code>-ignore-inputs</code>
-                  </label>
-                  <p class="hint check-hint" id="ignore-inputs-hint">
-                    Leaves out argument and default values, keeping only the
-                    variable signature.
-                  </p>
-                </div>
-                <div class="check-row">
-                  <label class="check">
-                    <input
-                      type="checkbox"
-                      id="ignore-variables"
-                      aria-describedby="ignore-variables-hint"
-                    />
-                    <code>-ignore-variables</code>
-                  </label>
-                  <p class="hint check-hint" id="ignore-variables-hint">
-                    Leaves out variable definitions and usages too. Implies
-                    <code>-ignore-inputs</code>.
-                  </p>
-                </div>
-              </div>
-            </fieldset>
-          </section>
+      <section class="controls" aria-label="Hashing options">
+        <div class="control">
+          <label class="control-label" for="hash-function"
+            >Hash function</label
+          >
+          <select
+            id="hash-function"
+            aria-describedby="hash-function-hint"
+          ></select>
+          <p class="hint" id="hash-function-hint">
+            Algorithm the canonical document is digested with. Widths are in
+            the labels.
+          </p>
         </div>
+        <div class="control">
+          <label class="control-label" for="format">Output format</label>
+          <select id="format" aria-describedby="format-hint"></select>
+          <p class="hint" id="format-hint">
+            Encoding the digest is printed in.
+          </p>
+        </div>
+        <fieldset class="control control-flags">
+          <legend class="control-label">Options</legend>
+          <div class="checks">
+            <div class="check-row">
+              <label class="check">
+                <input
+                  type="checkbox"
+                  id="ignore-inputs"
+                  aria-describedby="ignore-inputs-hint"
+                />
+                <code>-ignore-inputs</code>
+              </label>
+              <p class="hint check-hint" id="ignore-inputs-hint">
+                Leaves out argument and default values, keeping only the
+                variable signature.
+              </p>
+            </div>
+            <div class="check-row">
+              <label class="check">
+                <input
+                  type="checkbox"
+                  id="ignore-variables"
+                  aria-describedby="ignore-variables-hint"
+                />
+                <code>-ignore-variables</code>
+              </label>
+              <p class="hint check-hint" id="ignore-variables-hint">
+                Leaves out variable definitions and usages too. Implies
+                <code>-ignore-inputs</code>.
+              </p>
+            </div>
+          </div>
+        </fieldset>
+      </section>
 
-        <div class="content">
-          <section class="result" aria-live="polite">
+      <!-- The answer the page exists to give, spanning both documents. -->
+      <section class="verdict" id="verdict" aria-live="polite">
+        <span class="verdict-sign" id="verdict-sign" aria-hidden="true">≡</span>
+        <span class="verdict-text" id="verdict-text">Comparing…</span>
+        <span class="verdict-detail" id="verdict-detail"></span>
+      </section>
+
+      <div class="panes">
+        <section class="pane" aria-label="Document A">
+          <div class="result">
             <div class="result-head">
-              <label class="result-label" for="hash-output">Hash</label>
-              <span class="result-status" id="status"></span>
+              <label class="result-label" for="hash-output-a">Hash A</label>
+              <span class="result-status" id="status-a"></span>
               <button
                 class="copy-button"
-                id="copy"
+                id="copy-a"
                 type="button"
                 title="Copy hash to clipboard"
               >
                 Copy
               </button>
             </div>
-            <output class="hash" id="hash-output" for="editor"></output>
-            <p class="error" id="error" hidden></p>
-          </section>
+            <output class="hash" id="hash-output-a" for="editor-a"></output>
+            <p class="error" id="error-a" hidden></p>
+          </div>
 
           <main class="editor-pane">
             <div class="editor-head">
-              <span>GraphQL document</span>
-              <button class="ghost-button" id="reset" type="button">
-                Reset example
+              <span>Document A</span>
+              <button class="ghost-button" id="reset-a" type="button">
+                Reset
               </button>
             </div>
-            <div id="editor" class="editor"></div>
+            <div id="editor-a" class="editor"></div>
           </main>
-        </div>
+        </section>
+
+        <section class="pane" aria-label="Document B">
+          <div class="result">
+            <div class="result-head">
+              <label class="result-label" for="hash-output-b">Hash B</label>
+              <span class="result-status" id="status-b"></span>
+              <button
+                class="copy-button"
+                id="copy-b"
+                type="button"
+                title="Copy hash to clipboard"
+              >
+                Copy
+              </button>
+            </div>
+            <output class="hash" id="hash-output-b" for="editor-b"></output>
+            <p class="error" id="error-b" hidden></p>
+          </div>
+
+          <main class="editor-pane">
+            <div class="editor-head">
+              <span>Document B</span>
+              <button class="ghost-button" id="reset-b" type="button">
+                Reset
+              </button>
+            </div>
+            <div id="editor-b" class="editor"></div>
+          </main>
+        </section>
       </div>
 
       <footer class="footer">

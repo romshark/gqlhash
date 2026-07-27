@@ -24,6 +24,7 @@
   --fg: #1c1a20;
   --fg-muted: #5f5b68;
   --fg-faint: #8b8794;
+  --warn: #9a5b00;
   --ok: #0f7355;
   --error: #c02640;
 
@@ -71,6 +72,7 @@
     --fg: #ece9f1;
     --fg-muted: #a29daf;
     --fg-faint: #6f6a7c;
+    --warn: #f2b366;
     --ok: #6ee7b7;
     --error: #ff8095;
 
@@ -201,41 +203,40 @@ body {
 
 /* --- Layout ------------------------------------------------------------- */
 
+/*
+ * min-height rather than height: the editors have a floor they can't shrink
+ * past, so on a short viewport the column has to be allowed to grow past it and
+ * let the page scroll. With a fixed height it would instead overflow, and the
+ * footer — painted after the panes — would land on top of them. Taller than the
+ * floor, .panes still takes the slack, so the editors fill the screen.
+ */
 .app {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  height: 100%;
-  max-width: 1200px;
+  min-height: 100%;
+  max-width: 1440px;
   margin: 0 auto;
   padding: 20px 20px 12px;
 }
 
 /*
- * A row of two columns: the sidebar carries the header and the options, the
- * content column the hash and the editor below it. The min-height: 0 on both is
- * what lets the editor scroll instead of stretching the page.
+ * The two documents, side by side. min-width: 0 on the panes keeps a long hash
+ * from widening its column, and min-height: 0 lets the editors scroll rather
+ * than stretch the page.
  */
-.layout {
+.panes {
   display: flex;
   flex: 1;
   gap: 14px;
   min-height: 0;
 }
 
-.sidebar {
+.pane {
   display: flex;
-  flex: 0 0 clamp(240px, 24vw, 300px);
+  flex: 1 1 0;
   flex-direction: column;
-  gap: 14px;
-  min-width: 0;
-}
-
-.content {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
   min-height: 0;
 }
@@ -252,12 +253,68 @@ body {
   color: var(--accent);
 }
 
-.brand p {
-  max-width: 62ch;
-  margin: 6px 0 0;
+/* --- Verdict ------------------------------------------------------------ */
+
+/*
+ * The comparison result, spanning both documents. It's the one thing on the
+ * page worth reading at a glance, so it's stated in words and carries a sign
+ * and a color band rather than color alone.
+ */
+.verdict {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: 10px 14px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--fg-faint);
+  border-radius: 10px;
+}
+
+.verdict-sign {
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--fg-faint);
+}
+
+.verdict-text {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.verdict-detail {
   color: var(--fg-muted);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+}
+
+.verdict[data-state="match"] {
+  border-left-color: var(--ok);
+}
+
+.verdict[data-state="match"] .verdict-sign,
+.verdict[data-state="match"] .verdict-text {
+  color: var(--ok);
+}
+
+.verdict[data-state="differ"] {
+  border-left-color: var(--warn);
+}
+
+.verdict[data-state="differ"] .verdict-sign,
+.verdict[data-state="differ"] .verdict-text {
+  color: var(--warn);
+}
+
+.verdict[data-state="error"] {
+  border-left-color: var(--error);
+}
+
+.verdict[data-state="error"] .verdict-sign,
+.verdict[data-state="error"] .verdict-text {
+  color: var(--error);
 }
 
 /* --- Result ------------------------------------------------------------- */
@@ -311,7 +368,9 @@ body {
   user-select: all;
 }
 
-.hash[data-state="error"]::after {
+/* Stands in for the hash when there isn't one, so the row keeps its shape. */
+.hash[data-state="error"]::after,
+.hash[data-state="empty"]::after {
   color: var(--fg-faint);
   content: "—";
 }
@@ -347,12 +406,12 @@ body {
 
 /* --- Controls ----------------------------------------------------------- */
 
-/* One control per row, stacked down the sidebar. */
+/* Its own card in the column, the three options across it in one row. */
 .controls {
   display: flex;
-  flex-direction: column;
-  gap: 14px;
-  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  align-items: flex-start;
   padding: 12px 14px;
   background: var(--bg-raised);
   border: 1px solid var(--border);
@@ -361,6 +420,7 @@ body {
 
 .control {
   display: flex;
+  flex: 1 1 190px;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
@@ -381,6 +441,7 @@ body {
  */
 .control-flags {
   display: block;
+  flex: 2 1 330px;
   margin: 0;
   padding: 0;
   border: none;
@@ -411,16 +472,23 @@ body {
 
 .checks {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 12px 20px;
   align-items: flex-start;
 }
 
+/*
+ * flex-basis stays auto: a length here would be read as a height once .checks
+ * goes back to a column on a narrow screen, padding every option with dead
+ * space. The min-width is what makes the pair wrap, and it yields on screens
+ * narrower than itself.
+ */
 .check-row {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 4px;
-  min-width: 0;
+  min-width: min(240px, 100%);
 }
 
 /* Indented past the checkbox so it lines up under the flag name. */
@@ -484,11 +552,13 @@ input[type="checkbox"]:focus-visible {
 
 /* --- Editor ------------------------------------------------------------- */
 
+/* The floor the page starts scrolling at, so keep it to a height an editor is
+ * still usable at rather than a comfortable one. */
 .editor-pane {
   display: flex;
   flex: 1;
   flex-direction: column;
-  min-height: 260px;
+  min-height: 180px;
   overflow: hidden;
   background: var(--bg-sunken);
   border: 1px solid var(--border);
@@ -543,53 +613,22 @@ input[type="checkbox"]:focus-visible {
 }
 
 /*
- * Narrower than this the sidebar would squeeze the editor, so the row becomes a
- * column: header and options on top, hash and editor below. The options go back
- * to a wrapping row, which is what fits a wide-but-short block.
+ * Two editors side by side stop being readable well before a phone: below this
+ * they stack, and the page scrolls instead of squeezing both into one viewport
+ * height.
  */
 @media (max-width: 860px) {
-  .layout {
+  .panes {
     flex-direction: column;
-    min-height: 0;
-  }
-
-  .sidebar {
     flex: 0 0 auto;
   }
 
-  .content {
-    flex: 1;
+  .pane {
+    flex: 0 0 auto;
   }
 
-  .controls {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 14px 20px;
-    align-items: end;
-  }
-
-  .checks {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 12px 20px;
-    align-items: flex-start;
-  }
-
-  /*
-   * flex-basis stays auto: a length here would be read as a height once .checks
-   * goes back to a column below, padding every option with dead space. The
-   * min-width is what makes the pair wrap, and it yields on screens narrower
-   * than itself.
-   */
-  .check-row {
-    flex: 1 1 auto;
-    min-width: min(240px, 100%);
-  }
-
-  select {
-    width: auto;
-    min-width: 15ch;
-    max-width: 30ch;
+  .editor-pane {
+    min-height: 320px;
   }
 
   .hint {
@@ -597,9 +636,9 @@ input[type="checkbox"]:focus-visible {
   }
 }
 
-/* Too narrow for anything side by side: back to one control per row, as in the
- * sidebar. Both flex-direction and flex-basis have to be put back, since a
- * basis meant for a row would otherwise become a height here. */
+/* Too narrow for anything side by side: one control per row. Both
+ * flex-direction and flex-basis have to be put back, since a basis meant for a
+ * row would otherwise become a height here. */
 @media (max-width: 640px) {
   .app {
     gap: 12px;
@@ -612,14 +651,17 @@ input[type="checkbox"]:focus-visible {
     align-items: stretch;
   }
 
+  .control,
+  .control-flags {
+    flex: 0 0 auto;
+  }
+
   .checks {
     flex-direction: column;
     gap: 12px;
   }
 
-  select {
-    width: 100%;
+  .check-row {
     min-width: 0;
-    max-width: none;
   }
 }

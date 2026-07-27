@@ -1,8 +1,12 @@
 # gqlhash web
 
-A static, CDN-hostable page that runs [gqlhash](../) in the browser: type a
-GraphQL document into the editor and its hash is recomputed 200 ms after you
-stop typing, and immediately whenever an option changes.
+A static, CDN-hostable page that runs [gqlhash](../) in the browser. Two editors
+sit side by side, each with its own hash, and a verdict above them says whether
+the two documents hash alike. Both are recomputed 200 ms after you stop typing,
+and immediately whenever an option changes.
+
+The editors start on the same document written two ways, so the page opens on
+the point it's making: the text differs, the hash doesn't.
 
 There's no backend. The Go hasher is compiled to WebAssembly and everything —
 parsing, hashing, encoding — happens on the client, so no document ever leaves
@@ -123,7 +127,8 @@ brand color as published, for the wordmark, caret and focus rings) and
 | `src/gqlhash.ts`           | Loads the binary and wraps that global in a typed API  |
 | `src/editor.ts`            | CodeMirror setup, theme and error markers              |
 | `src/graphql-language.ts`  | GraphQL syntax highlighting for CodeMirror             |
-| `src/main.ts`              | Splash screen, controls and the debounced rehash       |
+| `src/main.ts`              | Splash screen, controls, the two panes and the verdict |
+| `src/example.ts`           | The two documents the editors start with               |
 
 `src/wasm/gqlhash.wasm` and `src/vendor/wasm_exec.js` are build outputs of
 [scripts/build-wasm.sh](scripts/build-wasm.sh) and aren't checked in.
