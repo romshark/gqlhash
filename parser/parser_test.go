@@ -487,6 +487,34 @@ func TestParseCanonicalStream(t *testing.T) {
 
 	// An empty list and an empty input object have no items to separate, so
 	// neither gets an end marker.
+	// Two sibling fields. Without the prefixes the two names collapse into the
+	// single field `foobar`.
+	f(t, stream(
+		parser.HPrefQuery,
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "foo",
+		parser.HPrefField, "bar",
+		parser.HPrefSelectionSetEnd,
+	), "{foo bar}", "{ foo  bar }", "query{foo,bar}")
+
+	// A ListValue nested in an InputObjectValue.
+	f(t, stream(
+		parser.HPrefQuery,
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "x",
+		parser.HPrefDirective, "translate",
+		parser.HPrefArgument, "lang",
+		parser.HPrefValueInputObject,
+		parser.HPrefValueInputObjectField, "codes",
+		parser.HPrefValueList,
+		parser.HPrefValueEnum, "EN",
+		parser.HPrefValueEnum, "DE",
+		parser.HPrefValueListEnd,
+		parser.HPrefInputObjectEnd,
+		parser.HPrefSelectionSetEnd,
+	), "{x @translate(lang:{codes:[EN,DE]})}",
+		"{\n\tx @ translate (\n\t\tlang : {\n\t\t\tcodes : [\n\t\t\t\tEN\n\t\t\t\tDE\n\t\t\t]\n\t\t}\n\t)\n}")
+
 	f(t, stream(
 		parser.HPrefQuery,
 		parser.HPrefSelectionSet,

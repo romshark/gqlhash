@@ -19,310 +19,86 @@ import (
 // (https://spec.graphql.org/September2025/#UnicodeBOM).
 const bom = "\xef\xbb\xbf"
 
-// MockHash records the canonical form instead of hashing it.
-type MockHash struct{ Stream []byte }
+var _ gqlhash.Hash = internal.NoopHash{}
 
-func (m *MockHash) Write(data []byte) (int, error) {
-	m.Stream = append(m.Stream, data...)
-	return len(data), nil
-}
-
-func (m *MockHash) Reset() { m.Stream = m.Stream[:0] }
-
-func (m *MockHash) Sum(b []byte) []byte {
-	h := sha1.New()
-	_, _ = h.Write(m.Stream)
-	return h.Sum(b)
-}
-
-var (
-	_ gqlhash.Hash = new(MockHash)
-	_ gqlhash.Hash = internal.NoopHash{}
-)
-
-type HashTest struct {
-	Name         string
-	Inputs       []string
-	ExpectStream string
-}
-
-var hashTests = []HashTest{
-	{
-		Name: "anonymous one field",
-		Inputs: []string{
-			"{foo}", "{ foo }", "query { foo }",
-		},
-		ExpectStream: MakeStream(
-			parser.HPrefQuery,
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "foo",
-			parser.HPrefSelectionSetEnd,
-		),
-	},
-	{
-		Name: "anonymous two fields",
-		Inputs: []string{
-			"{foo bar}", "{ foo  bar }", "query{foo,bar}",
-		},
-		ExpectStream: MakeStream(
-			parser.HPrefQuery,
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "foo",
-			parser.HPrefField, "bar",
-			parser.HPrefSelectionSetEnd,
-		),
-	},
-	{
-		Name: "block strings",
-		Inputs: []string{
-			`mutation GQL { addStandard ( name : "GraphQL" description:"""
-				line one.
-					line two.
-				line three.
-			""")  }`,
-			`mutation GQL { addStandard ( name : "GraphQL" description:"""line one.
-					line two.
-				line three.""")  }`,
-			`mutation GQL{addStandard(name:"GraphQL",description:"""line one.
-					line two.
-				line three.""")}`,
-			`mutation GQL{addStandard(name:"GraphQL",description:"""
+// fuzzSeeds are documents covering every kind of token. TestParseCanonicalStream
+// of the parser package asserts the canonical form of each one.
+var fuzzSeeds = []string{
+	"{foo}", "{ foo }", "query { foo }",
+	"{foo bar}", "{ foo  bar }", "query{foo,bar}",
+	`mutation GQL { addStandard ( name : "GraphQL" description:"""
+		line one.
+			line two.
+		line three.
+	""")  }`,
+	`mutation GQL { addStandard ( name : "GraphQL" description:"""line one.
+			line two.
+		line three.""")  }`,
+	`mutation GQL{addStandard(name:"GraphQL",description:"""line one.
+			line two.
+		line three.""")}`,
+	`mutation GQL{addStandard(name:"GraphQL",description:"""
 	line one.
 		line two.
 	line three.""")}`,
-			`mutation GQL{addStandard(name:"GraphQL",description:"""
+	`mutation GQL{addStandard(name:"GraphQL",description:"""
   line one.
   	line two.
   line three.""")}`,
-		},
-		ExpectStream: MakeStream(
-			parser.HPrefMutation,
-			"GQL",
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "addStandard",
-			parser.HPrefArgument, "name",
-			parser.HPrefValueString, "GraphQL",
-			parser.HPrefArgument, "description",
-			// Block string lines are written individually and joined by a line
-			// feed, so that LF, CRLF and CR sources all hash alike.
-			parser.HPrefValueString,
-			"line one.", "\n", "\tline two.", "\n", "line three.",
-			parser.HPrefSelectionSetEnd,
-		),
-	},
-	{
-		// A blank middle line must not defeat dedentation: all three inputs
-		// encode the same block string value "a\n\nb".
-		Name: "block string blank line dedent",
-		Inputs: []string{
-			// Indented, empty blank middle line.
-			`{ f(x: """` + "\n    a\n\n    b\n    " + `""") }`,
-			// Already dedented.
-			`{ f(x: """` + "\na\n\nb\n" + `""") }`,
-			// Indented, blank middle line filled with spaces.
-			`{ f(x: """` + "\n    a\n    \n    b\n    " + `""") }`,
-			// Extra leading blank line is trimmed like the first one.
-			`{ f(x: """` + "\n\n    a\n\n    b\n    " + `""") }`,
-		},
-		ExpectStream: MakeStream(
-			parser.HPrefQuery,
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "f",
-			parser.HPrefArgument, "x",
-			// The blank middle line is yielded as an empty line between two
-			// line feed separators.
-			parser.HPrefValueString, "a", "\n", "", "\n", "b",
-			parser.HPrefSelectionSetEnd,
-		),
-	},
-	{
-		Name: "subscription with vars",
-		Inputs: []string{
-			`subscription Updates (
-				$x : T = "жツ"
-			) @ ok  {
-				updates (
-					channel : $x,
-					limit : 5,
-				) {
-					id
-				}
-			}`,
-			`subscription Updates($x:T="жツ") @ok{updates(channel:$x limit:5){id}}`,
-		},
-		ExpectStream: MakeStream(
-			parser.HPrefSubscription,
-			"Updates",
-			parser.HPrefVariableDefinition, "x",
-			parser.HPrefType, "T",
-			parser.HPrefValueString, "жツ",
-			parser.HPrefDirective, "ok",
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "updates",
-			parser.HPrefArgument, "channel",
-			parser.HPrefValueVariable, `x`,
-			parser.HPrefArgument, "limit",
-			parser.HPrefValueInteger, `5`,
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "id",
-			parser.HPrefSelectionSetEnd,
-			parser.HPrefSelectionSetEnd,
-		),
-	},
-	{
-		// Only the canonical type is written, so the Ignored tokens that may
-		// appear between the tokens of a type reference don't change the hash
-		// (https://spec.graphql.org/September2025/#Type).
-		Name: "variable type formatting",
-		Inputs: []string{
-			`query Q($x:[Int!]!){f}`,
-			`query Q ( $x : [ Int ! ] ! ) { f }`,
-			"query Q($x: [\n\t# comment\n\tInt !,\n] !) { f }",
-			`query Q($x: ` + bom + `[` + bom + `Int` + bom +
-				`!` + bom + `]` + bom + `!` + bom + `) { f }`,
-		},
-		ExpectStream: MakeStream(
-			parser.HPrefQuery,
-			"Q",
-			parser.HPrefVariableDefinition, "x",
-			parser.HPrefType, "[", "Int", "!", "]", "!",
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "f",
-			parser.HPrefSelectionSetEnd,
-		),
-	},
-	{
-		Name: "directives with vals",
-		Inputs: []string{
-			`{
-				x @ translate (
-					lang : {
-						codes : [
-							EN
-							DE
-							FR
-							IT
-						] 
-					}
-				)
-			}`,
-			`{x @translate(lang:{codes:[EN,DE,FR,IT]})}`,
-		},
-		ExpectStream: MakeStream(
-			parser.HPrefQuery,
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "x",
-			parser.HPrefDirective, "translate",
-			parser.HPrefArgument, "lang",
-			parser.HPrefValueInputObject,
-			parser.HPrefValueInputObjectField, "codes",
-			parser.HPrefValueList,
-			parser.HPrefValueEnum, "EN",
-			parser.HPrefValueEnum, "DE",
-			parser.HPrefValueEnum, "FR",
-			parser.HPrefValueEnum, "IT",
-			parser.HPrefValueListEnd,
-			parser.HPrefInputObjectEnd,
-			parser.HPrefSelectionSetEnd,
-		),
-	},
-	{
-		Name: "spreads and inline fragments",
-		Inputs: []string{
-			`query {  # First comment.
-				x {
-					... on A {
-						a # Second comment.
-					}
-					...F
-					... @ include ( if : true ) {
-						i
-					}
-				}
+	// Indented, empty blank middle line.
+	`{ f(x: """` + "\n    a\n\n    b\n    " + `""") }`,
+	// Already dedented.
+	`{ f(x: """` + "\na\n\nb\n" + `""") }`,
+	// Indented, blank middle line filled with spaces.
+	`{ f(x: """` + "\n    a\n    \n    b\n    " + `""") }`,
+	// Extra leading blank line is trimmed like the first one.
+	`{ f(x: """` + "\n\n    a\n\n    b\n    " + `""") }`,
+	`subscription Updates (
+		$x : T = "жツ"
+	) @ ok  {
+		updates (
+			channel : $x,
+			limit : 5,
+		) {
+			id
+		}
+	}`,
+	`subscription Updates($x:T="жツ") @ok{updates(channel:$x limit:5){id}}`,
+	`query Q($x:[Int!]!){f}`,
+	`query Q ( $x : [ Int ! ] ! ) { f }`,
+	"query Q($x: [\n\t# comment\n\tInt !,\n] !) { f }",
+	`query Q($x: ` + bom + `[` + bom + `Int` + bom +
+		`!` + bom + `]` + bom + `!` + bom + `) { f }`,
+	`{
+		x @ translate (
+			lang : {
+				codes : [
+					EN
+					DE
+					FR
+					IT
+				] 
 			}
-			# Third comment.
-			fragment F on X @dir {
-				f
-			}`,
-			`{x{...on A{a},...F,...@include(if:true){i}}},fragment F on X@dir{f}`,
-		},
-		ExpectStream: MakeStream(
-			parser.HPrefQuery,
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "x",
-			parser.HPrefSelectionSet,
-			parser.HPrefInlineFragment,
-			parser.HPrefType, "A",
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "a",
-			parser.HPrefSelectionSetEnd,
-			parser.HPrefFragmentSpread, "F",
-			parser.HPrefInlineFragment,
-			parser.HPrefDirective, "include",
-			parser.HPrefArgument, "if",
-			parser.HPrefValueTrue,
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "i",
-			parser.HPrefSelectionSetEnd,
-			parser.HPrefSelectionSetEnd,
-			parser.HPrefSelectionSetEnd,
-			parser.HPrefFragmentDefinition, "F",
-			parser.HPrefType, "X",
-			parser.HPrefDirective, "dir",
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "f",
-			parser.HPrefSelectionSetEnd,
-		),
-	},
-	{
-		Name: "float value",
-		Inputs: []string{
-			"{x(f:3.14)}", "{ x ( f : 3.14 ) }",
-		},
-		ExpectStream: MakeStream(
-			parser.HPrefQuery,
-			parser.HPrefSelectionSet,
-			parser.HPrefField, "x",
-			parser.HPrefArgument, "f",
-			parser.HPrefValueFloat, "3.14",
-			parser.HPrefSelectionSetEnd,
-		),
-	},
-}
-
-func TestHash(t *testing.T) {
-	for _, set := range hashTests {
-		t.Run(set.Name, func(t *testing.T) {
-			h := new(MockHash)
-			for _, input := range set.Inputs {
-				if _, err := gqlhash.AppendQueryHash(
-					nil, h, gqlhash.Options{}, input,
-				); err.Err != nil {
-					t.Errorf("unexpected error: %v; input: %q", err, input)
-				}
-				if string(h.Stream) != set.ExpectStream {
-					t.Errorf("expected:\n%q;\nreceived:\n%q; input: %q",
-						set.ExpectStream, h.Stream, input)
-				}
+		)
+	}`,
+	`{x @translate(lang:{codes:[EN,DE,FR,IT]})}`,
+	`query {  # First comment.
+		x {
+			... on A {
+				a # Second comment.
 			}
-		})
-	}
-}
-
-// MakeStream builds a canonical token stream from prefix bytes and text.
-func MakeStream(v ...any) string {
-	var b []byte
-	for _, x := range v {
-		switch x := x.(type) {
-		case byte:
-			b = append(b, x)
-		case string:
-			b = append(b, x...)
-		default:
-			panic(fmt.Sprintf("unsupported stream part: %T", x))
+			...F
+			... @ include ( if : true ) {
+				i
+			}
 		}
 	}
-	return string(b)
+	# Third comment.
+	fragment F on X @dir {
+		f
+	}`,
+	`{x{...on A{a},...F,...@include(if:true){i}}},fragment F on X@dir{f}`,
+	"{x(f:3.14)}", "{ x ( f : 3.14 ) }",
 }
 
 // TestInputTypes asserts that the functions take a document as a string and as a
@@ -806,35 +582,6 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 	}
 }
 
-// BenchmarkOptions compares the hashing option modes. Structure modes hash
-// fewer bytes (skipped input values), so they should not be slower than full.
-func BenchmarkOptions(b *testing.B) {
-	modes := []struct {
-		name string
-		o    parser.Options
-	}{
-		{"full", parser.Options{}},
-		{"ignore_inputs", parser.Options{Ignore: parser.IgnoreInputs}},
-		{"ignore_variables", parser.Options{Ignore: parser.IgnoreVariables}},
-	}
-	for _, q := range benchQueries {
-		in := []byte(q.Formatted)
-		for _, m := range modes {
-			b.Run(q.Name+"/"+m.name, func(b *testing.B) {
-				h := sha1.New()
-				b.ReportAllocs()
-				b.ResetTimer()
-				for range b.N {
-					h.Reset()
-					if err := parser.Parse(h, m.o, in); err.Err != nil {
-						b.Fatal(err)
-					}
-				}
-			})
-		}
-	}
-}
-
 // FuzzHashing makes sure hashing never panics, that all option modes agree on
 // an input's validity, and that a valid query never differs from itself.
 func FuzzHashing(f *testing.F) {
@@ -851,10 +598,8 @@ func FuzzHashing(f *testing.F) {
 		f.Add(q.Formatted)
 		f.Add(q.Minified)
 	}
-	for _, t := range hashTests {
-		for _, q := range t.Inputs {
-			f.Add(q)
-		}
+	for _, q := range fuzzSeeds {
+		f.Add(q)
 	}
 	// Inputs exercising variables, defaults and directives on definitions.
 	f.Add(`query Q($x: Int = 1 @dep, $y: [String!]) { f(a: $x, b: [$y, 2]) }`)
