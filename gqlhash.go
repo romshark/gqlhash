@@ -51,7 +51,7 @@ const (
 )
 
 // Position returns the 1-based line and column of offset in s (see [parser.Position]).
-func Position[S ~string | ~[]byte](s S, offset int) (line, column int) {
+func Position[S string | []byte](s S, offset int) (line, column int) {
 	return parser.Position(s, offset)
 }
 
@@ -61,13 +61,13 @@ func Position[S ~string | ~[]byte](s S, offset int) (line, column int) {
 //
 // Order is significant: two documents with the same fields in a different order
 // differ.
-func Compare[S ~string | ~[]byte](h hash.Hash, options Options, a, b S) Error {
+func Compare[S string | []byte](h hash.Hash, options Options, a, b S) Error {
 	return CompareWithBuffer(nil, h, options, a, b)
 }
 
 // CompareWithBuffer is [Compare] with a reusable buffer for the two sums.
 // A buffer of capacity h.Size()*2 avoids the allocation.
-func CompareWithBuffer[S ~string | ~[]byte](
+func CompareWithBuffer[S string | []byte](
 	buffer []byte, h hash.Hash, options Options, a, b S,
 ) Error {
 	size := h.Size()
@@ -93,7 +93,7 @@ func CompareWithBuffer[S ~string | ~[]byte](
 
 // AppendQueryHash reads the document s and appends its hash to buffer, applying
 // options. It resets h.
-func AppendQueryHash[S ~string | ~[]byte](
+func AppendQueryHash[S string | []byte](
 	buffer []byte, h Hash, options Options, s S,
 ) ([]byte, Error) {
 	h.Reset()

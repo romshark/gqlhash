@@ -109,7 +109,7 @@ func newError(src string, offset int, err error) Error {
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#LineTerminator
-func Position[S ~string | ~[]byte](s S, offset int) (line, column int) {
+func Position[S string | []byte](s S, offset int) (line, column int) {
 	if offset < 0 {
 		return 0, 0
 	}
@@ -206,7 +206,6 @@ const (
 	IgnoreVariables
 )
 
-// Options configures the parser.
 type Options struct {
 	// Ignore is how much of the input to leave out. The zero value is [IgnoreNothing].
 	Ignore Ignore
@@ -253,7 +252,9 @@ func newState(bufferSize, valueStackSize int) *state {
 	}
 }
 
-var pool = sync.Pool{New: func() any { return newState(0, 0) }}
+var pool = sync.Pool{New: func() any {
+	return newState(DefaultBufferSize, DefaultValueStackSize)
+}}
 
 // Parse reads a Document, which is one or many ExecutableDefinitions, and writes
 // its canonical form to w, applying options.
@@ -267,6 +268,10 @@ var pool = sync.Pool{New: func() any { return newState(0, 0) }}
 // the error of w if the write failed. Parse never resets w, so several documents
 // can be written into one sum.
 //
+// A named type such as json.RawMessage doesn't satisfy the constraint, so it
+// takes a conversion: Parse(w, options, []byte(raw)). The conversion copies
+// nothing.
+//
 // Unlike [Parser.Parse] this function takes its buffers from a global pool and
 // can therefore be less efficient.
 //
@@ -274,7 +279,7 @@ var pool = sync.Pool{New: func() any { return newState(0, 0) }}
 //
 //   - https://spec.graphql.org/September2025/#Document
 //   - https://spec.graphql.org/September2025/#ExecutableDefinition
-func Parse[S ~string | ~[]byte](w io.Writer, options Options, s S) Error {
+func Parse[S string | []byte](w io.Writer, options Options, s S) Error {
 	p := pool.Get().(*state)
 	err := parse(p, w, options, asString(s))
 	pool.Put(p)
@@ -285,12 +290,12 @@ func Parse[S ~string | ~[]byte](w io.Writer, options Options, s S) Error {
 // calling [Parse], which takes its buffers from a global pool.
 //
 // WARNING: A Parser is not safe for concurrent use.
-type Parser[S ~string | ~[]byte] struct{ s *state }
+type Parser[S string | []byte] struct{ s *state }
 
 // NewParser creates a new reusable parser instance. bufferSize and
 // valueStackSize preallocate the two buffers a parser needs; both fall back to
 // [DefaultBufferSize] and [DefaultValueStackSize] when less than 1.
-func NewParser[S ~string | ~[]byte](bufferSize, valueStackSize int) *Parser[S] {
+func NewParser[S string | []byte](bufferSize, valueStackSize int) *Parser[S] {
 	return &Parser[S]{s: newState(bufferSize, valueStackSize)}
 }
 
@@ -302,9 +307,9 @@ func (p *Parser[S]) Parse(w io.Writer, options Options, s S) Error {
 // asString views s as a string without copying it.
 //
 // The state machine only reads the source and keeps no reference to it, so the
-// view doesn't outlive the call. A named []byte type is the one case that
-// copies: a type switch can't match it.
-func asString[S ~string | ~[]byte](s S) string {
+// view doesn't outlive the call. The return after the switch is unreachable:
+// the constraint admits no third type.
+func asString[S string | []byte](s S) string {
 	switch v := any(s).(type) {
 	case string:
 		return v
