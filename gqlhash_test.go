@@ -524,6 +524,16 @@ func TestBenchQueries(t *testing.T) {
 	}
 }
 
+// ignoreModes are the [gqlhash.Ignore] values, named for a benchmark row.
+var ignoreModes = []struct {
+	name   string
+	ignore gqlhash.Ignore
+}{
+	{"nothing", gqlhash.IgnoreNothing},
+	{"inputs", gqlhash.IgnoreInputs},
+	{"variables", gqlhash.IgnoreVariables},
+}
+
 func BenchmarkReferenceSHA1(b *testing.B) {
 	for _, q := range benchQueries {
 		b.Run(q.Name, func(b *testing.B) {
@@ -550,18 +560,23 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 					}
 				})
 
-				b.Run(name+"/gqlhash", func(b *testing.B) {
-					for range b.N {
-						hashBuffer = hashBuffer[:0]
-						var err gqlhash.Error
-						hashBuffer, err = gqlhash.AppendQueryHash(
-							hashBuffer, h, gqlhash.Options{}, inputBytes,
-						)
-						if err.Err != nil {
-							b.Fatal(err)
+				// One row per ignore mode. The wider modes write fewer bytes,
+				// so they must not be slower than gqlhash/nothing.
+				for _, m := range ignoreModes {
+					b.Run(name+"/gqlhash/"+m.name, func(b *testing.B) {
+						o := gqlhash.Options{Ignore: m.ignore}
+						for range b.N {
+							hashBuffer = hashBuffer[:0]
+							var err gqlhash.Error
+							hashBuffer, err = gqlhash.AppendQueryHash(
+								hashBuffer, h, o, inputBytes,
+							)
+							if err.IsErr() {
+								b.Fatal(err)
+							}
 						}
-					}
-				})
+					})
+				}
 
 				if q.SchemaInvalid {
 					return
