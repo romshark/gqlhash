@@ -1,4 +1,4 @@
-package main
+package hasher_test
 
 import (
 	"bytes"
@@ -11,7 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/romshark/gqlhash"
+	"github.com/romshark/gqlhash/v2/internal/app/config"
+	"github.com/romshark/gqlhash/v2/internal/app/hasher"
 )
 
 type (
@@ -37,7 +38,7 @@ func TestRun(t *testing.T) {
 	) {
 		t.Helper()
 		stdout, stderr := new(IORecorder), new(IORecorder)
-		code := run(args, stdout, stderr, strings.NewReader(stdin))
+		code := hasher.Run("gqlhash", "dev", args, stdout, stderr, strings.NewReader(stdin))
 		if code != expectCode {
 			t.Errorf("expected code: %d; received: %d", expectCode, code)
 		}
@@ -95,15 +96,11 @@ func TestRun(t *testing.T) {
 		args(`-format`, `hex`, `-hash`, `crc64`), "{foo}")
 
 	// Err arguments
-	f(t, 2, stderr(`unsupported format "base10", use any of: `+
-		SupportedOutputFormats+"\n"), nil,
-		args(`-format`, `base10`), "{foo}")
+	// The config package tests every rejected value. This one case proves the
+	// message reaches the stderr of Run.
 	f(t, 2, stderr(`unsupported hash function "sha9", use any of: `+
-		SupportedHashFunctions+"\n"), nil,
+		config.SupportedHashFunctions+"\n"), nil,
 		args(`-hash`, `sha9`), "{foo}")
-	f(t, 2, stderr("unsupported ignore mode \"vars\", use any of: "+
-		SupportedIgnoreModes+"\n"), nil,
-		args(`-ignore`, `vars`), "{foo}")
 
 	// Err
 	f(t, 1, stderr("no input\n"), nil,
@@ -149,14 +146,14 @@ func TestRunOutputEncodings(t *testing.T) {
 	get := func(t *testing.T, hf, format string) string {
 		t.Helper()
 		out, errOut := new(IORecorder), new(IORecorder)
-		if code := run(args("-hash", hf, "-format", format), out, errOut,
+		if code := hasher.Run("gqlhash", "dev", args("-hash", hf, "-format", format), out, errOut,
 			strings.NewReader("{foo}")); code != 0 {
 			t.Fatalf("hash %s format %s: code %d; stderr %v", hf, format, code, *errOut)
 		}
 		return strings.Join(*out, "")
 	}
 
-	for hf := range strings.SplitSeq(SupportedHashFunctions, ", ") {
+	for hf := range strings.SplitSeq(config.SupportedHashFunctions, ", ") {
 		raw, err := hex.DecodeString(get(t, hf, "hex"))
 		if err != nil || len(raw) == 0 {
 			t.Fatalf("%s hex decode: err=%v len=%d", hf, err, len(raw))
@@ -186,7 +183,7 @@ func TestRunIgnoreOptions(t *testing.T) {
 	hash := func(t *testing.T, stdin string, a ...string) string {
 		t.Helper()
 		out, errOut := new(IORecorder), new(IORecorder)
-		if code := run(args(a...), out, errOut, strings.NewReader(stdin)); code != 0 {
+		if code := hasher.Run("gqlhash", "dev", args(a...), out, errOut, strings.NewReader(stdin)); code != 0 {
 			t.Fatalf("code %d; stderr: %v", code, *errOut)
 		}
 		return strings.Join(*out, "")
@@ -226,12 +223,13 @@ func TestRunIgnoreOptions(t *testing.T) {
 func TestRunVersion(t *testing.T) {
 	f := func(
 		t *testing.T,
+		name, version string,
 		expectCode int, expectStdoutContains []string,
 		args []string,
 	) {
 		t.Helper()
 		stdout, stderr := new(IORecorder), new(IORecorder)
-		code := run(args, stdout, stderr, nil)
+		code := hasher.Run(name, version, args, stdout, stderr, nil)
 		if code != expectCode {
 			t.Errorf("expected code: %d; received: %d", expectCode, code)
 		}
@@ -246,110 +244,10 @@ func TestRunVersion(t *testing.T) {
 		}
 	}
 
-	original := Version
-	t.Cleanup(func() { Version = original })
-	Version = "1.2.3-test"
-
-	f(t, 0, []string{"gqlhash v1.2.3-test"}, args("-version"))
-}
-
-func TestParseIgnore(t *testing.T) {
-	f := func(t *testing.T, expect gqlhash.Ignore, expectOK bool, input string) {
-		t.Helper()
-		a, ok := parseIgnore(input)
-		if ok != expectOK {
-			t.Errorf("expected ok: %t; received: %t; input: %q", expectOK, ok, input)
-		}
-		if a != expect {
-			t.Errorf("expected: %#v; received: %#v", expect, a)
-		}
-	}
-
-	f(t, 0, false, "")
-	f(t, 0, false, "unsupported")
-	f(t, 0, false, "inputs_")
-	f(t, 0, false, "_inputs")
-	// The two flags of v1 are gone, so their names name no mode.
-	f(t, 0, false, "ignore-inputs")
-	f(t, gqlhash.IgnoreNothing, true, "nothing")
-	f(t, gqlhash.IgnoreNothing, true, "Nothing")
-	f(t, gqlhash.IgnoreNothing, true, "NOTHING")
-	f(t, gqlhash.IgnoreInputs, true, "inputs")
-	f(t, gqlhash.IgnoreInputs, true, "Inputs")
-	f(t, gqlhash.IgnoreInputs, true, "INPUTS")
-	f(t, gqlhash.IgnoreVariables, true, "variables")
-	f(t, gqlhash.IgnoreVariables, true, "Variables")
-	f(t, gqlhash.IgnoreVariables, true, "VARIABLES")
-}
-
-func TestParseFormat(t *testing.T) {
-	f := func(t *testing.T, expect Format, input string) {
-		t.Helper()
-		if a := parseFormat(input); a != expect {
-			t.Errorf("expected: %#v; received: %#v", expect, a)
-		}
-	}
-
-	f(t, 0, "")
-	f(t, 0, "unsupported")
-	f(t, 0, "hex_")
-	f(t, 0, "_hex")
-	f(t, FormatHex, "hex")
-	f(t, FormatHex, "Hex")
-	f(t, FormatHex, "HEX")
-	f(t, FormatBase32, "base32")
-	f(t, FormatBase32, "Base32")
-	f(t, FormatBase32, "BASE32")
-	f(t, FormatBase64, "base64")
-	f(t, FormatBase64, "Base64")
-	f(t, FormatBase64, "BASE64")
-	f(t, FormatBase64URL, "base64url")
-	f(t, FormatBase64URL, "Base64URL")
-	f(t, FormatBase64URL, "BASE64URL")
-}
-
-func TestParseHashFunction(t *testing.T) {
-	f := func(t *testing.T, expect HashFunction, input string) {
-		t.Helper()
-		if a := parseHashFunction(input); a != expect {
-			t.Errorf("expected: %#v; received: %#v", expect, a)
-		}
-	}
-
-	f(t, 0, "")
-	f(t, 0, "unsupported")
-	f(t, 0, "sha1_")
-	f(t, 0, "_sha1")
-	f(t, HashFunctionSHA1, "sha1")
-	f(t, HashFunctionSHA1, "SHA1")
-	f(t, HashFunctionSHA2, "sha2")
-	f(t, HashFunctionSHA2, "SHA2")
-	f(t, HashFunctionSHA3, "sha3")
-	f(t, HashFunctionSHA3, "SHA3")
-	f(t, HashFunctionMD5, "md5")
-	f(t, HashFunctionMD5, "MD5")
-	f(t, HashFunctionBLAKE2B, "blake2b")
-	f(t, HashFunctionBLAKE2B, "Blake2B")
-	f(t, HashFunctionBLAKE2B, "Blake2b")
-	f(t, HashFunctionBLAKE2B, "BLAKE2B")
-	f(t, HashFunctionBLAKE2S, "blake2s")
-	f(t, HashFunctionBLAKE2S, "Blake2S")
-	f(t, HashFunctionBLAKE2S, "Blake2s")
-	f(t, HashFunctionBLAKE2S, "BLAKE2S")
-	f(t, HashFunctionBLAKE3, "blake3")
-	f(t, HashFunctionBLAKE3, "Blake3")
-	f(t, HashFunctionBLAKE3, "BLAKE3")
-	f(t, HashFunctionFNV, "fnv")
-	f(t, HashFunctionFNV, "Fnv")
-	f(t, HashFunctionFNV, "FNV")
-	f(t, HashFunctionFNV1A, "fnv1a")
-	f(t, HashFunctionFNV1A, "Fnv1a")
-	f(t, HashFunctionFNV1A, "FNV1A")
-	f(t, HashFunctionXXH64, "xxh64")
-	f(t, HashFunctionXXH64, "XXH64")
-	f(t, HashFunctionXXH64, "Xxh64")
-	f(t, HashFunctionCRC32, "crc32")
-	f(t, HashFunctionCRC32, "CRC32")
-	f(t, HashFunctionCRC64, "crc64")
-	f(t, HashFunctionCRC64, "CRC64")
+	// The output names the binary that ran, so a bug report says which one, and
+	// carries the license and the build information a report needs.
+	f(t, "gqlhash", "1.2.3-test", 0,
+		[]string{"gqlhash v1.2.3-test", "MIT License", "Copyright",
+			"github.com/romshark/gqlhash/v2"},
+		args("-version"))
 }

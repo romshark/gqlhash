@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/romshark/gqlhash/parser"
+	"github.com/romshark/gqlhash/v2/parser"
 )
 
 // TestParseScanOffsets runs every kind of token at every length the unrolled

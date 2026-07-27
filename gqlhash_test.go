@@ -1,14 +1,27 @@
 package gqlhash_test
 
 import (
+	"crypto/md5"
 	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha3"
 	_ "embed"
 	"fmt"
+	"hash"
+	"hash/crc32"
+	"hash/crc64"
+	"hash/fnv"
+	"os"
 	"testing"
 
-	"github.com/romshark/gqlhash"
-	"github.com/romshark/gqlhash/internal"
-	"github.com/romshark/gqlhash/parser"
+	"github.com/cespare/xxhash/v2"
+	"github.com/zeebo/blake3"
+	"golang.org/x/crypto/blake2b"
+	"golang.org/x/crypto/blake2s"
+
+	"github.com/romshark/gqlhash/v2"
+	"github.com/romshark/gqlhash/v2/internal"
+	"github.com/romshark/gqlhash/v2/parser"
 
 	vektah "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -661,4 +674,94 @@ func FuzzHashing(f *testing.F) {
 			}
 		}
 	})
+}
+
+// benchHashFunctions are the hash functions the CLI offers, in the order of its
+// -hash documentation. The constructors are written out here rather than taken
+// from the command packages, so the library's benchmarks depend on nothing but
+// the library.
+var benchHashFunctions = []struct {
+	Name string
+	New  func() hash.Hash
+}{
+	{"sha1", sha1.New},
+	{"sha2", sha256.New},
+	{"sha3", func() hash.Hash { return sha3.New512() }},
+	{"md5", md5.New},
+	{"blake2b", func() hash.Hash {
+		h, err := blake2b.New256(nil)
+		if err != nil {
+			panic(err)
+		}
+		return h
+	}},
+	{"blake2s", func() hash.Hash {
+		h, err := blake2s.New256(nil)
+		if err != nil {
+			panic(err)
+		}
+		return h
+	}},
+	{"blake3", func() hash.Hash { return blake3.New() }},
+	{"fnv", func() hash.Hash { return fnv.New64() }},
+	{"fnv1a", func() hash.Hash { return fnv.New64a() }},
+	{"xxh64", func() hash.Hash { return xxhash.New() }},
+	{"crc32", func() hash.Hash { return crc32.NewIEEE() }},
+	{"crc64", func() hash.Hash { return crc64.New(crc64.MakeTable(crc64.ISO)) }},
+}
+
+// BenchmarkHashFunctions measures hashing one document with each hash function.
+// The parsing is identical across them and dominates the total, so the
+// differences are small. [BenchmarkHashFunctionsRaw] is the same set without the
+// parsing, which is what makes the overhead of gqlhash readable.
+func BenchmarkHashFunctions(b *testing.B) {
+	query, err := os.ReadFile("testdata/big.graphql")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for _, f := range benchHashFunctions {
+		b.Run(f.Name, func(b *testing.B) {
+			h := f.New()
+			buf := make([]byte, 0, h.Size())
+			b.SetBytes(int64(len(query)))
+			b.ReportAllocs()
+
+			for b.Loop() {
+				// errHash is no error: assigning it to one would make it
+				// non-nil even when there's no error.
+				var errHash gqlhash.Error
+				buf, errHash = gqlhash.AppendQueryHash(
+					buf[:0], h, gqlhash.Options{}, query,
+				)
+				if errHash.IsErr() {
+					b.Fatal(errHash)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkHashFunctionsRaw measures each hash function on its own, over a buffer
+// the size of the document [BenchmarkHashFunctions] uses.
+func BenchmarkHashFunctionsRaw(b *testing.B) {
+	query, err := os.ReadFile("testdata/big.graphql")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for _, f := range benchHashFunctions {
+		b.Run(f.Name, func(b *testing.B) {
+			h := f.New()
+			buf := make([]byte, 0, h.Size())
+			b.SetBytes(int64(len(query)))
+			b.ReportAllocs()
+
+			for b.Loop() {
+				h.Reset()
+				_, _ = h.Write(query)
+				buf = h.Sum(buf[:0])
+			}
+		})
+	}
 }

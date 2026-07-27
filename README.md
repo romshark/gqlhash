@@ -3,15 +3,18 @@
 
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/romshark/gqlhash)](https://github.com/romshark/gqlhash/releases)
 [![Awesome GraphQL](https://img.shields.io/badge/Awesome-GraphQL-%23e535ab?logo=graphql&logoColor=white)](https://github.com/chentsulin/awesome-graphql?tab=readme-ov-file#tools---miscellaneous)
-[![GoDoc](https://godoc.org/github.com/romshark/gqlhash?status.svg)](https://pkg.go.dev/github.com/romshark/gqlhash)
+[![GoDoc](https://godoc.org/github.com/romshark/gqlhash/v2?status.svg)](https://pkg.go.dev/github.com/romshark/gqlhash/v2)
 
 # gqlhash
 
-gqlhash generates SHA1 ([and other](#hash-function)) hashes from GraphQL [executable documents](https://spec.graphql.org/September2025/#sec-Executable-Definitions). Comments and differences in formatting don't change the hash, so two documents that differ only in their layout hash alike. A string value is hashed by the value it stands for, so a string and a block string holding the same value hash alike too.
+gqlhash generates SHA1 ([and other](#hash-function)) hashes from GraphQL [executable documents](https://spec.graphql.org/September2025/#sec-Executable-Definitions) ignoring comments, differences in formatting, and optionally input values and variables.
 
-It's a [CLI tool](#usage) for scripts and CI pipelines and a Go package ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash#Compare), [CompareWithBuffer](https://pkg.go.dev/github.com/romshark/gqlhash#CompareWithBuffer), [AppendQueryHash](https://pkg.go.dev/github.com/romshark/gqlhash#AppendQueryHash)).
+It's shipped as:
+1. The Go package [github.com/romshark/gqlhash/v2](https://pkg.go.dev/github.com/romshark/gqlhash/v2) for fast GraphQL request document hashing.
+2. `github.com/romshark/gqlhash/v2/cmd/gqlhash` a [CLI tool](#usage) for scripts and CI pipelines.
+3. `github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy`, a fast [allowlist-firewall proxy](#proxy) you can put in front of a GraphQL API.
 
-It's [faster](#performance) than parsing a document into an AST and comparing the ASTs, and faster than comparing documents after minification.
+Generating a gqlhash is [faster](#performance) than parsing a document into an AST and comparing the ASTs.
 
 With [`-ignore=variables`](#ignoring-variables) the following two documents produce the same SHA1 hash, despite differing in formatting, comments, input values and variables:
 
@@ -106,15 +109,25 @@ Download a compiled binary from [GitHub Releases](https://github.com/romshark/gq
 ### From Source
 
 ```sh
-go install github.com/romshark/gqlhash/cmd/gqlhash@latest
+go install github.com/romshark/gqlhash/v2/cmd/gqlhash@latest
 ```
 
 This requires the latest version of [Go](https://go.dev).
 
+### gqlhash-proxy
+
+The [proxy](#proxy) is a command of its own:
+
+```sh
+go install github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy@latest
+```
+
+Every release ships both. `gqlhash` (~2MB) carries no HTTP server and no metrics client, which is most of what makes `gqlhash-proxy` (~10.4MB) larger. `gqlhash` is [internal/app/hasher](internal/app/hasher), `gqlhash-proxy` is [internal/app/proxy](internal/app/proxy), and both share [internal/app/config](internal/app/config), which holds their command line surface: the flags, the hash functions, the output formats and the ignore modes.
+
 ## Usage
 
 > [!IMPORTANT]
-> The CLI spawns a process per invocation. It's for scripts, CI pipelines and local use, not for a per-request path. A Go server uses the package functions ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash#Compare), [CompareWithBuffer](https://pkg.go.dev/github.com/romshark/gqlhash#CompareWithBuffer), [AppendQueryHash](https://pkg.go.dev/github.com/romshark/gqlhash#AppendQueryHash)), which all take a `string` or a `[]byte` document. A [parser.Parser](https://pkg.go.dev/github.com/romshark/gqlhash/parser#Parser) per goroutine reuses its buffers instead of taking them from a global pool.
+> The CLI spawns a process per invocation. It's for scripts, CI pipelines and local use, not for a per-request path. A Go server uses the package functions ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Compare), [CompareWithBuffer](https://pkg.go.dev/github.com/romshark/gqlhash/v2#CompareWithBuffer), [AppendQueryHash](https://pkg.go.dev/github.com/romshark/gqlhash/v2#AppendQueryHash)), which all take a `string` or a `[]byte` document. A [parser.Parser](https://pkg.go.dev/github.com/romshark/gqlhash/v2/parser#Parser) per goroutine reuses its buffers instead of taking them from a global pool.
 
 gqlhash reads the document from stdin until EOF and prints its SHA1 hash as a hexadecimal string to stdout:
 
@@ -192,22 +205,22 @@ echo '{foo bar}' | gqlhash -hash sha2 -format base64
 
 Hashing `testdata/big.graphql` (2854 bytes), sorted fastest first.
 
-| `-hash`   | time    | throughput  |
-| --------- | ------- | ----------- |
-| `xxh64`   | 2.04 µs | 1336 MiB/s  |
-| `crc32`   | 2.10 µs | 1297 MiB/s  |
-| `sha1`    | 2.39 µs | 1137 MiB/s  |
-| `sha2`    | 2.40 µs | 1135 MiB/s  |
-| `crc64`   | 2.72 µs | 999 MiB/s   |
-| `blake2b` | 3.26 µs | 834 MiB/s   |
-| `fnv`     | 3.57 µs | 762 MiB/s   |
-| `fnv1a`   | 3.62 µs | 751 MiB/s   |
-| `blake3`  | 3.77 µs | 721 MiB/s   |
-| `md5`     | 3.93 µs | 693 MiB/s   |
-| `blake2s` | 4.06 µs | 670 MiB/s   |
-| `sha3`    | 4.85 µs | 561 MiB/s   |
+| `-hash`   | time    | throughput |
+| --------- | ------- | ---------- |
+| `xxh64`   | 2.04 µs | 1336 MB/s |
+| `crc32`   | 2.10 µs | 1297 MB/s |
+| `sha1`    | 2.39 µs | 1137 MB/s |
+| `sha2`    | 2.40 µs | 1135 MB/s |
+| `crc64`   | 2.72 µs |  999 MB/s |
+| `blake2b` | 3.26 µs |  834 MB/s |
+| `fnv`     | 3.57 µs |  762 MB/s |
+| `fnv1a`   | 3.62 µs |  751 MB/s |
+| `blake3`  | 3.77 µs |  721 MB/s |
+| `md5`     | 3.93 µs |  693 MB/s |
+| `blake2s` | 4.06 µs |  670 MB/s |
+| `sha3`    | 4.85 µs |  561 MB/s |
 
-Measured with `go test ./cmd/gqlhash -bench BenchmarkHashFunctions` on an Apple M4 Pro, Go 1.26.5, `GOMAXPROCS=1`, over 8 runs.
+Measured with `go test . -bench BenchmarkHashFunctions` on an Apple M4 Pro, Go 1.26.5, `GOMAXPROCS=1`, over 8 runs.
 </details>
 
 ### Ignoring Input Values
@@ -233,6 +246,51 @@ Variable usages are ignored like literals: `object(x: $v)` and `object(x: 1)` ha
 echo 'query ($x: Int) { object(x: $x) { id } }' | gqlhash -ignore=variables
 echo '{ object(x: 42) { id } }' | gqlhash -ignore=variables
 ```
+
+## Proxy
+
+[gqlhash-proxy](#gqlhash-proxy) serves an allowlist of documents in front of a GraphQL API. A request whose document is on the list is forwarded, every other request is rejected with 403 and never reaches the API.
+
+```sh
+gqlhash-proxy \
+  -listen :8080 \
+  -upstream http://api:4000/graphql \
+  -allowlist ./queries \
+  -watch
+```
+
+`-allowlist` is a directory of `.graphql` and `.gql` files holding the allowed documents. The proxy hashes them itself, so the documents are the source of truth. Formatting and comments may differ between a file and what a client sends. The set of definitions may not: one file is one entry.
+
+`-watch` reloads the directory when it changes. A document that doesn't parse is skipped with an error naming `file:line:column`, at startup and on reload alike, so one broken file doesn't keep the rest from being served. A directory with no usable document serves an empty allowlist, rejects everything, and says so.
+
+`-exact` compares canonical forms instead of hashes, which removes the risk of a hash collision granting access.
+
+`-hash` accepts only the collision-resistant functions (`sha2`, `sha3`, `blake2b`, `blake2s`, `blake3`), unlike `gqlhash`. Rationale: an allowlist's security property is collision resistance, and `crc32`, `crc64`, `fnv`, `fnv1a` and `xxh64` are collidable by construction while `md5` and `sha1` are broken.
+
+`-trust-forwarded` keeps the `X-Forwarded-*` headers of the incoming request and appends the peer to them, which a proxy behind a load balancer needs so the API still sees the original client. Without it those headers report the direct peer, because a client that connects directly can claim any address.
+
+`-metrics 127.0.0.1:9090` serves Prometheus metrics on `/metrics` at that address, which is separate from the port that serves traffic. Without the flag they're off and a request pays nothing for them. Exposed are request counters by decision, upstream errors, the allowlist size and load time, a request duration histogram, and the Go runtime collectors.
+
+Rejections are counted, not logged. A flood of rejected requests would otherwise write one log line each, so the events sit at debug level and `-log-level debug` turns them on.
+
+`-upstream-max-idle-conns-per-host` (default 64) is how many connections stay open to the upstream between requests. There is one upstream, so that single pool is what caps connection reuse under load; `-upstream-max-idle-conns` (default 256) is the ceiling over it. `-upstream-http2=false` keeps an `https` upstream on HTTP/1.1, which is worth trying when one h2 connection multiplexing every request turns into head-of-line blocking.
+
+Every flag can be given through the environment instead, as `GQLHASH_PROXY_` followed by its name with the dashes as underscores: `GQLHASH_PROXY_MAX_BODY=4096`, `GQLHASH_PROXY_UPSTREAM=http://api:4000/graphql`. A flag given on the command line wins. `gqlhash` reads no environment, so a variable can't quietly change the hashes a pipeline produces.
+
+`gqlhash-proxy -help` lists the remaining flags: body size limit, batching, request logging, log level and format, timeouts and a status endpoint.
+
+`scripts/loadtest.sh [generator] [duration]` load tests the proxy end to end: it starts an upstream API, puts the proxy in front of it and drives both the forwarded and the rejected path. It takes oha, vegeta, wrk, h2load or k6, whichever is installed.
+
+Measured on an Apple M4 Pro, 50 connections, loopback:
+
+| path | req/s |
+| --- | --- |
+| rejected by the proxy | ~129,000 |
+| forwarded upstream | ~43,000 |
+
+A rejection never opens the upstream connection, which is what makes it ~3x cheaper than a forward. `go test -bench BenchmarkProxy ./internal/app/proxy` measures the same paths without a load generator.
+
+[playground](playground) runs the proxy in front of a sample GraphQL API with `docker compose up --build`, with a few allowed documents to try it against.
 
 ## Performance
 
@@ -291,9 +349,13 @@ ok  	github.com/romshark/gqlhash	34.943s
 
 ### Order of Operations, Selections and Arguments
 
-Operations, selections and arguments are hashed in the order they appear. Reordering them changes the hash, although GraphQL considers their order insignificant.
+Everything is hashed in the order it appears, so reordering changes the hash. What the spec makes of the order differs by subject:
 
-Rationale: hashing them order-insensitively requires sorting, which costs time and code.
+- Arguments and input object fields are unordered, so reordering them is insignificant and the hash changes anyway.
+- Operation and fragment definitions may appear in any order, same case.
+- Selections are ordered: a response should list the fields in the order they were requested, so reordering a selection set is observable to the client.
+
+Rationale: hashing the first two order-insensitively requires sorting, which costs time and code.
 
 ### Fragments
 

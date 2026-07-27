@@ -12,11 +12,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       
-      # Build the CLI executable.
+      # Build both executables.
       - name: Build
-        run: go build -o ./bin/gqlhash ./cmd/gqlhash
-      - name: Add binary to PATH
-        run: echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
+        run: |
+          go build -o ./bin/gqlhash ./cmd/gqlhash
+          go build -o ./bin/gqlhash-proxy ./cmd/gqlhash-proxy
 
       # Test.
       - name: Test and calculate coverage

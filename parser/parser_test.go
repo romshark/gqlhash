@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/romshark/gqlhash/internal"
-	"github.com/romshark/gqlhash/parser"
+	"github.com/romshark/gqlhash/v2/internal"
+	"github.com/romshark/gqlhash/v2/parser"
 )
 
 // bom is the UTF-8 encoding of U+FEFF, which is Ignored

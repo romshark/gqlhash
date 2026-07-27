@@ -8,11 +8,11 @@ import (
 	"errors"
 	"hash"
 
-	"github.com/romshark/gqlhash/parser"
+	"github.com/romshark/gqlhash/v2/parser"
 )
 
-// Error is a [parser.Error]. Its zero value means no error, so callers check
-// [Error.Err] instead of comparing to nil.
+// Error is a [parser.Error]. Its zero value means no error,
+// so callers check [Error.Err] instead of comparing to nil.
 type Error = parser.Error
 
 var (
@@ -27,8 +27,8 @@ var (
 	ErrQueriesDiffer        = errors.New("queries differ")
 )
 
-// Hash is the subset of the standard [hash.Hash] this package needs.
-// [parser.Parse] takes an [io.Writer] instead.
+// Hash is what [AppendQueryHash] needs of a [hash.Hash]. [Compare] takes the
+// full interface, because it needs Size. [parser.Parse] takes an [io.Writer].
 type Hash interface {
 	Reset()
 	Sum([]byte) []byte
@@ -98,7 +98,6 @@ func AppendQueryHash[S string | []byte](
 ) ([]byte, Error) {
 	h.Reset()
 	if err := parser.Parse(h, options, s); err.Err != nil {
-		// Why no error: returning err as one allocates.
 		return nil, err
 	}
 	return h.Sum(buffer), Error{}
