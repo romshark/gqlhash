@@ -15,7 +15,6 @@ before:
 
 builds:
   - id: gqlhash
-    binary: gqlhash
     main: ./cmd/gqlhash
     env:
       - CGO_ENABLED=0
@@ -31,10 +30,9 @@ builds:
       - amd64
       - arm64
 
-  # The proxy is a command of its own, and most of its size is the HTTP server
-  # and the metrics client that the hashing command doesn't carry.
+  # A binary of its own: most of its size is the HTTP server,
+  # the metrics client and the schema validator that gqlhash doesn't link.
   - id: gqlhash-proxy
-    binary: gqlhash-proxy
     main: ./cmd/gqlhash-proxy
     env:
       - CGO_ENABLED=0
@@ -50,17 +48,35 @@ builds:
       - amd64
       - arm64
 
+# One archive per command, so installing the hashing command doesn't drag in the
+# proxy: the two differ by 8 MB.
 archives:
-  - formats: [tar.gz]
+  - id: gqlhash
+    ids: [gqlhash]
+    formats: [tar.gz]
     # this name template makes the OS and Arch compatible with the results of `uname`.
     name_template: >-
-      {{ .ProjectName }}_
+      gqlhash_
       {{- title .Os }}_
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
     # use zip for windows archives
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+  - id: gqlhash-proxy
+    ids: [gqlhash-proxy]
+    formats: [tar.gz]
+    name_template: >-
+      gqlhash-proxy_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
     format_overrides:
       - goos: windows
         formats: [zip]
@@ -72,3 +88,26 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^ci:"
+
+# Homebrew formulas, one per command, published to the tap on release. It needs a
+# token with write access to that repository, as HOMEBREW_TAP_GITHUB_TOKEN.
+homebrew_casks:
+  - name: gqlhash
+    ids: [gqlhash]
+    homepage: https://github.com/romshark/gqlhash
+    description: Hashes GraphQL executable documents, ignoring formatting
+    license: MIT
+    repository:
+      owner: romshark
+      name: tools
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+
+  - name: gqlhash-proxy
+    ids: [gqlhash-proxy]
+    homepage: https://github.com/romshark/gqlhash
+    description: Serves an allowlist of GraphQL documents in front of an API
+    license: MIT
+    repository:
+      owner: romshark
+      name: tools
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"

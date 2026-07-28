@@ -12,6 +12,8 @@ import (
 
 // Error is a [parser.Error]. Its zero value means no error,
 // so callers check [Error.Err] instead of comparing to nil.
+//
+// Requirement: never hold one in an error variable, see [parser.Error].
 type Error = parser.Error
 
 var (
@@ -41,8 +43,7 @@ var _ Hash = hash.Hash(nil)
 // Options configures how a document is hashed (see [parser.Options]).
 type Options = parser.Options
 
-// Ignore says how much of the input a document is hashed without
-// (see [parser.Ignore]).
+// Ignore says how much of the input a document is hashed without (see [parser.Ignore]).
 type Ignore = parser.Ignore
 
 const (
@@ -61,8 +62,7 @@ func Position[S string | []byte](s S, offset int) (line, column int) {
 // Two valid documents that differ are no error: equal is false and the returned
 // [Error] is the zero value. equal is false whenever the [Error] holds one.
 //
-// Order is significant: two documents with the same fields in a different order
-// differ.
+// Order is significant: two documents with the same fields in a different order differ.
 func Compare[S string | []byte](
 	h Hash, options Options, a, b S,
 ) (equal bool, err Error) {
@@ -87,8 +87,8 @@ func CompareWithBuffer[S string | []byte](
 	return bytes.Equal(buffer[:size], buffer[size:]), Error{}
 }
 
-// Hasher hashes and compares documents without allocating. Reuse one on a
-// per-request path instead of calling [AppendHash] and [Compare].
+// Hasher hashes and compares documents without allocating.
+// Reuse one on a per-request path instead of calling [AppendHash] and [Compare].
 //
 // WARNING: A Hasher is not safe for concurrent use. Use one per goroutine.
 type Hasher[S string | []byte] struct {
@@ -101,19 +101,23 @@ type Hasher[S string | []byte] struct {
 // NewHasher returns a [Hasher] writing into h and applying options.
 func NewHasher[S string | []byte](h Hash, options Options) *Hasher[S] {
 	return &Hasher[S]{
-		parser:  parser.NewParser[S](0, 0),
+		parser:  parser.NewParser[S](0),
 		hash:    h,
 		options: options,
 		sums:    make([]byte, 0, h.Size()*2),
 	}
 }
 
-// Append reads the document s and appends its hash to buffer. It resets the hash
-// of h.
+// Append reads the document s and appends its hash to buffer.
+// It resets the hash of h.
+//
+// A document that's rejected leaves buffer as it was, which is what the AppendX
+// convention promises: buf, err = h.Append(buf, s) keeps what buf held where s
+// didn't parse.
 func (h *Hasher[S]) Append(buffer []byte, s S) ([]byte, Error) {
 	h.hash.Reset()
 	if err := h.parser.Parse(h.hash, h.options, s); err.Err != nil {
-		return nil, err
+		return buffer, err
 	}
 	return h.hash.Sum(buffer), Error{}
 }
@@ -121,7 +125,7 @@ func (h *Hasher[S]) Append(buffer []byte, s S) ([]byte, Error) {
 // Compare is [Compare] with the hash and the options of h.
 func (h *Hasher[S]) Compare(a, b S) (equal bool, err Error) {
 	h.hash.Reset()
-	if err := h.parser.Parse(h.hash, h.options, a); err.Err != nil {
+	if err = h.parser.Parse(h.hash, h.options, a); err.Err != nil {
 		return false, err
 	}
 	sums := h.hash.Sum(h.sums[:0])
@@ -140,8 +144,12 @@ func (h *Hasher[S]) Compare(a, b S) (equal bool, err Error) {
 	return bytes.Equal(sums[:size], sums[size:]), Error{}
 }
 
-// AppendHash reads the document s and appends its hash to buffer, applying
-// options. It resets h.
+// AppendHash reads the document s and appends its hash to buffer,
+// applying options. It resets h.
+//
+// A document that's rejected leaves buffer as it was, which is what the AppendX
+// convention promises: buf, err = AppendHash(buf, ...) keeps what buf held where
+// s didn't parse.
 //
 // On a per-request path use a [Hasher], which allocates nothing.
 func AppendHash[S string | []byte](
@@ -149,7 +157,7 @@ func AppendHash[S string | []byte](
 ) ([]byte, Error) {
 	h.Reset()
 	if err := parser.Parse(h, options, s); err.Err != nil {
-		return nil, err
+		return buffer, err
 	}
 	return h.Sum(buffer), Error{}
 }

@@ -4,6 +4,8 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/romshark/gqlhash/v2/internal/unicodeesc"
 )
 
 // writer assembles the canonical token stream in buf and hands it to dst in one
@@ -36,9 +38,10 @@ func (w *writer) flush() error {
 	return err
 }
 
-// pref writes a single byte, which is one of the HPref prefixes or a punctuator
-// of a type reference.
-func (w *writer) pref(b byte) {
+// writeByte writes one byte, whatever it stands for: an [HPrefQuery] and the
+// prefixes beside it, a punctuator of a type reference, a byte of a string value
+// that needs no escape, or the line feed that joins the lines of a block string.
+func (w *writer) writeByte(b byte) {
 	if w.mute == 0 {
 		w.buf = append(w.buf, b)
 	}
@@ -136,7 +139,7 @@ func (w *writer) strByte(b byte) {
 		w.esc(b)
 		return
 	}
-	w.pref(b)
+	w.writeByte(b)
 }
 
 // strRune writes r as UTF-8, byte by byte, escaping the bytes that need it.
@@ -195,16 +198,15 @@ func (w *writer) stringValue(s string, esc bool) {
 				// the value is at most 0x10FFFF.
 				i := 3
 				for ; s[i] != '}'; i++ {
-					v = v<<4 | hexByteValue(s[i])
+					v = v<<4 | unicodeesc.DigitValue(s[i])
 				}
 				s = s[i+1:]
 			} else {
-				v = fixedWidthEscapeValue(s[2:])
+				v = unicodeesc.Value(s[2:])
 				s = s[6:]
-				if isLeadingSurrogate(v) {
+				if unicodeesc.IsLeadingSurrogate(v) {
 					// A surrogate pair spells out a single code point.
-					trailing := fixedWidthEscapeValue(s[2:])
-					v = 0x10000 + (v-0xD800)<<10 + (trailing - 0xDC00)
+					v = unicodeesc.Pair(v, unicodeesc.Value(s[2:]))
 					s = s[6:]
 				}
 			}
@@ -264,7 +266,7 @@ func (w *writer) blockStringValue(s string, prefixLen int) {
 			contentSeen = true
 		}
 		if !firstLine {
-			w.pref('\n')
+			w.writeByte('\n')
 		}
 		firstLine = false
 		w.blockStringLine(s[lineStart:i])
@@ -335,43 +337,3 @@ func containsOnlyWhiteSpace(s string) bool {
 	}
 	return true
 }
-
-// fixedWidthEscapeValue returns the value of the four hexadecimal digits of a
-// fixed-width `\uXXXX` escape, which s must begin with.
-func fixedWidthEscapeValue(s string) uint32 {
-	return hexByteValue(s[0])<<12 | hexByteValue(s[1])<<8 |
-		hexByteValue(s[2])<<4 | hexByteValue(s[3])
-}
-
-// hexByteValue returns the numeric value of hexadecimal digit b.
-// The result is meaningless unless lutHex[b] is true.
-func hexByteValue(b byte) uint32 {
-	switch {
-	case b >= '0' && b <= '9':
-		return uint32(b - '0')
-	case b >= 'a' && b <= 'f':
-		return uint32(b-'a') + 10
-	}
-	return uint32(b-'A') + 10
-}
-
-// isUnicodeScalarValue returns true if v is a Unicode scalar value. The
-// surrogate code points 0xD800-0xDFFF are not.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#sec-Unicode
-func isUnicodeScalarValue(v uint32) bool {
-	return v <= 0xD7FF || (v >= 0xE000 && v <= 0x10FFFF)
-}
-
-// isLeadingSurrogate returns true if v is a Leading Surrogate code point.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#StringCharacter
-func isLeadingSurrogate(v uint32) bool { return v >= 0xD800 && v <= 0xDBFF }
-
-// isTrailingSurrogate returns true if v is a Trailing Surrogate code point.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#StringCharacter
-func isTrailingSurrogate(v uint32) bool { return v >= 0xDC00 && v <= 0xDFFF }

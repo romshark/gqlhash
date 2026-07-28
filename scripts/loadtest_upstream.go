@@ -1,8 +1,8 @@
 //go:build ignore
 
-// Command loadtest_upstream is the GraphQL API the load test puts behind the
-// proxy. It answers a fixed body as cheaply as it can, so a load test measures
-// the proxy and the generator rather than an API.
+// Command loadtest_upstream is the GraphQL API the load test puts behind
+// the proxy. It answers a fixed body as cheaply as it can, so a load test
+// measures the proxy and the generator rather than an API.
 //
 // Run it with "go run scripts/loadtest_upstream.go -listen 127.0.0.1:14001".
 package main

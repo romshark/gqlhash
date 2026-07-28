@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"hash"
 	"io"
 	"net/http"
@@ -17,44 +18,93 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/romshark/gqlhash/v2"
+	"github.com/romshark/gqlhash/v2/internal/allowlist"
 	"github.com/romshark/gqlhash/v2/parser"
 )
 
-// Counters of what the proxy decided.
-type Counters struct {
-	Allowed   atomic.Uint64
-	Rejected  atomic.Uint64
-	Malformed atomic.Uint64
-	Upstream  atomic.Uint64
+// counters of what the proxy decided.
+type counters struct {
+	allowed   atomic.Uint64
+	rejected  atomic.Uint64
+	malformed atomic.Uint64
+	upstream  atomic.Uint64
 }
 
-// Proxy checks the document of a request against an allowlist and forwards it
-// upstream or rejects it.
-type Proxy struct {
-	store    *Store
-	upstream *httputil.ReverseProxy
-	log      zerolog.Logger
-	counters Counters
+// decisions is what a proxy did, read at one moment. It's a struct and not four
+// returns so that a caller names what it takes: the four are the same type,
+// and nothing catches a transposition at the call or a reorder of the counters.
+type decisions struct {
+	allowed   uint64
+	rejected  uint64
+	malformed uint64
+	upstream  uint64
+}
+
+// snapshot returns what the proxy decided.
+func (c *counters) snapshot() decisions {
+	return decisions{
+		allowed:   c.allowed.Load(),
+		rejected:  c.rejected.Load(),
+		malformed: c.malformed.Load(),
+		upstream:  c.upstream.Load(),
+	}
+}
+
+// proxy checks the document of a request against an allowlist and
+// forwards it upstream or rejects it.
+type proxy struct {
+	allowlist *allowlist.Allowlist
+	upstream  *httputil.ReverseProxy
+	log       zerolog.Logger
+	counters  counters
 
 	options        gqlhash.Options
-	exact          bool
 	maxBody        int64
 	allowBatch     bool
 	opaqueErrors   bool
 	logRequests    bool
 	trustForwarded bool
 
-	// debug says whether the logger keeps a debug event. The level is set once at
-	// startup, so it's read once instead of per event.
+	// debug says whether the logger keeps a debug event.
+	// The level is set once at startup, so it's read once instead of per event.
 	debug bool
 
-	// metrics is nil unless -metrics is set. Timing a request costs a clock read
-	// and an observation, so the hot path checks this first.
-	metrics *Metrics
+	// metrics are always kept. The control server is what exposes them, and a
+	// run always has one, so a request costs the clock read and the observation
+	// either way and the hot path has nothing to decide.
+	metrics *metrics
 
 	newHash func() hash.Hash
 	states  sync.Pool
 }
+
+// The buffers a pooled state starts with, sized for the request the proxy mostly
+// sees: a document of a few hundred bytes carrying a handful of them.
+const (
+	defaultBodyBuffer    = 8192
+	defaultScratchBuffer = 4096
+
+	// defaultSumBuffer holds the widest digest -hash offers, which is sha3-512.
+	defaultSumBuffer = 64
+
+	// defaultSpans is one per document of a batch, and one is the common case.
+	defaultSpans = 8
+
+	// maxRetainedBuffer is the largest buffer a state carries back into the pool.
+	//
+	// -server.max-body allows a megabyte by default, so a burst of requests that
+	// size would otherwise leave the pool holding one per concurrent request for
+	// the life of the process. Releasing above this costs an allocation on the
+	// rare large request and keeps the common one free.
+	//
+	// The parser holds the same policy for the same reason,
+	// see parser.maxRetainedBufferSize.
+	maxRetainedBuffer = 64 << 10
+
+	// maxRetainedSpans bounds the same for a batch: a megabyte of tiny documents
+	// is tens of thousands of them, and the pool shouldn't keep the room for it.
+	maxRetainedSpans = 1024
+)
 
 // state is everything one request needs. It's pooled, so a request that fits
 // allocates nothing on the checking path.
@@ -65,9 +115,6 @@ type state struct {
 	// scratch takes the document only when it needs unescaping or decoding.
 	scratch []byte
 
-	// canon takes the canonical form under -exact.
-	canon appender
-
 	sum []byte
 
 	spans  []span
@@ -75,70 +122,70 @@ type state struct {
 	parser *parser.Parser[[]byte]
 }
 
-// ProxyConfig configures a [Proxy]. Its zero value hashes whole documents,
+// proxyConfig configures a [proxy]. Its zero value leaves nothing out of the hash,
 // rejects batches, reports why it rejected and trusts no forwarding header.
-type ProxyConfig struct {
+type proxyConfig struct {
 	// Options is what the canonical form leaves out.
-	Options gqlhash.Options
-
-	// Exact compares canonical forms instead of hashes, which cannot collide.
-	Exact bool
+	options gqlhash.Options
 
 	// AllowBatch accepts a JSON array of requests. Every document must be allowed.
-	AllowBatch bool
+	allowBatch bool
 
 	// OpaqueErrors answers every rejection with 403 and no detail.
-	OpaqueErrors bool
+	opaqueErrors bool
 
 	// LogRequests logs a forwarded request at debug level.
-	LogRequests bool
+	logRequests bool
 
 	// TrustForwarded keeps the X-Forwarded-* headers of the incoming request and
 	// appends to them, instead of replacing them with the direct peer.
 	//
-	// Requirement: only set this where a trusted load balancer is in front. A
-	// client that reaches the proxy directly can claim any address.
-	TrustForwarded bool
+	// Requirement: only set this where a trusted load balancer is in front.
+	// A client that reaches the proxy directly can claim any address.
+	trustForwarded bool
 
 	// MaxBody is the largest request body to accept, in bytes.
-	MaxBody int64
+	maxBody int64
 }
 
-// NewProxy returns a proxy forwarding to upstream.
-func NewProxy(
-	store *Store,
+// newProxy returns a proxy forwarding to upstream.
+func newProxy(
+	allowlist *allowlist.Allowlist,
 	upstream *url.URL,
 	newHash func() hash.Hash,
-	config ProxyConfig,
+	config proxyConfig,
 	transport http.RoundTripper,
 	log zerolog.Logger,
-) *Proxy {
-	p := &Proxy{
-		store:   store,
-		log:     log,
-		options: config.Options, exact: config.Exact, maxBody: config.MaxBody,
-		allowBatch: config.AllowBatch, opaqueErrors: config.OpaqueErrors,
-		trustForwarded: config.TrustForwarded,
+) *proxy {
+	p := &proxy{
+		allowlist: allowlist,
+		log:       log,
+		options:   config.options, maxBody: config.maxBody,
+		allowBatch: config.allowBatch, opaqueErrors: config.opaqueErrors,
+		trustForwarded: config.trustForwarded,
 		debug:          log.GetLevel() <= zerolog.DebugLevel,
 		newHash:        newHash,
 	}
-	p.logRequests = config.LogRequests && p.debug
+	// The metrics read the counters of this proxy, which is why they're built
+	// here rather than handed in: a caller would need the proxy to build them
+	// and the proxy to be built with them.
+	p.metrics = newMetrics(&p.counters, allowlist)
+	p.logRequests = config.logRequests && p.debug
 	p.states.New = func() any {
 		return &state{
-			body:    make([]byte, 0, 8192),
-			scratch: make([]byte, 0, 4096),
-			canon:   appender{buf: make([]byte, 0, 4096)},
-			sum:     make([]byte, 0, 64),
-			spans:   make([]span, 0, 8),
+			body:    make([]byte, 0, defaultBodyBuffer),
+			scratch: make([]byte, 0, defaultScratchBuffer),
+			sum:     make([]byte, 0, defaultSumBuffer),
+			spans:   make([]span, 0, defaultSpans),
 			hash:    newHash(),
-			parser:  parser.NewParser[[]byte](0, 0),
+			parser:  parser.NewParser[[]byte](0),
 		}
 	}
 	p.upstream = &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
-			// The upstream URL is the GraphQL endpoint, so it replaces the path
-			// instead of prefixing it. SetURL would join the two and turn a
-			// request to /graphql into /graphql/graphql.
+			// The upstream URL is the GraphQL endpoint,
+			// so it replaces the path instead of prefixing it. SetURL would join the
+			// two and turn a request to /graphql into /graphql/graphql.
 			r.Out.URL.Scheme = upstream.Scheme
 			r.Out.URL.Host = upstream.Host
 			r.Out.URL.Path, r.Out.URL.RawPath = upstream.Path, upstream.RawPath
@@ -149,15 +196,15 @@ func NewProxy(
 		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if r.Context().Err() != nil {
-				// The client hung up, so nothing failed upstream and there is
-				// nobody left to answer. Without this any client that gives up
-				// fills the log at error level.
+				// The client hung up,
+				// so nothing failed upstream and there is nobody left to answer.
+				// Without this any client that gives up fills the log at error level.
 				if p.debug {
 					p.log.Debug().Err(err).Msg("the client left before the answer")
 				}
 				return
 			}
-			p.counters.Upstream.Add(1)
+			p.counters.upstream.Add(1)
 			code := http.StatusBadGateway
 			if errors.Is(err, context.DeadlineExceeded) {
 				code = http.StatusGatewayTimeout
@@ -169,49 +216,39 @@ func NewProxy(
 	return p
 }
 
-// SetMetrics turns metrics on. Call it before the proxy serves.
-func (p *Proxy) SetMetrics(m *Metrics) { p.metrics = m }
+// snapshot returns the decisions the proxy made.
+func (p *proxy) snapshot() decisions { return p.counters.snapshot() }
 
-// CountersSnapshot returns the decisions the proxy made.
-func (p *Proxy) CountersSnapshot() (allowed, rejected, malformed, upstream uint64) {
-	return p.counters.Allowed.Load(), p.counters.Rejected.Load(),
-		p.counters.Malformed.Load(), p.counters.Upstream.Load()
-}
-
-func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var start time.Time
-	if p.metrics != nil {
-		start = time.Now()
-	}
+func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 
 	st := p.states.Get().(*state)
-	defer p.states.Put(st)
+	defer func() {
+		st.release()
+		p.states.Put(st)
+	}()
 
 	allowed, err := p.check(st, r)
 	switch {
 	case errors.Is(err, errTooLarge):
-		p.counters.Malformed.Add(1)
+		p.counters.malformed.Add(1)
 		p.reject(w, http.StatusRequestEntityTooLarge,
 			"request body too large", "REQUEST_TOO_LARGE")
-		if p.metrics != nil {
-			p.metrics.Observe(decisionMalformed, start)
-		}
+		p.metrics.Observe(decisionMalformed, start)
 		return
 	case err != nil:
-		p.counters.Malformed.Add(1)
+		p.counters.malformed.Add(1)
 		if p.debug {
 			p.log.Debug().Err(err).Msg("rejecting a malformed request")
 		}
 		p.reject(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
-		if p.metrics != nil {
-			p.metrics.Observe(decisionMalformed, start)
-		}
+		p.metrics.Observe(decisionMalformed, start)
 		return
 	case !allowed:
-		p.counters.Rejected.Add(1)
-		// Why debug and behind a condition: a rejection is the path a flood
-		// takes, so one event each is log volume the caller controls.
-		// [Counters] carry the totals.
+		p.counters.rejected.Add(1)
+		// Why debug and behind a condition: a rejection is the path a flood takes,
+		// so one event each is log volume the caller controls.
+		// [counters] carry the totals.
 		if p.debug {
 			p.log.Debug().
 				Str("remote", r.RemoteAddr).
@@ -220,13 +257,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		p.reject(w, http.StatusForbidden,
 			"operation not allowed", "OPERATION_NOT_ALLOWED")
-		if p.metrics != nil {
-			p.metrics.Observe(decisionRejected, start)
-		}
+		p.metrics.Observe(decisionRejected, start)
 		return
 	}
 
-	p.counters.Allowed.Add(1)
+	p.counters.allowed.Add(1)
 	if p.logRequests {
 		p.log.Debug().Str("remote", r.RemoteAddr).Msg("forwarding")
 	}
@@ -238,10 +273,23 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	p.upstream.ServeHTTP(w, r)
 
-	// The duration includes the upstream answer, so a dashboard can tell the
-	// proxy apart from the API behind it.
-	if p.metrics != nil {
-		p.metrics.Observe(decisionAllowed, start)
+	// The duration includes the upstream answer,
+	// so a dashboard can tell the proxy apart from the API behind it.
+	p.metrics.Observe(decisionAllowed, start)
+}
+
+// release drops what one oversized request grew, so the pool doesn't hold it for
+// the life of the process. What the common request grew is kept:
+// releasing that would cost an allocation per request to save nothing.
+func (st *state) release() {
+	if cap(st.body) > maxRetainedBuffer {
+		st.body = make([]byte, 0, defaultBodyBuffer)
+	}
+	if cap(st.scratch) > maxRetainedBuffer {
+		st.scratch = make([]byte, 0, defaultScratchBuffer)
+	}
+	if cap(st.spans) > maxRetainedSpans {
+		st.spans = make([]span, 0, defaultSpans)
 	}
 }
 
@@ -251,19 +299,18 @@ var errTooLarge = errors.New("request body too large")
 //
 // It allocates nothing: the body lands in the buffer of st, the document is a
 // subslice of that buffer, and the allowlist is looked up by that subslice.
-func (p *Proxy) check(st *state, r *http.Request) (allowed bool, err error) {
-	docs := st.spans[:0]
+func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
+	var value []byte
 
 	if r.Method == http.MethodGet {
-		value, scratch, err := extractQueryParam(st.scratch, r.URL.RawQuery)
-		st.scratch = scratch
+		value, st.scratch, err = extractQueryParam(st.scratch, r.URL.RawQuery)
 		if err != nil {
 			return false, err
 		}
 		return p.allow(st, value), nil
 	}
 
-	if err := p.readBody(st, r); err != nil {
+	if err = p.readBody(st, r); err != nil {
 		return false, err
 	}
 
@@ -272,15 +319,16 @@ func (p *Proxy) check(st *state, r *http.Request) (allowed bool, err error) {
 		return p.allow(st, st.body), nil
 	}
 
-	docs, err = extractJSON(docs, st.body, p.allowBatch)
+	docs, err := extractJSON(st.spans[:0], st.body, p.allowBatch)
+	// The spans of st are kept whatever happened, so the room extractJSON grew
+	// for a batch is there for the next request. docs holds the same array and
+	// keeps its length, which is what the loop below reads.
 	st.spans = docs[:0]
 	if err != nil {
 		return false, err
 	}
 	for _, s := range docs {
-		raw := st.body[s.start:s.end]
-		value, scratch, err := unescapeJSON(st.scratch, raw)
-		st.scratch = scratch
+		value, st.scratch, err = unescapeJSON(st.scratch, st.body[s.start:s.end])
 		if err != nil {
 			return false, err
 		}
@@ -291,33 +339,23 @@ func (p *Proxy) check(st *state, r *http.Request) (allowed bool, err error) {
 	return true, nil
 }
 
-// allow reports whether document is on the allowlist. A document that doesn't
-// parse isn't.
-func (p *Proxy) allow(st *state, document []byte) bool {
-	list := p.store.Load()
-	if list.Len() == 0 {
+// allow reports whether document is on the allowlist.
+// A document that doesn't parse isn't.
+func (p *proxy) allow(st *state, document []byte) bool {
+	if p.allowlist.Len() == 0 {
 		return false
 	}
 
-	var key []byte
-	if p.exact {
-		st.canon.buf = st.canon.buf[:0]
-		if e := st.parser.Parse(&st.canon, p.options, document); e.IsErr() {
-			return false
-		}
-		key = st.canon.buf
-	} else {
-		st.hash.Reset()
-		if e := st.parser.Parse(st.hash, p.options, document); e.IsErr() {
-			return false
-		}
-		st.sum = st.hash.Sum(st.sum[:0])
-		key = st.sum
+	st.hash.Reset()
+	if e := st.parser.Parse(st.hash, p.options, document); e.IsErr() {
+		return false
 	}
-	return list.Lookup(key) != nil
+	key := st.hash.Sum(st.sum[:0])
+	st.sum = key
+	return p.allowlist.Allowed(key)
 }
 
-func (p *Proxy) readBody(st *state, r *http.Request) error {
+func (p *proxy) readBody(st *state, r *http.Request) error {
 	st.body = st.body[:0]
 	if r.ContentLength > p.maxBody {
 		return errTooLarge
@@ -329,7 +367,11 @@ func (p *Proxy) readBody(st *state, r *http.Request) error {
 		}
 		st.body = st.body[:r.ContentLength]
 		if _, err := io.ReadFull(r.Body, st.body); err != nil {
-			return ErrMalformedJSON
+			// A body that doesn't arrive is no malformed document: the client
+			// went away, a timeout cut it off, or the connection failed.
+			// Saying which is what lets the log tell them apart, and calling it JSON
+			// would be wrong anyway for an application/graphql body.
+			return fmt.Errorf("reading the request body: %w", err)
 		}
 		return nil
 	}
@@ -346,17 +388,17 @@ func (p *Proxy) readBody(st *state, r *http.Request) error {
 			return errTooLarge
 		}
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
-			return err
+			return fmt.Errorf("reading the request body: %w", err)
 		}
 	}
 }
 
-// reject answers with a GraphQL error body. Under -opaque-errors every rejection
-// is a 403 without detail, so a caller learns nothing about why.
-func (p *Proxy) reject(w http.ResponseWriter, code int, message, extension string) {
+// reject answers with a GraphQL error body. Under -opaque-errors every rejection is
+// a 403 without detail, so a caller learns nothing about why.
+func (p *proxy) reject(w http.ResponseWriter, code int, message, extension string) {
 	if p.opaqueErrors {
 		code, message, extension = http.StatusForbidden,
 			"operation not allowed", "OPERATION_NOT_ALLOWED"
@@ -366,22 +408,72 @@ func (p *Proxy) reject(w http.ResponseWriter, code int, message, extension strin
 
 // writeError answers with the GraphQL error shape, which is what a client
 // library expects in a body.
+//
+// The envelope is written as it is rather than marshalled, which is what keeps
+// a rejection free of allocations, so the parts that come from a variable are
+// escaped on the way out. Nothing today puts a quote in a message,
+// and the client parsing this body is what pays if anything ever does.
 func writeError(w http.ResponseWriter, code int, message, extension string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
-	_, _ = w.Write([]byte(`{"errors":[{"message":"`))
-	_, _ = io.WriteString(w, message)
-	_, _ = w.Write([]byte(`","extensions":{"code":"`))
+	_, _ = io.WriteString(w, `{"errors":[{"message":"`)
+	writeJSONString(w, message)
+	// The code is a constant of this package and never comes from a request,
+	// so it goes out as it is. Only the message can carry anything.
+	_, _ = io.WriteString(w, `","extensions":{"code":"`)
 	_, _ = io.WriteString(w, extension)
-	_, _ = w.Write([]byte(`"}}]}`))
+	_, _ = io.WriteString(w, `"}}]}`)
+}
+
+// jsonEscape is the escape for every byte a JSON string can't carry as it is.
+// A quote and a backslash are handled apart, being the only two above 0x1F.
+var jsonEscape = func() (table [0x20]string) {
+	const hex = "0123456789abcdef"
+	for i := range table {
+		table[i] = `\u00` + string([]byte{hex[i>>4], hex[i&0xf]})
+	}
+	table['\b'], table['\f'] = `\b`, `\f`
+	table['\n'], table['\r'], table['\t'] = `\n`, `\r`, `\t`
+	return table
+}()
+
+// writeJSONString writes s as the contents of a JSON string, without the quotes
+// around it. The run between two escapes is written whole, so a string needing
+// no escape costs one write and nothing else.
+//
+// Bytes above 0x7F go out as they are, which is a JSON string where s is valid
+// UTF-8. Every message here is a Go error or a constant of this package, so it is.
+func writeJSONString(w io.Writer, s string) {
+	start := 0
+	for i := range len(s) {
+		c := s[i]
+		if c >= 0x20 && c != '"' && c != '\\' {
+			continue
+		}
+		if start < i {
+			_, _ = io.WriteString(w, s[start:i])
+		}
+		switch c {
+		case '"':
+			_, _ = io.WriteString(w, `\"`)
+		case '\\':
+			_, _ = io.WriteString(w, `\\`)
+		default:
+			_, _ = io.WriteString(w, jsonEscape[c])
+		}
+		start = i + 1
+	}
+	if start < len(s) {
+		_, _ = io.WriteString(w, s[start:])
+	}
 }
 
 // setForwarded fills the forwarding headers of the outbound request.
 //
-// Without trust they report the direct peer, because a client that reaches the
-// proxy directly can claim any address. With trust the peer is appended to the
-// chain of the load balancer and its host and protocol are kept, so the upstream
-// API sees the original client.
+// Without trust they report the direct peer, because a client that reaches
+// the proxy directly can claim any address. With trust the peer is appended
+// to the chain of the load balancer and its host and protocol are kept,
+// so the upstream API sees the original client.
 // Reference:
 //
 //   - https://datatracker.ietf.org/doc/html/rfc7239

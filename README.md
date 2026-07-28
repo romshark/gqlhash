@@ -77,13 +77,15 @@ Both produce the same hex-encoded SHA1 hash `b09f92659125366c58ec90c771eba361e92
 
 ### Trusted documents
 
-A server that implements [trusted documents](https://benjie.dev/graphql/trusted-documents), also known as persisted queries or a query allowlist, keeps the hash of every document it accepts and rejects everything else. The client sends a document, the server hashes it and looks the hash up.
+The [gqlhash-proxy](#gqlhash-proxy) implements [trusted documents](https://benjie.dev/graphql/trusted-documents), also known as persisted queries or a query allowlist, keeps the hash of every document it accepts and rejects everything else. The client sends a document, the server hashes it and looks the hash up.
 
 The hash ignores formatting, so a client that reformats, minifies or re-indents a document keeps the hash it was registered under. Without that, the allowlist has to store the document byte for byte and every layout change is a new entry.
 
 ### Cache keys
 
 The hash of a document is a key for a query plan cache or a response cache. Two clients that send the same document formatted differently share the entry.
+
+Keep the default `-ignore=nothing`: under the other modes documents differing in their values hash alike, and a cache would answer one with another's response. The hash covers the document alone, so a response cache key needs the variables and the operation name too.
 
 ### Change detection
 
@@ -99,7 +101,8 @@ With [`-ignore=inputs`](#ignoring-input-values) documents that differ only in th
 
 ```sh
 brew tap romshark/tools
-brew install gqlhash
+brew install gqlhash       # the hashing command
+brew install gqlhash-proxy # the allowlist-firewall proxy
 ```
 
 ### Compiled Binary
@@ -112,22 +115,23 @@ Download a compiled binary from [GitHub Releases](https://github.com/romshark/gq
 go install github.com/romshark/gqlhash/v2/cmd/gqlhash@latest
 ```
 
-This requires the latest version of [Go](https://go.dev).
-
-### gqlhash-proxy
-
-The [proxy](#proxy) is a command of its own:
-
 ```sh
 go install github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy@latest
 ```
 
-Every release ships both. `gqlhash` (~2MB) carries no HTTP server and no metrics client, which is most of what makes `gqlhash-proxy` (~10.4MB) larger. `gqlhash` is [internal/app/hasher](internal/app/hasher), `gqlhash-proxy` is [internal/app/proxy](internal/app/proxy), and both share [internal/app/config](internal/app/config), which holds their command line surface: the flags, the hash functions, the output formats and the ignore modes.
+This requires the latest version of [Go](https://go.dev).
 
-## Usage
+### gqlhash-proxy
+
+```sh
+brew tap romshark/tools
+brew install gqlhash-proxy
+```
+
+## Usage: gqlhash
 
 > [!IMPORTANT]
-> The CLI spawns a process per invocation. It's for scripts, CI pipelines and local use, not for a per-request path. A Go server uses the package functions ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Compare), [AppendHash](https://pkg.go.dev/github.com/romshark/gqlhash/v2#AppendHash)), which take a `string` or a `[]byte` document. On a per-request path it uses a [Hasher](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Hasher) per goroutine, which allocates nothing per call.
+> The gqlhash CLI spawns a process per invocation. It's for scripts, CI pipelines and local use, not for a per-request path. Use the [gqlhash-proxy](#gqlhash-proxy) for filtering incoming requests. A Go server may use the package functions ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Compare), [AppendHash](https://pkg.go.dev/github.com/romshark/gqlhash/v2#AppendHash)).
 
 gqlhash reads the document from stdin until EOF and prints its SHA1 hash as a hexadecimal string to stdout:
 
@@ -247,37 +251,95 @@ echo 'query ($x: Int) { object(x: $x) { id } }' | gqlhash -ignore=variables
 echo '{ object(x: 42) { id } }' | gqlhash -ignore=variables
 ```
 
-## Proxy
+## Usage: Proxy
 
-[gqlhash-proxy](#gqlhash-proxy) serves an allowlist of documents in front of a GraphQL API. A request whose document is on the list is forwarded, every other request is rejected with 403 and never reaches the API.
+[gqlhash-proxy](#gqlhash-proxy) serves an allowlist of documents in front of a GraphQL API. A request whose document is on the list is forwarded, every other request is rejected with `403 Forbidden` and never reaches the API.
 
 ```sh
 gqlhash-proxy \
-  -listen :8080 \
-  -upstream http://api:4000/graphql \
+  -server.listen :8080 \
+  -upstream.url http://api:4000/graphql \
   -allowlist ./queries \
-  -watch
+  -control.listen 127.0.0.1:9090
 ```
 
 `-allowlist` is a directory of `.graphql` and `.gql` files holding the allowed documents. The proxy hashes them itself, so the documents are the source of truth. Formatting and comments may differ between a file and what a client sends. The set of definitions may not: one file is one entry.
 
-`-watch` reloads the directory when it changes. A document that doesn't parse is skipped with an error naming `file:line:column`, at startup and on reload alike, so one broken file doesn't keep the rest from being served. A directory with no usable document serves an empty allowlist, rejects everything, and says so.
+A `.graphqls` file in the same directory is read as the schema, and every document is then checked against it: one asking for a field the schema doesn't have is skipped like one that doesn't parse. Without such a file nothing is checked against a schema. Several `.graphqls` files are read as one schema, and a schema that doesn't parse is reported and leaves the documents unchecked rather than unserved.
 
-`-exact` compares canonical forms instead of hashes, which removes the risk of a hash collision granting access.
+Two files whose documents hash alike are both skipped: which one a request meant is unknowable, and allowing the wrong one is worse than allowing neither.
 
-`-hash` accepts only the collision-resistant functions (`sha2`, `sha3`, `blake2b`, `blake2s`, `blake3`), unlike `gqlhash`. Rationale: an allowlist's security property is collision resistance, and `crc32`, `crc64`, `fnv`, `fnv1a` and `xxh64` are collidable by construction while `md5` and `sha1` are broken.
+A document that doesn't parse is skipped with an error log, at startup and on reload alike, so one broken file doesn't keep the rest from being served. A directory with no usable document serves an empty allowlist, rejects everything.
 
-`-trust-forwarded` keeps the `X-Forwarded-*` headers of the incoming request and appends the peer to them, which a proxy behind a load balancer needs so the API still sees the original client. Without it those headers report the direct peer, because a client that connects directly can claim any address.
+`-control.listen 127.0.0.1:9090` serves the control server on that address, which is separate from the port that serves traffic. It provides [Prometheus](https://prometheus.io/) metrics on `/metrics` and rereads the allowlist on `POST /reload`.
 
-`-metrics 127.0.0.1:9090` serves Prometheus metrics on `/metrics` at that address, which is separate from the port that serves traffic. Without the flag they're off and a request pays nothing for them. Exposed are request counters by decision, upstream errors, the allowlist size and load time, a request duration histogram, and the Go runtime collectors.
+`/status` answers what the proxy has decided so far: the size of the allowlist, when it was loaded, and the counters for allowed, rejected and malformed requests and upstream failures. Like the metrics it needs no token, and like them it isn't served on the traffic port — it's operational state, not something a client of the API should see.
 
-Rejections are counted, not logged. A flood of rejected requests would otherwise write one log line each, so the events sit at debug level and `-log-level debug` turns them on.
+`GQLHASH_PROXY_CONTROL_TOKEN` requires `Authorization: Bearer <token>` on `/reload`, compared in constant time. Metrics are served without it. There is no flag for the token: a process argument is readable by anyone on the host through `ps` or `/proc/<pid>/cmdline`, the environment of a process isn't.
 
-`-upstream-max-idle-conns-per-host` (default 64) is how many connections stay open to the upstream between requests. There is one upstream, so that single pool is what caps connection reuse under load; `-upstream-max-idle-conns` (default 256) is the ceiling over it. `-upstream-http2=false` keeps an `https` upstream on HTTP/1.1, which is worth trying when one h2 connection multiplexing every request turns into head-of-line blocking.
+### Reloading Allowlist
 
-Every flag can be given through the environment instead, as `GQLHASH_PROXY_` followed by its name with the dashes as underscores: `GQLHASH_PROXY_MAX_BODY=4096`, `GQLHASH_PROXY_UPSTREAM=http://api:4000/graphql`. A flag given on the command line wins. `gqlhash` reads no environment, so a variable can't quietly change the hashes a pipeline produces.
+```sh
+# Control server host
+curl -fsS -X POST localhost:9090/reload
+```
 
-`gqlhash-proxy -help` lists the remaining flags: body size limit, batching, request logging, log level and format, timeouts and a status endpoint.
+Returns:
+
+```json
+{
+  "documents": {
+    "total": 2,
+    "files": ["queries/list-users.graphql", "queries/user-with-email.graphql"]
+  },
+  "skipped": {
+    "total": 1,
+    "errors": ["queries/get-user.graphql:2:9: unexpected token: malformed number"]
+  }
+}
+```
+
+Every flag of the proxy, with its default:
+
+| Flag | Default | |
+| --- | --- | --- |
+| `-upstream.url` | required | the GraphQL API a request is forwarded to |
+| `-allowlist` | required | the directory the documents are read from |
+| `-server.listen` | `:8080` | where the traffic is served |
+| `-control.listen` | `127.0.0.1:9090` | where `/metrics`, `/status` and `/reload` are served |
+| `-hash` | `sha2` | `sha2`, `sha3`, `blake2b`, `blake2s` or `blake3` |
+| `-ignore` | `nothing` | what to leave out of the hash, see [Ignoring Input Values](#ignoring-input-values) |
+| `-server.max-body` | 1 MiB | largest request body accepted |
+| `-allow-batch` | off | accept batches, where every document has to be allowed |
+| `-opaque-errors` | off | answer every rejection with 403 and no detail |
+| `-trust-forwarded` | off | keep the `X-Forwarded-*` headers a request arrives with |
+| `-log.level` | `info` | `debug`, `info`, `warn` or `error` |
+| `-log.json` | on | JSON instead of readable text |
+| `-log.requests` | off | log every forwarded request at debug level |
+| `-upstream.timeout` | 30s | how long an upstream request may take |
+| `-upstream.max-idle-conns-per-host` | 64 | connections kept open to the upstream |
+| `-upstream.max-idle-conns` | 256 | ceiling over the per-host pool, 0 for none |
+| `-upstream.http2` | on | allow HTTP/2 to an `https` upstream |
+| `-server.read-header-timeout` | 10s | how long a client may take to send the headers |
+| `-server.read-timeout` | 30s | how long a client may take to send the request |
+| `-server.write-timeout` | `-upstream.timeout` + 10s | how long answering may take |
+| `-server.idle-timeout` | 2m | how long an idle keep-alive connection is held |
+| `-server.shutdown-timeout` | 10s | how long the requests in flight are waited for |
+
+`0` leaves any of the timeouts off. Four of them carry a constraint worth knowing:
+
+- `-server.write-timeout` must stay above `-upstream.timeout`, or the proxy cuts off a response the upstream is still allowed to be sending. It follows that flag unless you set it, and a value at or below it is rejected at startup.
+- `-server.read-timeout` has to fit `-server.max-body` arriving over the slowest link you serve, and must not be below `-server.read-header-timeout`, which would leave that one without effect.
+- `-server.idle-timeout` belongs above the idle timeout of any load balancer in front, or the balancer reuses a connection the proxy is closing.
+- `-upstream.max-idle-conns-per-host` is what caps connection reuse: there is one upstream, so every forwarded request draws from that one pool.
+
+`-hash` takes only the collision-resistant functions, unlike `gqlhash`. Rationale: an allowlist's security property is collision resistance, and `crc32`, `crc64`, `fnv`, `fnv1a` and `xxh64` are collidable by construction while `md5` and `sha1` are broken.
+
+`-trust-forwarded` appends the peer to the `X-Forwarded-*` headers instead of replacing them, which a proxy behind a load balancer needs so the API still sees the original client. Set it only there: a client that connects directly can otherwise claim any address.
+
+Exposed on `/metrics` are request counters by decision, upstream errors, the allowlist size and load time, a request duration histogram, and the Go runtime collectors. Rejections are counted, not logged: a flood of them would otherwise write one line each, so those events sit at debug level.
+
+Every flag can be given through the environment instead, as `GQLHASH_PROXY_` followed by its name with the dashes and dots as underscores: `GQLHASH_PROXY_SERVER_MAX_BODY=4096`, `GQLHASH_PROXY_UPSTREAM_URL=http://api:4000/graphql`. A flag given on the command line wins. `gqlhash` reads no environment, so a variable can't quietly change the hashes a pipeline produces.
 
 `scripts/loadtest.sh [generator] [duration]` load tests the proxy end to end: it starts an upstream API, puts the proxy in front of it and drives both the forwarded and the rejected path. It takes oha, vegeta, wrk, h2load or k6, whichever is installed.
 
@@ -290,57 +352,82 @@ Measured on an Apple M4 Pro, 50 connections, loopback:
 
 A rejection never opens the upstream connection, which is what makes it ~3x cheaper than a forward. `go test -bench BenchmarkProxy ./internal/app/proxy` measures the same paths without a load generator.
 
-[playground](playground) runs the proxy in front of a sample GraphQL API with `docker compose up --build`, with a few allowed documents to try it against.
+[playground](playground) runs the proxy in front of a sample GraphQL API with `docker compose up --build`, with a few allowed documents and the schema they're checked against.
 
 ## Performance
 
 Measured against two references across the benchmark documents:
 
-- Hashing the document bytes directly with SHA1, which does no parsing: gqlhash takes ~4x as long (min ~2.5x, max ~5x).
-- Parsing the document into an AST with [vektah/gqlparser/v2](https://github.com/vektah/gqlparser): gqlhash takes ~1/53 of the time (min ~1/18, max ~1/113). gqlhash allocates nothing, gqlparser/v2 allocates a few hundred times per document.
-
-Results below.
+- Hashing the document bytes directly with SHA1, which does no parsing: gqlhash takes ~4x as long (min ~2.2x, max ~7.6x).
+- Parsing the document into an AST with [vektah/gqlparser/v2](https://github.com/vektah/gqlparser): gqlhash takes ~1/77 of the time (min ~1/20, max ~1/182). gqlhash allocates nothing, gqlparser/v2 allocates hundreds of times per document.
 
 <details>
+<summary>Results</summary>
 
 ```
 goos: darwin
 goarch: arm64
-pkg: github.com/romshark/gqlhash
+pkg: github.com/romshark/gqlhash/v2
 cpu: Apple M4 Pro
-BenchmarkReferenceSHA1/blockstring/minified/direct-14         	27854104	        44.93 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/blockstring/minified/gqlhash-14        	 5863072	       208.4 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/blockstring/minified/vektah-14         	  110545	     10269 ns/op	   10905 B/op	     195 allocs/op
+BenchmarkReferenceSHA1/blockstring/minified/direct         	25799564	        45.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/minified/gqlhash/nothing         	 6051105	       197.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/minified/gqlhash/inputs          	 7272676	       169.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/minified/gqlhash/variables       	 7205239	       170.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/minified/vektah                  	   81962	     14455 ns/op	   10905 B/op	     195 allocs/op
 
-BenchmarkReferenceSHA1/blockstring/formatted/direct-14        	27563870	        42.82 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/blockstring/formatted/gqlhash-14       	 5406764	       225.6 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/blockstring/formatted/vektah-14        	  103300	     10666 ns/op	   10953 B/op	     195 allocs/op
+BenchmarkReferenceSHA1/blockstring/formatted/direct                 	25974072	        46.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/formatted/gqlhash/nothing        	 5082355	       231.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/formatted/gqlhash/inputs         	 5900920	       200.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/formatted/gqlhash/variables      	 5972416	       198.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/blockstring/formatted/vektah                 	   83458	     14503 ns/op	   10953 B/op	     195 allocs/op
 
-BenchmarkReferenceSHA1/tiny/minified/direct-14                	37450552	        33.23 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/tiny/minified/gqlhash-14               	14820181	        81.72 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/tiny/minified/vektah-14                	  122278	      9244 ns/op	    9449 B/op	     174 allocs/op
+BenchmarkReferenceSHA1/tiny/minified/direct                         	34142316	        35.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/minified/gqlhash/nothing                	15186620	        75.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/minified/gqlhash/inputs                 	15861388	        77.08 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/minified/gqlhash/variables              	15664713	        77.08 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/minified/vektah                         	   88830	     13835 ns/op	    9449 B/op	     174 allocs/op
 
-BenchmarkReferenceSHA1/tiny/formatted/direct-14               	39172748	        31.60 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/tiny/formatted/gqlhash-14              	13722361	        87.24 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/tiny/formatted/vektah-14               	  132538	      9356 ns/op	    9449 B/op	     174 allocs/op
+BenchmarkReferenceSHA1/tiny/formatted/direct                        	35161786	        34.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/formatted/gqlhash/nothing               	14199922	        81.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/formatted/gqlhash/inputs                	14837398	        81.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/formatted/gqlhash/variables             	14761720	        81.73 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/tiny/formatted/vektah                        	   90900	     13597 ns/op	    9449 B/op	     174 allocs/op
 
-BenchmarkReferenceSHA1/medium/minified/direct-14              	14299480	        82.30 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/medium/minified/gqlhash-14             	 3132934	       407.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/medium/minified/vektah-14              	   83083	     13969 ns/op	   17361 B/op	     285 allocs/op
+BenchmarkReferenceSHA1/medium/minified/direct                       	14672617	        83.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/minified/gqlhash/nothing              	 2948643	       406.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/minified/gqlhash/inputs               	 3523322	       341.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/minified/gqlhash/variables            	 3515204	       347.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/minified/vektah                       	   61765	     20165 ns/op	   17361 B/op	     285 allocs/op
 
-BenchmarkReferenceSHA1/medium/formatted/direct-14             	 8527635	       137.2 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/medium/formatted/gqlhash-14            	 2370624	       523.9 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/medium/formatted/vektah-14             	   76917	     15946 ns/op	   17977 B/op	     300 allocs/op
+BenchmarkReferenceSHA1/medium/formatted/direct                      	 8286560	       147.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/formatted/gqlhash/nothing             	 2219371	       523.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/formatted/gqlhash/inputs              	 2614382	       456.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/formatted/gqlhash/variables           	 2594966	       453.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/medium/formatted/vektah                      	   60288	     20314 ns/op	   17977 B/op	     300 allocs/op
 
-BenchmarkReferenceSHA1/big/minified/direct-14                 	 1979839	       595.8 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/big/minified/gqlhash-14                	  629686	      1918 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/big/minified/vektah-14                 	   30684	     39336 ns/op	   53360 B/op	     839 allocs/op
+BenchmarkReferenceSHA1/big/minified/direct                          	 2025945	       588.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/minified/gqlhash/nothing                 	  570358	      2051 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/minified/gqlhash/inputs                  	  731978	      1641 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/minified/gqlhash/variables               	  823298	      1469 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/minified/vektah                          	   22948	     51611 ns/op	   53360 B/op	     839 allocs/op
 
-BenchmarkReferenceSHA1/big/formatted/direct-14                	 1402633	       868.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/big/formatted/gqlhash-14               	  495696	      2502 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReferenceSHA1/big/formatted/vektah-14                	   26110	     44907 ns/op	   54880 B/op	     877 allocs/op
+BenchmarkReferenceSHA1/big/formatted/direct                         	 1339686	       896.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/formatted/gqlhash/nothing                	  452890	      2646 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/formatted/gqlhash/inputs                 	  534379	      2184 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/formatted/gqlhash/variables              	  585877	      2028 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/big/formatted/vektah                         	   22112	     53901 ns/op	   54880 B/op	     877 allocs/op
+
+BenchmarkReferenceSHA1/nesting_attack/minified/direct               	 1547923	       781.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/nesting_attack/minified/gqlhash/nothing      	  204498	      5959 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/nesting_attack/minified/gqlhash/inputs       	  252505	      4723 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/nesting_attack/minified/gqlhash/variables    	  263535	      4521 ns/op	       0 B/op	       0 allocs/op
+
+BenchmarkReferenceSHA1/nesting_attack/formatted/direct              	  746440	      1646 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/nesting_attack/formatted/gqlhash/nothing     	  141748	      8337 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/nesting_attack/formatted/gqlhash/inputs      	  161920	      7394 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReferenceSHA1/nesting_attack/formatted/gqlhash/variables   	  159295	      7335 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/romshark/gqlhash	34.943s
+ok  	github.com/romshark/gqlhash/v2	68.329s
 ```
 
 </details>
@@ -349,15 +436,27 @@ ok  	github.com/romshark/gqlhash	34.943s
 
 ### Order of Operations, Selections and Arguments
 
-Everything is hashed in the order it appears, so reordering changes the hash. What the spec makes of the order differs by subject:
+Everything is hashed in the order it appears, so moving anything around changes the hash:
 
-- Arguments and input object fields are unordered, so reordering them is insignificant and the hash changes anyway.
-- Operation and fragment definitions may appear in any order, same case.
-- Selections are ordered: a response should list the fields in the order they were requested, so reordering a selection set is observable to the client.
+```graphql
+{ user { id name } }
+{ user { name id } } # a different hash
+```
 
-Rationale: hashing the first two order-insensitively requires sorting, which costs time and code.
+```graphql
+{ user(id: 1, role: ADMIN) { name } }
+{ user(role: ADMIN, id: 1) { name } } # a different hash
+```
 
-### Fragments
+```graphql
+{ search(where: {name: "ada", role: ADMIN}) { id } }
+{ search(where: {role: ADMIN, name: "ada"}) { id } } # a different hash
+```
+
+```graphql
+query A { a } query B { b }
+query B { b } query A { a } # a different hash
+```
 
 Fragment spreads and fragment definitions are hashed as they appear, not inlined. A document using a named fragment produces a different hash than its inlined equivalent, although both select the same fields:
 
@@ -370,4 +469,4 @@ fragment userFields on User { id name }
 { user { id name } }
 ```
 
-Rationale: inlining a fragment requires the schema to resolve the type condition against the parent type. gqlhash needs no schema.
+The reason is that hashing order-insensitively and inlining fragment is more work and that would reduce the effectiveness of the proxy firewall.

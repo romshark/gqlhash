@@ -22,7 +22,7 @@ func TestParseHasher(t *testing.T) {
 		t.Fatalf("expected the defaults to parse; code %d, stderr: %s",
 			code, errOut.String())
 	}
-	if cfg.File != "" || cfg.Version {
+	if cfg.File != "" || cfg.CmdPrintVersion {
 		t.Errorf("unexpected defaults: %+v", cfg)
 	}
 	if cfg.Format != config.FormatHex {
@@ -50,13 +50,6 @@ func TestParseHasher(t *testing.T) {
 		cfg.Ignore != gqlhash.IgnoreVariables {
 		t.Errorf("unexpected config: %+v", cfg)
 	}
-
-	// -version parses and leaves the printing to the caller.
-	errOut.Reset()
-	cfg, code, run = config.ParseHasher("gqlhash", hasherArgs("-version"), &errOut)
-	if !run || code != 0 || !cfg.Version {
-		t.Errorf("expected -version to parse; %+v code %d run %t", cfg, code, run)
-	}
 }
 
 func TestParseHasherErrors(t *testing.T) {
@@ -83,41 +76,55 @@ func TestParseHasherErrors(t *testing.T) {
 	f(t, 2, "unsupported hash function", "-hash", "sha9")
 	f(t, 2, "unsupported ignore mode", "-ignore", "everything")
 
-	// A positional argument is rejected instead of being ignored, and asking the
-	// hashing command for the proxy names the command that has it.
+	// A positional argument is rejected instead of being ignored,
+	// and asking the hashing command for the proxy names the command that has it.
 	f(t, 2, `unexpected argument "typo"`, "typo")
-	f(t, 2, "gqlhash-proxy command", "proxy")
+	f(t, 2, "the proxy is the "+config.ProxyCommand+" command", "proxy")
 }
 
 func TestParseProxy(t *testing.T) {
 	var errOut strings.Builder
 	cfg, code, run := config.ParseProxy("gqlhash-proxy", proxyArgs(
-		"-upstream", "http://api:4000/graphql", "-allowlist", "./queries",
+		"-upstream.url", "http://api:4000/graphql", "-allowlist", "./queries",
 	), &errOut)
 	if !run || code != 0 {
 		t.Fatalf("expected the required flags to parse; code %d, stderr: %s",
 			code, errOut.String())
 	}
-	if cfg.Listen != ":8080" || cfg.Upstream.String() != "http://api:4000/graphql" ||
-		cfg.Allowlist != "./queries" {
+	if cfg.Server.Listen != ":8080" || cfg.Upstream.URL.String() != "http://api:4000/graphql" ||
+		cfg.AllowlistDir != "./queries" {
 		t.Errorf("unexpected config: %+v", cfg)
 	}
-	if cfg.Hash != config.HashFunctionSHA2 {
-		t.Errorf("expected sha2 by default; received %v", cfg.Hash)
+	if cfg.HashFunc != config.HashFunctionSHA2 {
+		t.Errorf("expected sha2 by default; received %v", cfg.HashFunc)
 	}
-	if cfg.MaxBody != 1<<20 || cfg.Timeout != 30*time.Second ||
-		cfg.Shutdown != 10*time.Second || cfg.WatchInterval != 2*time.Second {
+	if cfg.Server.MaxBody != 1<<20 || cfg.Upstream.Timeout != 30*time.Second ||
+		cfg.Server.ShutdownTimeout != 10*time.Second {
 		t.Errorf("unexpected defaults: %+v", cfg)
 	}
-	if cfg.MaxIdleConnsPerHost != 64 || cfg.MaxIdleConns != 256 || !cfg.HTTP2 {
+	if cfg.Server.ReadHeaderTimeout != 10*time.Second ||
+		cfg.Server.ReadTimeout != 30*time.Second ||
+		cfg.Server.IdleTimeout != 120*time.Second {
+		t.Errorf("unexpected listener timeouts: %+v", cfg)
+	}
+	// An unset write timeout follows -upstream.timeout.
+	if cfg.Server.WriteTimeout != cfg.Upstream.Timeout+10*time.Second {
+		t.Errorf("expected the write timeout to follow -upstream.timeout; received %v",
+			cfg.Server.WriteTimeout)
+	}
+	// The control server has no off switch, so its address has a default.
+	if cfg.Control.Address != "127.0.0.1:9090" || cfg.Control.Token != "" {
+		t.Errorf("unexpected control defaults: %+v", cfg)
+	}
+	if cfg.Upstream.MaxIdleConnsPerHost != 64 || cfg.Upstream.MaxIdleConns != 256 || !cfg.Upstream.HTTP2 {
 		t.Errorf("unexpected upstream defaults: %+v", cfg)
 	}
-	if !cfg.LogJSON || cfg.LogLevel != "info" {
+	if !cfg.Log.JSON || cfg.Log.Level != "info" {
 		t.Errorf("unexpected log defaults: %+v", cfg)
 	}
 	for _, off := range []bool{
-		cfg.Watch, cfg.Exact, cfg.AllowBatch, cfg.OpaqueErrors,
-		cfg.LogRequests, cfg.TrustForwarded, cfg.Version,
+		cfg.AllowBatch, cfg.OpaqueErrors,
+		cfg.Log.Requests, cfg.TrustForwarded, cfg.CmdPrintVersion,
 	} {
 		if off {
 			t.Errorf("expected every switch off by default: %+v", cfg)
@@ -128,43 +135,71 @@ func TestParseProxy(t *testing.T) {
 	// Every flag reaches the config.
 	errOut.Reset()
 	cfg, code, run = config.ParseProxy("gqlhash-proxy", proxyArgs(
-		"-listen", "127.0.0.1:1", "-upstream", "https://api/graphql",
-		"-allowlist", "./q", "-watch", "-watch-interval", "5s",
-		"-hash", "blake3", "-ignore", "inputs", "-exact",
-		"-max-body", "4096", "-allow-batch", "-opaque-errors",
-		"-log-requests", "-trust-forwarded", "-log-level", "debug",
-		"-log-json=false", "-timeout", "1s", "-status", "/healthz",
-		"-metrics", "127.0.0.1:2", "-shutdown-timeout", "2s",
-		"-upstream-max-idle-conns-per-host", "8", "-upstream-max-idle-conns", "16",
-		"-upstream-http2=false",
+		"-server.listen", "127.0.0.1:1", "-upstream.url", "https://api/graphql",
+		"-allowlist", "./q", "-control.listen", "127.0.0.1:3",
+		"-hash", "blake3", "-ignore", "inputs",
+		"-server.max-body", "4096", "-allow-batch", "-opaque-errors",
+		"-log.requests", "-trust-forwarded", "-log.level", "debug",
+		"-log.json=false", "-upstream.timeout", "1s",
+		"-server.shutdown-timeout", "2s", "-server.read-header-timeout", "3s",
+		"-server.read-timeout", "17s", "-server.write-timeout", "23s",
+		"-server.idle-timeout", "29s",
+		"-upstream.max-idle-conns-per-host", "8", "-upstream.max-idle-conns", "16",
+		"-upstream.http2=false",
 	), &errOut)
 	if !run || code != 0 {
 		t.Fatalf("expected these flags to parse; code %d, stderr: %s",
 			code, errOut.String())
 	}
 	want := config.Proxy{
-		Listen: "127.0.0.1:1", Allowlist: "./q", Watch: true,
-		WatchInterval: 5 * time.Second, Hash: config.HashFunctionBLAKE3,
-		Ignore: gqlhash.IgnoreInputs, Exact: true, MaxBody: 4096,
-		AllowBatch: true, OpaqueErrors: true, LogRequests: true,
-		TrustForwarded: true, LogLevel: "debug", LogJSON: false,
-		Timeout: time.Second, Shutdown: 2 * time.Second, Status: "/healthz",
-		Metrics: "127.0.0.1:2", MaxIdleConnsPerHost: 8, MaxIdleConns: 16,
-		HTTP2: false,
+		AllowlistDir: "./q",
+		HashFunc:     config.HashFunctionBLAKE3,
+		Ignore:       gqlhash.IgnoreInputs,
+		AllowBatch:   true, OpaqueErrors: true, TrustForwarded: true,
+		Server: config.ProxyServer{
+			Listen:            "127.0.0.1:1",
+			MaxBody:           4096,
+			ShutdownTimeout:   2 * time.Second,
+			ReadHeaderTimeout: 3 * time.Second,
+			ReadTimeout:       17 * time.Second,
+			WriteTimeout:      23 * time.Second,
+			IdleTimeout:       29 * time.Second,
+		},
+		Upstream: config.ProxyUpstream{
+			Timeout:             time.Second,
+			MaxIdleConnsPerHost: 8,
+			MaxIdleConns:        16,
+			HTTP2:               false,
+		},
+		Control: config.ProxyControl{Address: "127.0.0.1:3"},
+		Log: config.ProxyLog{
+			Level: "debug", JSON: false, Requests: true,
+		},
 	}
-	want.Upstream = cfg.Upstream // Compared separately, it's a pointer.
+	want.Upstream.URL = cfg.Upstream.URL // Compared separately, it's a pointer.
 	if cfg != want {
 		t.Errorf("expected %+v; received %+v", want, cfg)
 	}
-	if cfg.Upstream.String() != "https://api/graphql" {
-		t.Errorf("unexpected upstream: %s", cfg.Upstream)
+	if cfg.Upstream.URL.String() != "https://api/graphql" {
+		t.Errorf("unexpected upstream: %s", cfg.Upstream.URL)
 	}
 
-	// -version parses without the flags a run would need.
+	// A zero timeout is no timeout at all, which is allowed and doesn't fall back
+	// to following -upstream.timeout.
 	errOut.Reset()
-	cfg, code, run = config.ParseProxy("gqlhash-proxy", proxyArgs("-version"), &errOut)
-	if !run || code != 0 || !cfg.Version {
-		t.Errorf("expected -version to parse; %+v code %d run %t", cfg, code, run)
+	cfg, code, run = config.ParseProxy("gqlhash-proxy", proxyArgs(
+		"-upstream.url", "http://api/graphql", "-allowlist", "./q",
+		"-server.write-timeout", "0", "-server.read-timeout", "0",
+		"-server.idle-timeout", "0",
+		"-server.read-header-timeout", "0",
+	), &errOut)
+	if !run || code != 0 {
+		t.Fatalf("expected zero timeouts to parse; code %d, stderr: %s",
+			code, errOut.String())
+	}
+	if cfg.Server.WriteTimeout != 0 || cfg.Server.ReadTimeout != 0 || cfg.Server.IdleTimeout != 0 ||
+		cfg.Server.ReadHeaderTimeout != 0 {
+		t.Errorf("expected every timeout off; received %+v", cfg)
 	}
 }
 
@@ -186,12 +221,12 @@ func TestParseProxyErrors(t *testing.T) {
 
 	f(t, 0, "", "-help")
 	f(t, 2, "", "-nonexistent")
-	f(t, 2, "-upstream is required")
-	f(t, 2, "no absolute URL", "-upstream", "not-a-url")
-	f(t, 2, "no absolute URL", "-upstream", "/only/a/path")
-	f(t, 2, "-allowlist is required", "-upstream", "http://x")
+	f(t, 2, "-upstream.url is required")
+	f(t, 2, "no absolute URL", "-upstream.url", "not-a-url")
+	f(t, 2, "no absolute URL", "-upstream.url", "/only/a/path")
+	f(t, 2, "-allowlist is required", "-upstream.url", "http://x")
 
-	const ok = "-upstream"
+	const ok = "-upstream.url"
 	// The proxy takes only the collision-resistant functions, though the hashing
 	// form offers all twelve.
 	for _, weak := range []string{"sha1", "md5", "crc32", "crc64", "fnv", "fnv1a",
@@ -204,27 +239,47 @@ func TestParseProxyErrors(t *testing.T) {
 	}
 	f(t, 2, "unsupported ignore mode", ok, "http://x", "-allowlist", ".",
 		"-ignore", "everything")
+	// The control server can't be turned off.
+	f(t, 2, "-control.listen must name an address",
+		ok, "http://x", "-allowlist", ".", "-control.listen", "")
 	f(t, 2, `unexpected argument "typo"`, "typo")
+	// The hint the hasher gives would send a caller to the command they already
+	// ran, so the proxy treats "proxy" as the argument it doesn't take.
+	f(t, 2, `unexpected argument "proxy"`, "proxy")
+
+	// A write timeout at or below -upstream.timeout would cut off a response
+	// the upstream is still allowed to be sending.
+	f(t, 2, "-server.write-timeout 5s must be above -upstream.timeout 30s",
+		ok, "http://x", "-allowlist", ".", "-server.write-timeout", "5s")
+	f(t, 2, "must be above -upstream.timeout",
+		ok, "http://x", "-allowlist", ".", "-server.write-timeout", "30s")
+	// A read timeout below the header timeout would decide first.
+	f(t, 2, "-server.read-timeout 1s must be at least -server.read-header-timeout 10s",
+		ok, "http://x", "-allowlist", ".", "-server.read-timeout", "1s")
+	f(t, 2, "-server.idle-timeout must be 0 or more",
+		ok, "http://x", "-allowlist", ".", "-server.idle-timeout", "-1s")
 
 	// An idle pool of zero would fall back to the two connections of the standard
 	// library, which is no pool at this rate.
-	f(t, 2, "-upstream-max-idle-conns-per-host must be 1 or more",
-		ok, "http://x", "-allowlist", ".", "-upstream-max-idle-conns-per-host", "0")
-	// A total below the per-host limit caps it, so it's rejected instead of
-	// leaving the per-host value without effect.
-	f(t, 2, "-upstream-max-idle-conns must be 0 or at least",
-		ok, "http://x", "-allowlist", ".", "-upstream-max-idle-conns", "8")
+	f(t, 2, "-upstream.max-idle-conns-per-host must be 1 or more",
+		ok, "http://x", "-allowlist", ".", "-upstream.max-idle-conns-per-host", "0")
+	// A total below the per-host limit caps it, so it's rejected instead
+	// of leaving the per-host value without effect.
+	f(t, 2, "-upstream.max-idle-conns must be 0 or at least",
+		ok, "http://x", "-allowlist", ".", "-upstream.max-idle-conns", "8")
 }
 
-// TestParseProxyEnv covers the environment form of the flags. The proxy is
-// configured by a deployment, which has no command line to edit.
+// TestParseProxyEnv covers the environment form of the flags.
+// The proxy is configured by a deployment, which has no command line to edit.
 func TestParseProxyEnv(t *testing.T) {
-	t.Setenv(config.EnvName("listen"), "127.0.0.1:9")
-	t.Setenv(config.EnvName("upstream"), "http://from-env/graphql")
+	t.Setenv(config.EnvName("server.listen"), "127.0.0.1:9")
+	t.Setenv(config.EnvName("upstream.url"), "http://from-env/graphql")
 	t.Setenv(config.EnvName("allowlist"), "/queries")
-	t.Setenv(config.EnvName("max-body"), "4096")
-	t.Setenv(config.EnvName("watch"), "true")
-	t.Setenv(config.EnvName("upstream-max-idle-conns-per-host"), "128")
+	t.Setenv(config.EnvName("server.max-body"), "4096")
+	// The token has no flag, so the environment is the only way to give it. It's
+	// trimmed, since a secret file or a here-doc carries a newline.
+	t.Setenv(config.EnvName("control.token"), "  from-the-environment\n")
+	t.Setenv(config.EnvName("upstream.max-idle-conns-per-host"), "128")
 
 	var errOut strings.Builder
 	cfg, code, run := config.ParseProxy("gqlhash-proxy", proxyArgs(), &errOut)
@@ -232,30 +287,31 @@ func TestParseProxyEnv(t *testing.T) {
 		t.Fatalf("expected the environment to stand in for the flags; "+
 			"code %d, stderr: %s", code, errOut.String())
 	}
-	if cfg.Listen != "127.0.0.1:9" || cfg.Allowlist != "/queries" ||
-		cfg.MaxBody != 4096 || !cfg.Watch || cfg.MaxIdleConnsPerHost != 128 ||
-		cfg.Upstream.String() != "http://from-env/graphql" {
+	if cfg.Server.Listen != "127.0.0.1:9" || cfg.AllowlistDir != "/queries" ||
+		cfg.Server.MaxBody != 4096 || cfg.Upstream.MaxIdleConnsPerHost != 128 ||
+		cfg.Control.Token != "from-the-environment" ||
+		cfg.Upstream.URL.String() != "http://from-env/graphql" {
 		t.Errorf("unexpected config: %+v", cfg)
 	}
 
 	// A flag on the command line wins over the environment.
 	errOut.Reset()
 	cfg, code, run = config.ParseProxy("gqlhash-proxy",
-		proxyArgs("-listen", "127.0.0.1:10"), &errOut)
+		proxyArgs("-server.listen", "127.0.0.1:10"), &errOut)
 	if !run || code != 0 {
 		t.Fatalf("code %d, stderr: %s", code, errOut.String())
 	}
-	if cfg.Listen != "127.0.0.1:10" || cfg.Allowlist != "/queries" {
+	if cfg.Server.Listen != "127.0.0.1:10" || cfg.AllowlistDir != "/queries" {
 		t.Errorf("expected the flag to win and the rest to stand: %+v", cfg)
 	}
 
 	// A value the flag can't take names the variable it came from.
-	t.Setenv(config.EnvName("max-body"), "not-a-number")
+	t.Setenv(config.EnvName("server.max-body"), "not-a-number")
 	errOut.Reset()
-	if _, code, run := config.ParseProxy("gqlhash-proxy", proxyArgs(),
-		&errOut); run || code != 2 {
-		t.Errorf("expected a bad value to fail; code %d run %t", code, run)
-	} else if !strings.Contains(errOut.String(), config.EnvName("max-body")) {
+	if _, gotCode, gotRun := config.ParseProxy("gqlhash-proxy", proxyArgs(),
+		&errOut); gotRun || gotCode != 2 {
+		t.Errorf("expected a bad value to fail; code %d run %t", gotCode, gotRun)
+	} else if !strings.Contains(errOut.String(), config.EnvName("server.max-body")) {
 		t.Errorf("expected the variable to be named; received %q", errOut.String())
 	}
 
@@ -275,9 +331,9 @@ func TestParseProxyEnv(t *testing.T) {
 
 func TestEnvName(t *testing.T) {
 	for flag, want := range map[string]string{
-		"listen":                           "GQLHASH_PROXY_LISTEN",
-		"max-body":                         "GQLHASH_PROXY_MAX_BODY",
-		"upstream-max-idle-conns-per-host": "GQLHASH_PROXY_UPSTREAM_MAX_IDLE_CONNS_PER_HOST",
+		"server.listen":                    "GQLHASH_PROXY_SERVER_LISTEN",
+		"server.max-body":                  "GQLHASH_PROXY_SERVER_MAX_BODY",
+		"upstream.max-idle-conns-per-host": "GQLHASH_PROXY_UPSTREAM_MAX_IDLE_CONNS_PER_HOST",
 	} {
 		if got := config.EnvName(flag); got != want {
 			t.Errorf("-%s: expected %q; received %q", flag, want, got)
@@ -285,8 +341,8 @@ func TestEnvName(t *testing.T) {
 	}
 }
 
-// TestFlagInventory pins the flag set of both commands. A new flag fails this test
-// until it's listed here, which is the reminder to cover it.
+// TestFlagInventory pins the flag set of both commands.
+// A new flag fails this test until it's listed here, which is the reminder to cover it.
 func TestFlagInventory(t *testing.T) {
 	f := func(
 		t *testing.T,
@@ -330,36 +386,36 @@ func TestFlagInventory(t *testing.T) {
 		_, code, run := config.ParseProxy(n, a, w)
 		return code, run
 	}, proxyArgs("-help"), map[string]string{
-		"allow-batch":      "",
-		"allowlist":        "",
-		"exact":            "",
-		"hash":             `"sha2"`,
-		"ignore":           `"nothing"`,
-		"listen":           `":8080"`,
-		"log-json":         "true",
-		"log-level":        `"info"`,
-		"log-requests":     "",
-		"max-body":         "1048576",
-		"metrics":          "",
-		"opaque-errors":    "",
-		"shutdown-timeout": "10s",
-		"status":           "",
-		"timeout":          "30s",
-		"trust-forwarded":  "",
-		"upstream":         "",
-		"version":          "",
-		"watch":            "",
-		"watch-interval":   "2s",
+		"allow-batch":                "",
+		"allowlist":                  "",
+		"hash":                       `"sha2"`,
+		"ignore":                     `"nothing"`,
+		"server.listen":              `":8080"`,
+		"log.json":                   "true",
+		"log.level":                  `"info"`,
+		"log.requests":               "",
+		"server.max-body":            "1048576",
+		"opaque-errors":              "",
+		"server.shutdown-timeout":    "10s",
+		"upstream.timeout":           "30s",
+		"server.read-header-timeout": "10s",
+		"server.read-timeout":        "30s",
+		"server.write-timeout":       "",
+		"server.idle-timeout":        "2m0s",
+		"trust-forwarded":            "",
+		"upstream.url":               "",
+		"version":                    "",
+		"control.listen":             `"127.0.0.1:9090"`,
 
-		"upstream-max-idle-conns":          "256",
-		"upstream-max-idle-conns-per-host": "64",
-		"upstream-http2":                   "true",
+		"upstream.max-idle-conns":          "256",
+		"upstream.max-idle-conns-per-host": "64",
+		"upstream.http2":                   "true",
 	})
 }
 
 func TestNames(t *testing.T) {
 	// Every supported name round-trips through the parse and back.
-	for _, name := range strings.Split(config.SupportedHashFunctions, ", ") {
+	for name := range strings.SplitSeq(config.SupportedHashFunctions, ", ") {
 		if got := config.HashName(config.ParseHashFunction(name)); got != name {
 			t.Errorf("expected %q; received %q", name, got)
 		}
@@ -368,7 +424,7 @@ func TestNames(t *testing.T) {
 		t.Errorf("expected no name for the zero value; received %q", got)
 	}
 
-	for _, name := range strings.Split(config.SupportedIgnoreModes, ", ") {
+	for name := range strings.SplitSeq(config.SupportedIgnoreModes, ", ") {
 		mode, ok := config.ParseIgnore(name)
 		if !ok {
 			t.Fatalf("expected %q to parse", name)
@@ -379,13 +435,15 @@ func TestNames(t *testing.T) {
 	}
 }
 
-// TestVersionPrecedence pins that -version needs nothing else to be valid. Both
-// forms answer who the binary is without doing any work.
+// TestVersionPrecedence pins that -version needs nothing else to be valid:
+// it parses, it leaves the printing to the caller, and it wins over a
+// bad value elsewhere and over the flags a proxy run would otherwise require.
+// Both forms answer who the binary is without doing any work.
 func TestVersionPrecedence(t *testing.T) {
 	var errOut strings.Builder
 	cfg, code, run := config.ParseHasher("gqlhash",
 		hasherArgs("-version", "-hash", "sha9", "-format", "rot13"), &errOut)
-	if !run || code != 0 || !cfg.Version {
+	if !run || code != 0 || !cfg.CmdPrintVersion {
 		t.Errorf("hasher: expected -version to win; code %d run %t stderr %q",
 			code, run, errOut.String())
 	}
@@ -393,7 +451,7 @@ func TestVersionPrecedence(t *testing.T) {
 	errOut.Reset()
 	proxyCfg, code, run := config.ParseProxy("gqlhash",
 		proxyArgs("-version", "-hash", "sha9"), &errOut)
-	if !run || code != 0 || !proxyCfg.Version {
+	if !run || code != 0 || !proxyCfg.CmdPrintVersion {
 		t.Errorf("proxy: expected -version to win; code %d run %t stderr %q",
 			code, run, errOut.String())
 	}

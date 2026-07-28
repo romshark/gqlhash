@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/romshark/gqlhash/v2/internal"
+	"github.com/romshark/gqlhash/v2/internal/gqlhashtest"
 	"github.com/romshark/gqlhash/v2/parser"
 )
 
@@ -17,16 +17,16 @@ import (
 // (https://spec.graphql.org/September2025/#UnicodeBOM).
 const bom = "\xef\xbb\xbf"
 
-// Supplementary-plane (astral) characters (https://www.unicode.org/roadmaps/smp),
-// each a 4-byte UTF-8 sequence:
+// astral1 and astral2 are supplementary-plane characters
+// (https://www.unicode.org/roadmaps/smp), each a 4-byte UTF-8 sequence:
 // U+1F4A9 PILE OF POO and U+1D11E MUSICAL SYMBOL G CLEF.
-// Used to exercise the full Unicode SourceCharacter range
+// They exercise the full Unicode SourceCharacter range
 // (https://spec.graphql.org/September2025/#SourceCharacter).
 var astral1, astral2 = string(rune(0x1F4A9)), string(rune(0x1D11E))
 
-// Byte sequences that aren't valid UTF-8 encodings of a Unicode scalar value.
-// SourceCharacter admits only scalar values, so none of these may appear in a
-// document (https://spec.graphql.org/September2025/#SourceCharacter).
+// badUTF8 holds byte sequences that aren't valid UTF-8 encodings of a Unicode
+// scalar value. SourceCharacter admits only scalar values, so none of these may
+// appear in a document (https://spec.graphql.org/September2025/#SourceCharacter).
 var badUTF8 = map[string]string{
 	"lone continuation byte":    "\x80",
 	"invalid byte 0xFF":         "\xff",
@@ -89,7 +89,9 @@ func hash(t *testing.T, options parser.Options, input string) string {
 func TestParse(t *testing.T) {
 	f := func(t *testing.T, expectErr error, input string) {
 		t.Helper()
-		_, err := parse(parser.Options{}, input)
+		// A depth beyond what these inputs reach:
+		// what the limit itself does is [TestParseDepthLimit].
+		_, err := parse(parser.Options{DepthLimit: 1000}, input)
 		if expectErr != err.Err {
 			t.Errorf("expected err: %v; received err: %v; input: %q",
 				expectErr, err, input)
@@ -485,8 +487,8 @@ func TestParseCanonicalStream(t *testing.T) {
 	), `{f(i:-42 fl:3.14e-2 s:"text" b:"""block""" t:true f:false n:null`+
 		` e:ENUM v:$var l:[1 2] o:{k:1})}`)
 
-	// An empty list and an empty input object have no items to separate, so
-	// neither gets an end marker.
+	// An empty list and an empty input object have no items to separate,
+	// so neither gets an end marker.
 	// Two sibling fields. Without the prefixes the two names collapse into the
 	// single field `foobar`.
 	f(t, stream(
@@ -525,11 +527,8 @@ func TestParseCanonicalStream(t *testing.T) {
 	), "{f(l:[] o:{})}", "{f(l:[,] o:{,})}", "{f(l:[ ] o:{ })}")
 }
 
-// TestParseStringValue asserts that a string is written as the value it stands
-// for and not as it's spelled
-// (https://spec.graphql.org/September2025/#sec-String-Value).
-// stringValueOf returns the bytes the string value input is hashed as, read as
-// the only argument of a minimal document.
+// stringValueOf returns the bytes the string value input is hashed as,
+// read as the only argument of a minimal document.
 func stringValueOf(t *testing.T, input string) string {
 	t.Helper()
 	s, err := parse(parser.Options{}, `{f(a:`+input+`)}`)
@@ -548,6 +547,9 @@ func stringValueOf(t *testing.T, input string) string {
 	return s[len(prefix) : len(s)-len(suffix)]
 }
 
+// TestParseStringValue asserts that a string is written as the value it stands
+// for and not as it's spelled
+// (https://spec.graphql.org/September2025/#sec-String-Value).
 func TestParseStringValue(t *testing.T) {
 	f := func(t *testing.T, expect string, inputs ...string) {
 		t.Helper()
@@ -793,7 +795,9 @@ func TestParseTypeFormatting(t *testing.T) {
 		hash(t, ignoreInputs, `query Q($x: [ Int ! ] !) { f }`) {
 		t.Error("IgnoreInputs must normalize the type as well")
 	}
-	if hash(t, ignoreInputs, canonical) == hash(t, ignoreInputs, `query Q($x: Int) { f }`) {
+	if hash(t, ignoreInputs, canonical) == hash(
+		t, ignoreInputs, `query Q($x: Int) { f }`,
+	) {
 		t.Error("IgnoreInputs must keep distinguishing types")
 	}
 	ignoreVars := parser.Options{Ignore: parser.IgnoreVariables}
@@ -885,7 +889,7 @@ func TestErrorPosition(t *testing.T) {
 
 // TestParseErrEOF tests all possible EOF situations.
 func TestParseErrEOF(t *testing.T) {
-	for _, s := range internal.TestUnexpectedEOF {
+	for _, s := range gqlhashtest.UnexpectedEOF {
 		if _, err := parse(parser.Options{}, s); err.Err == nil {
 			t.Errorf("expected %v; input: %q", parser.ErrUnexpectedEOF, s)
 		} else if !errors.Is(err.Err, parser.ErrUnexpectedEOF) {
@@ -914,7 +918,7 @@ func TestParseErrEOF(t *testing.T) {
 
 // TestParseErrUnexpectedToken tests all possible unexpected token situations.
 func TestParseErrUnexpectedToken(t *testing.T) {
-	for _, s := range internal.TestErrUnexpectedToken {
+	for _, s := range gqlhashtest.UnexpectedToken {
 		if _, err := parse(parser.Options{}, s); !errors.Is(
 			err.Err, parser.ErrUnexpectedToken,
 		) {
@@ -964,7 +968,9 @@ func TestHPrefInStringValue(t *testing.T) {
 			t.Fatalf("expected string value slice len: %d; received: %d",
 				expectLen, len(s))
 		}
-		if _, err := parse(parser.Options{}, s); err.Err != parser.ErrUnescapedControlChar {
+		if _, err := parse(
+			parser.Options{}, s,
+		); err.Err != parser.ErrUnescapedControlChar {
 			t.Errorf("hpref %#x must not be valid within a string value: %q; "+
 				"expected: %v; received: %v",
 				hpref, s, parser.ErrUnescapedControlChar, err)
@@ -982,8 +988,8 @@ func TestHPrefInStringValue(t *testing.T) {
 			t.Errorf("hpref %#x must be valid within a block string value: %q; "+
 				"received: %v", hpref, s, err)
 		}
-		// Adding 0x40 turns the control byte into a printable character, so the
-		// stream holds the escape sequence and not the prefix itself.
+		// Adding 0x40 turns the control byte into a printable character,
+		// so the stream holds the escape sequence and not the prefix itself.
 		expect := stream(
 			parser.HPrefQuery, parser.HPrefSelectionSet,
 			parser.HPrefField, "f", parser.HPrefArgument, "a",
@@ -1152,12 +1158,12 @@ func TestParseInputTypes(t *testing.T) {
 	}
 	{
 		r := new(recorder)
-		e := parser.NewParser[string](0, 0).Parse(r, parser.Options{}, input)
+		e := parser.NewParser[string](0).Parse(r, parser.Options{}, input)
 		check("Parser[string]", r.String(), e)
 	}
 	{
 		r := new(recorder)
-		e := parser.NewParser[[]byte](0, 0).Parse(r, parser.Options{}, []byte(input))
+		e := parser.NewParser[[]byte](0).Parse(r, parser.Options{}, []byte(input))
 		check("Parser[[]byte]", r.String(), e)
 	}
 
@@ -1179,18 +1185,21 @@ func TestParserReuse(t *testing.T) {
 	inputs := []string{
 		`{f}`,
 		`query Q($x: Int = 1) { f(a: [1, {k: "s"}]) @d }`,
-		`{f(a:"` + strings.Repeat("x", 8192) + `")}`,                       // Grows the buffer.
-		"{f(a:" + strings.Repeat("[", 64) + strings.Repeat("]", 64) + ")}", // Grows the stack.
-		`{`, // An error must not leave the parser in a bad state.
+		// Grows the buffer.
+		`{f(a:"` + strings.Repeat("x", 8192) + `")}`,
+		// Grows the stack.
+		"{f(a:" + strings.Repeat("[", 64) + strings.Repeat("]", 64) + ")}",
+		// An error must not leave the parser in a bad state.
+		`{`,
 		`fragment F on T { f } { ...F }`,
 	}
 
-	p := parser.NewParser[string](1, 1)
+	p := parser.NewParser[string](1)
 	for round := range 3 {
 		for _, input := range inputs {
 			r, fresh := new(recorder), new(recorder)
 			errReuse := p.Parse(r, parser.Options{}, input)
-			errFresh := parser.NewParser[string](0, 0).Parse(
+			errFresh := parser.NewParser[string](0).Parse(
 				fresh, parser.Options{}, input,
 			)
 			if errReuse != errFresh {
@@ -1204,7 +1213,7 @@ func TestParserReuse(t *testing.T) {
 	}
 
 	// A warmed-up parser allocates nothing.
-	h := internal.NoopHash{}
+	h := gqlhashtest.NoopHash{}
 	const doc = `query Q($x: Int = 1) { f(a: [1, {k: "s"}]) @d { b c } }`
 	_ = p.Parse(h, parser.Options{}, doc)
 	if n := testing.AllocsPerRun(100, func() {
@@ -1312,7 +1321,51 @@ func TestParseWriteError(t *testing.T) {
 	}
 }
 
-// TestPosition covers the offsets [parser.Position] takes that no [parser.Error] carries.
+// TestParseDepthLimit covers [parser.Options.DepthLimit]:
+// the nesting a document may reach, and what it costs to pass it.
+func TestParseDepthLimit(t *testing.T) {
+	nest := func(depth int) string {
+		return "{" + strings.Repeat("f{", depth-1) + "f" + strings.Repeat("}", depth)
+	}
+	values := func(depth int) string {
+		return "{f(a:" + strings.Repeat("[", depth) + "1" +
+			strings.Repeat("]", depth) + ")}"
+	}
+	objects := func(depth int) string {
+		return "{f(a:" + strings.Repeat("{k:", depth) + "1" +
+			strings.Repeat("}", depth) + ")}"
+	}
+
+	f := func(t *testing.T, expect error, o parser.Options, input string) {
+		t.Helper()
+		if e := parser.Parse(io.Discard, o, input); e.Err != expect {
+			t.Errorf("expected %v; received %v", expect, e)
+		}
+	}
+
+	// The default takes what an API is asked for and rejects what it isn't.
+	for _, at := range []func(int) string{nest, values, objects} {
+		f(t, nil, parser.Options{}, at(parser.DefaultDepthLimit))
+		f(t, parser.ErrTooDeep, parser.Options{}, at(parser.DefaultDepthLimit+1))
+	}
+
+	// A limit of its own replaces it, whichever way.
+	f(t, nil, parser.Options{DepthLimit: 3}, nest(3))
+	f(t, parser.ErrTooDeep, parser.Options{DepthLimit: 3}, nest(4))
+	f(t, nil, parser.Options{DepthLimit: 1000}, nest(1000))
+
+	// The error carries the offset it gave up at, like every other one.
+	e := parser.Parse(io.Discard, parser.Options{DepthLimit: 2}, nest(3))
+	if e.Err != parser.ErrTooDeep || e.Offset < 1 {
+		t.Errorf("expected an offset with the error; received %v", e)
+	}
+	if line, column := parser.Position(nest(3), e.Offset); line != 1 || column < 1 {
+		t.Errorf("expected a position; received %d:%d", line, column)
+	}
+}
+
+// TestPosition covers the offsets [parser.Position] takes that no
+// [parser.Error] carries.
 func TestPosition(t *testing.T) {
 	const src = "{\n\tf\n}"
 
@@ -1382,4 +1435,44 @@ func TestIgnoreDocExamples(t *testing.T) {
 		`query Q($x: Int) { f(x: $x) }`,
 		`query Q { f(x: 1) }`)
 	differ(t, parser.IgnoreVariables, `{ f(x: 1) }`, `{ f }`)
+}
+
+// TestErrorValueSemantics pins what [parser.Error] is and why it satisfies
+// error, since the two pull against each other: the zero value means no error,
+// and an interface holding a zero value isn't nil.
+//
+// Whoever reads the trap below and reaches for the fix — deleting Error — takes
+// errors.Is and the offset in %v with it, which the rest of this covers.
+func TestErrorValueSemantics(t *testing.T) {
+	// The trap the doc names. This is what an error variable does with it, not
+	// what anyone should write.
+	var asInterface error = parser.Error{}
+	if asInterface == nil {
+		t.Error("expected an interface holding a zero value not to be nil")
+	}
+	// Which is why the value answers for itself.
+	if (parser.Error{}).IsErr() {
+		t.Error("expected the zero value to hold no error")
+	}
+	if got := (parser.Error{}).Error(); got != "no error" {
+		t.Errorf("expected the zero value to say so; received %q", got)
+	}
+
+	// Why the method stays: errors.Is reaches the sentinel through Unwrap.
+	e := parser.Error{Err: parser.ErrUnexpectedToken, Offset: 7}
+	if !errors.Is(e, parser.ErrUnexpectedToken) {
+		t.Error("expected errors.Is to reach the sentinel")
+	}
+	if errors.Is(e, parser.ErrUnexpectedEOF) {
+		t.Error("expected errors.Is not to match another sentinel")
+	}
+	// And because %v carries the offset, which Err alone doesn't.
+	if got := fmt.Sprintf("%v", e); !strings.Contains(got, "offset 7") {
+		t.Errorf("expected the offset in the message; received %q", got)
+	}
+	// An error with no position says only what happened.
+	if got := (parser.Error{Err: parser.ErrUnexpectedEOF, Offset: -1}).Error(); got !=
+		parser.ErrUnexpectedEOF.Error() {
+		t.Errorf("expected no offset where there is none; received %q", got)
+	}
 }

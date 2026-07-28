@@ -19,6 +19,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/romshark/gqlhash/v2"
+	"github.com/romshark/gqlhash/v2/internal/allowlist"
 	"github.com/romshark/gqlhash/v2/internal/app/config"
 )
 
@@ -45,7 +46,7 @@ func Run(
 	if !run {
 		return code
 	}
-	if cfg.Version {
+	if cfg.CmdPrintVersion {
 		_, _ = fmt.Fprintf(stdout, "%s v%s\n", name, version)
 		return 0
 	}
@@ -67,13 +68,13 @@ func Run(
 func newLogger(
 	cfg config.Proxy, stderr io.Writer,
 ) (log zerolog.Logger, ok bool) {
-	level, err := zerolog.ParseLevel(cfg.LogLevel)
+	level, err := zerolog.ParseLevel(cfg.Log.Level)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "unsupported log level %q\n", cfg.LogLevel)
+		_, _ = fmt.Fprintf(stderr, "unsupported log level %q\n", cfg.Log.Level)
 		return log, false
 	}
 	out := stderr
-	if !cfg.LogJSON {
+	if !cfg.Log.JSON {
 		out = zerolog.ConsoleWriter{Out: stderr, TimeFormat: time.RFC3339}
 	}
 	return zerolog.New(out).Level(level).With().Timestamp().Logger(), true
@@ -81,80 +82,85 @@ func newLogger(
 
 // components are what a run assembles from a config.
 type components struct {
-	Store  *Store
-	Loader *Loader
-	Proxy  *Proxy
+	allowlist *allowlist.Allowlist
+	proxy     *proxy
 
-	// Server takes the traffic, Metrics is nil unless -metrics is set.
-	Server  *http.Server
-	Metrics *http.Server
+	// server takes the traffic and control the metrics and the reloads, each on
+	// a listener of its own. A run has both: the control server has no off
+	// switch, see [config.ProxyControl].
+	server  *http.Server
+	control *http.Server
 }
 
 // build assembles the components and loads the allowlist.
 func build(cfg config.Proxy, log zerolog.Logger) (*components, error) {
 	options := gqlhash.Options{Ignore: cfg.Ignore}
-	newHash := func() hash.Hash { return config.NewHasher(cfg.Hash) }
+	// The function is checked once here rather than per request: a proxy that
+	// can't hash serves nothing, so it's a start failure and not a nil that
+	// turns up at the first request.
+	if _, ok := config.NewHasher(cfg.HashFunc); !ok {
+		return nil, fmt.Errorf("unsupported hash function: %s",
+			config.HashName(cfg.HashFunc))
+	}
+	newHash := func() hash.Hash {
+		h, _ := config.NewHasher(cfg.HashFunc)
+		return h
+	}
 
-	store := new(Store)
-	loader := NewLoader(store, cfg.Allowlist, cfg.Exact, newHash, options, log)
-	if err := loader.Load(); err != nil {
+	list := allowlist.New(newHash, options)
+	result, err := list.Reload(cfg.AllowlistDir)
+	if err != nil {
 		return nil, err
 	}
+	logReload(log, cfg.AllowlistDir, result)
 
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-		MaxIdleConns:          cfg.MaxIdleConns,
-		MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
+		MaxIdleConns:          cfg.Upstream.MaxIdleConns,
+		MaxIdleConnsPerHost:   cfg.Upstream.MaxIdleConnsPerHost,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: cfg.Timeout,
-		ForceAttemptHTTP2:     cfg.HTTP2,
+		ResponseHeaderTimeout: cfg.Upstream.Timeout,
+		ForceAttemptHTTP2:     cfg.Upstream.HTTP2,
 	}
-	proxy := NewProxy(store, cfg.Upstream, newHash, ProxyConfig{
-		Options:        options,
-		Exact:          cfg.Exact,
-		AllowBatch:     cfg.AllowBatch,
-		OpaqueErrors:   cfg.OpaqueErrors,
-		LogRequests:    cfg.LogRequests,
-		TrustForwarded: cfg.TrustForwarded,
-		MaxBody:        cfg.MaxBody,
+	p := newProxy(list, cfg.Upstream.URL, newHash, proxyConfig{
+		options:        options,
+		allowBatch:     cfg.AllowBatch,
+		opaqueErrors:   cfg.OpaqueErrors,
+		logRequests:    cfg.Log.Requests,
+		trustForwarded: cfg.TrustForwarded,
+		maxBody:        cfg.Server.MaxBody,
 	}, transport, log)
 
-	// Metrics live on an address of their own, so a scrape target isn't exposed
-	// on the port that serves traffic.
-	var metricsServer *http.Server
-	if cfg.Metrics != "" {
-		metrics := NewMetrics(proxy, store)
-		proxy.SetMetrics(metrics)
-		metricsMux := http.NewServeMux()
-		metricsMux.Handle("/metrics", metrics.Handler(log))
-		metricsServer = &http.Server{
-			Addr:              cfg.Metrics,
-			Handler:           metricsMux,
-			ReadHeaderTimeout: 10 * time.Second,
-		}
+	// The metrics and the control endpoints share an address of their own, so
+	// neither is exposed on the port that serves traffic.
+	controlMux := http.NewServeMux()
+	controlMux.Handle("/metrics", p.metrics.Handler(log))
+	(&control{
+		allowlist: list, dir: cfg.AllowlistDir, proxy: p,
+		token: cfg.Control.Token, log: log,
+	}).routes(controlMux)
+	controlServer := &http.Server{
+		Addr:              cfg.Control.Address,
+		Handler:           controlMux,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/", proxy)
-	if cfg.Status != "" {
-		mux.HandleFunc(cfg.Status, func(w http.ResponseWriter, r *http.Request) {
-			writeStatus(w, store, proxy)
-		})
-	}
+	mux.Handle("/", p)
 
 	server := &http.Server{
-		Addr:              cfg.Listen,
+		Addr:              cfg.Server.Listen,
 		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      cfg.Timeout + 10*time.Second,
-		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
+		ReadTimeout:       cfg.Server.ReadTimeout,
+		WriteTimeout:      cfg.Server.WriteTimeout,
+		IdleTimeout:       cfg.Server.IdleTimeout,
 	}
 	return &components{
-		Store: store, Loader: loader, Proxy: proxy,
-		Server: server, Metrics: metricsServer,
+		allowlist: list, proxy: p,
+		server: server, control: controlServer,
 	}, nil
 }
 
@@ -162,62 +168,60 @@ func build(cfg config.Proxy, log zerolog.Logger) (*components, error) {
 func (c *components) serve(
 	ctx context.Context, cfg config.Proxy, log zerolog.Logger,
 ) (exitCode int) {
-	store, loader := c.Store, c.Loader
-	server, metricsServer := c.Server, c.Metrics
-
-	done := make(chan struct{})
-	if cfg.Watch {
-		go loader.Watch(cfg.WatchInterval, done)
-	}
-
 	// The listener is opened before serving, so a bind failure is reported as
-	// one and the address that's logged is the one in use. With -listen :0 that
+	// one and the address that's logged is the one in use. With -server.listen :0 that
 	// address is the only way to learn the port.
-	listener, err := net.Listen("tcp", cfg.Listen)
+	listener, err := net.Listen("tcp", cfg.Server.Listen)
 	if err != nil {
-		log.Error().Err(err).Str("listen", cfg.Listen).Msg("listening")
-		close(done)
+		log.Error().Err(err).Str("listen", cfg.Server.Listen).Msg("listening")
 		return 1
 	}
+	return c.serveOn(ctx, listener, cfg, log)
+}
+
+// serveOn takes the traffic on listener and runs until ctx is done or a server fails.
+// It's separate from [components.serve] so a test can hand it a listener of its own,
+// which is the only way to fail the traffic server while it runs.
+func (c *components) serveOn(
+	ctx context.Context, listener net.Listener,
+	cfg config.Proxy, log zerolog.Logger,
+) (exitCode int) {
+	list, server := c.allowlist, c.server
 
 	errServe := make(chan error, 1)
 	go func() { errServe <- server.Serve(listener) }()
 
-	if metricsServer != nil {
-		metricsListener, err := net.Listen("tcp", metricsServer.Addr)
-		if err != nil {
-			log.Error().Err(err).Str("metrics", cfg.Metrics).
-				Msg("listening for metrics")
-			_ = server.Close()
-			close(done)
-			return 1
-		}
-		go func() {
-			if err := metricsServer.Serve(metricsListener); err != nil &&
-				!errors.Is(err, http.ErrServerClosed) {
-				log.Error().Err(err).Msg("serving metrics")
-			}
-		}()
-		log.Info().
-			Str("address", metricsListener.Addr().String()).
-			Msg("serving metrics on /metrics")
+	// controlAddress is the one in use, which is the only way to learn the port
+	// behind an address ending in :0. It stays empty where the control server is off.
+	controlListener, err := net.Listen("tcp", c.control.Addr)
+	if err != nil {
+		log.Error().Err(err).Str("address", c.control.Addr).
+			Msg("listening for the control server")
+		_ = server.Close()
+		return 1
 	}
-	log.Info().
+	controlAddress := controlListener.Addr().String()
+	go func() {
+		if err := c.control.Serve(controlListener); err != nil &&
+			!errors.Is(err, http.ErrServerClosed) {
+			log.Error().Err(err).Msg("serving the control server")
+		}
+	}()
+	log.Info().Str("address", controlAddress).Msg("serving /metrics and /reload")
+	listening := log.Info().
 		Str("address", listener.Addr().String()).
-		Str("upstream", cfg.Upstream.String()).
-		Str("allowlist", cfg.Allowlist).
-		Int("documents", store.Load().Len()).
-		Bool("exact", cfg.Exact).
-		Str("hash", config.HashName(cfg.Hash)).
+		Str("upstream", cfg.Upstream.URL.String()).
+		Str("allowlist", cfg.AllowlistDir).
+		Int("documents", list.Len()).
+		Str("hash", config.HashName(cfg.HashFunc)).
 		Str("ignore", config.IgnoreName(cfg.Ignore)).
-		Bool("watch", cfg.Watch).
 		Bool("trust_forwarded", cfg.TrustForwarded).
-		Bool("metrics", cfg.Metrics != "").
 		// The environment can set any of these, so the effective values are
 		// logged where a deployment can see them.
-		Int("upstream_max_idle_conns_per_host", cfg.MaxIdleConnsPerHost).
-		Bool("upstream_http2", cfg.HTTP2).
-		Msg("listening")
+		Int("upstream_max_idle_conns_per_host", cfg.Upstream.MaxIdleConnsPerHost).
+		Bool("upstream_http2", cfg.Upstream.HTTP2).
+		Str("control", controlAddress)
+	listening.Msg("listening")
 
 	// Both servers are shut down on every way out of here, so a failure of one
 	// doesn't leave the other holding a listener.
@@ -231,17 +235,14 @@ func (c *components) serve(
 	case <-ctx.Done():
 		log.Info().Msg("shutting down")
 	}
-	close(done)
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Shutdown)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
-	if metricsServer != nil {
-		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
-			log.Error().Err(err).Msg("shutting down the metrics server")
-			failed = true
-		}
+	if err := c.control.Shutdown(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("shutting down the control server")
+		failed = true
 	}
-	// Shutdown waits for the requests in flight, bounded by -shutdown-timeout.
+	// Shutdown waits for the requests in flight, bounded by -server.shutdown-timeout.
 	// Past the timeout it returns and whatever is still running is abandoned.
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("shutting down")
@@ -253,14 +254,32 @@ func (c *components) serve(
 	return 0
 }
 
-// writeStatus answers with the state of the allowlist and the decisions made.
-func writeStatus(w http.ResponseWriter, store *Store, proxy *Proxy) {
-	list := store.Load()
-	allowed, rejected, malformed, upstream := proxy.CountersSnapshot()
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = fmt.Fprintf(w,
-		`{"documents":%d,"loaded_at":%q,"allowed":%d,"rejected":%d,`+
-			`"malformed":%d,"upstream_errors":%d}`,
-		list.Len(), list.loadedAt.Format(time.RFC3339), allowed, rejected,
-		malformed, upstream)
+// logReload reports what a load of the allowlist did. The allowlist logs nothing
+// itself: what deserves an event, and at which level, is decided here.
+//
+// Every file left out is an error, since a document that was meant to be served
+// and isn't is a deployment mistake, and the summary is one line whatever the outcome,
+// so a reload always leaves a trace.
+func logReload(log zerolog.Logger, dir string, r allowlist.Result) {
+	if r.SchemaErr != nil {
+		log.Error().Err(r.SchemaErr).
+			Msg("reading the schema, the documents are checked against none")
+	}
+	for _, err := range r.Skipped {
+		log.Error().Err(err).Msg("skipping a document")
+	}
+	if len(r.Files) == 0 {
+		// Serving an empty allowlist rejects every request,
+		// which is loud in the counters but silent otherwise.
+		// This is the one line that says why.
+		log.Error().Str("dir", dir).Int("skipped", len(r.Skipped)).
+			Msg("no documents on the allowlist, every request is rejected")
+	}
+	log.Info().
+		Int("documents", len(r.Files)).
+		Int("added", r.Added).
+		Int("removed", r.Removed).
+		Int("skipped", len(r.Skipped)).
+		Str("dir", dir).
+		Msg("allowlist loaded")
 }

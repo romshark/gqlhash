@@ -10,10 +10,11 @@ docker compose up --build
 | --- | --- |
 | http://localhost:8080/graphql | through the proxy |
 | http://localhost:4000/graphql | the API, published so the two can be compared |
-| http://localhost:8080/healthz | what the proxy has decided so far |
+| http://localhost:9090/status | what the proxy has decided so far |
 | http://localhost:9090/metrics | Prometheus metrics |
+| http://localhost:9090/reload | reload the allowlist, POST only |
 
-The API holds three users and knows `user`, `users` and `deleteUser`. The allowlist holds `GetUser`, `ListUsers` and `GetUserWithEmail`.
+The API holds three users and knows `user`, `users` and `deleteUser`. The allowlist holds `GetUser`, `ListUsers` and `GetUserWithEmail`, and [queries/schema.graphqls](queries/schema.graphqls) is the schema each of them is checked against.
 
 ## An allowed document
 
@@ -83,7 +84,7 @@ The rejected request above asked for the same fields under the name `GetUser`. A
 
 ### Adding a document while it runs
 
-The proxy runs with `-watch`, and [queries](queries) is mounted into it. Write a file:
+[queries](queries) is mounted into the proxy, so a new file is one `curl` away from being allowed. Write it:
 
 ```sh
 cat > queries/count-users.graphql <<'EOF'
@@ -95,7 +96,50 @@ query CountUsers {
 EOF
 ```
 
-Within `-watch-interval` the log says `allowlist loaded added=1` and the document is allowed. Delete the file and it stops being allowed. A file that doesn't parse is skipped with `skipping a document that doesn't parse` and the rest keeps working.
+Then reload:
+
+```sh
+curl -fsS -X POST localhost:9090/reload
+```
+
+```json
+{
+  "documents": {
+    "total": 4,
+    "files": [
+      "/queries/count-users.graphql",
+      "/queries/get-user.graphql",
+      "/queries/list-users.graphql",
+      "/queries/user-with-email.graphql"
+    ]
+  },
+  "skipped": { "total": 0, "errors": [] }
+}
+```
+
+The log says `allowlist loaded added=1` and the document is allowed. Delete the file, reload again, and it stops being allowed. A file that doesn't parse is skipped with `skipping a document that doesn't parse` and the rest keeps working.
+
+### A query the schema doesn't have
+
+[queries/schema.graphqls](queries/schema.graphqls) is the schema of the API, so a document naming a field it doesn't have never reaches the allowlist:
+
+```sh
+cat > queries/typo.graphql <<'EOF'
+query Typo {
+  users {
+    nickname
+  }
+}
+EOF
+curl -fsS -X POST localhost:9090/reload
+```
+
+```json
+{"documents":{"total":3,"files":[…]},
+ "skipped":{"total":1,"errors":["/queries/typo.graphql:3:5: Cannot query field \"nickname\" on type \"User\". Did you mean \"name\"?"]}}
+```
+
+Delete the schema file and reload again: the same document is then allowed, because nothing checks it against an API any more.
 
 ### Reformatting a document
 
@@ -104,7 +148,7 @@ Reindent a file in [queries](queries), or add a comment to it. The hash doesn't 
 ### Watching the counters
 
 ```sh
-curl -s localhost:8080/healthz
+curl -s localhost:9090/status
 ```
 
 ```json
@@ -121,14 +165,12 @@ curl -s localhost:9090/metrics | grep gqlhash
 
 Stop the stack and restart it with `-ignore=inputs` added to the proxy command in [docker-compose.yml](docker-compose.yml). `ListUsers` then matches whatever `limit` a client asks for, because argument values stop being part of the hash.
 
-`-exact` is the other direction: it compares canonical forms instead of hashes, so no collision can grant access.
-
 ## What's here
 
 | | |
 | --- | --- |
 | [docker-compose.yml](docker-compose.yml) | the two services |
-| [queries](queries) | the allowlist, mounted into the proxy |
+| [queries](queries) | the allowlist and the schema, mounted into the proxy |
 | [api](api) | the sample GraphQL API, a module of its own so its dependency stays out of gqlhash |
 | [Dockerfile](Dockerfile) | builds `gqlhash-proxy` from the working tree, not from a release |
 

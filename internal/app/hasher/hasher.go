@@ -1,7 +1,7 @@
 // Package hasher is the hashing command line interface of gqlhash.
 //
-// The proxy is a command of its own, so nothing here reaches an HTTP server or a
-// metrics client.
+// The proxy is a separate binary, so nothing here links an HTTP server,
+// a metrics client or a schema validator.
 package hasher
 
 import (
@@ -19,8 +19,8 @@ import (
 
 // Run hashes the document of stdin or of -file and writes the result to stdout.
 //
-// name and version are what -version reports. Every command passes its own, so
-// the output names the binary the caller ran and the version its build injected.
+// name and version are what -version reports. Every command passes its own,
+// so the output names the binary the caller ran and the version its build injected.
 //
 // args[0] is the name of the command as invoked, as in [os.Args].
 func Run(
@@ -33,7 +33,7 @@ func Run(
 	if !run {
 		return code
 	}
-	if cfg.Version {
+	if cfg.CmdPrintVersion {
 		return printVersion(stdout, name, version)
 	}
 
@@ -59,7 +59,14 @@ func Run(
 		return 1
 	}
 
-	sum, errHash := gqlhash.AppendHash(nil, config.NewHasher(cfg.Hash),
+	h, ok := config.NewHasher(cfg.Hash)
+	if !ok {
+		// config.ParseHasher takes no other value, so this is a function that was
+		// added to the vocabulary and not to the table that builds them.
+		_, _ = fmt.Fprintf(stderr, "unsupported hash function: %d\n", cfg.Hash)
+		return 1
+	}
+	sum, errHash := gqlhash.AppendHash(nil, h,
 		gqlhash.Options{Ignore: cfg.Ignore}, input)
 	if errHash.IsErr() {
 		// A hash never fails a write, so the error is a syntax error and carries
@@ -82,10 +89,19 @@ func Run(
 	case config.FormatBase64URL:
 		encoded = base64.URLEncoding.EncodeToString(sum)
 	default:
-		panic(fmt.Errorf("unsupported output format: %d", cfg.Format))
+		// config.ParseHasher takes no other value, so this is a format that was
+		// added to the vocabulary and not to this switch.
+		_, _ = fmt.Fprintf(stderr, "unsupported output format: %d\n", cfg.Format)
+		return 1
 	}
+
+	// A write that fails is what a closed pipe looks like: `gqlhash -file q.graphql
+	// | head -1` leaves nobody to read the answer. Every other failure of this
+	// command is an exit code, and so is this one, rather than a goroutine dump
+	// over whatever the reader did get.
 	if _, err = io.WriteString(stdout, encoded); err != nil {
-		panic(fmt.Errorf("writing hash to stdout: %w", err))
+		_, _ = fmt.Fprintf(stderr, "writing the hash: %v\n", err)
+		return 1
 	}
 	return 0
 }

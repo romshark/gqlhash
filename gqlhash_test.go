@@ -14,6 +14,7 @@ import (
 	"hash/crc64"
 	"hash/fnv"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/cespare/xxhash/v2"
@@ -22,7 +23,7 @@ import (
 	"golang.org/x/crypto/blake2s"
 
 	"github.com/romshark/gqlhash/v2"
-	"github.com/romshark/gqlhash/v2/internal"
+	"github.com/romshark/gqlhash/v2/internal/gqlhashtest"
 	"github.com/romshark/gqlhash/v2/parser"
 
 	vektah "github.com/vektah/gqlparser/v2"
@@ -79,10 +80,10 @@ func hasherCompare[S string | []byte](
 // (https://spec.graphql.org/September2025/#UnicodeBOM).
 const bom = "\xef\xbb\xbf"
 
-var _ gqlhash.Hash = internal.NoopHash{}
+var _ gqlhash.Hash = gqlhashtest.NoopHash{}
 
-// fuzzSeeds are documents covering every kind of token. TestParseCanonicalStream
-// of the parser package asserts the canonical form of each one.
+// fuzzSeeds are documents covering every kind of token.
+// TestParseCanonicalStream of the parser package asserts the canonical form of each one.
 var fuzzSeeds = []string{
 	"{foo}", "{ foo }", "query { foo }",
 	"{foo bar}", "{ foo  bar }", "query{foo,bar}",
@@ -161,65 +162,53 @@ var fuzzSeeds = []string{
 	"{x(f:3.14)}", "{ x ( f : 3.14 ) }",
 }
 
-// TestInputTypes asserts that the functions take a document as a string and as a
-// []byte, and that both produce the same hash.
-func TestInputTypes(t *testing.T) {
-	const a, b = `{ foo bar }`, "{\n\tfoo\n\tbar\n}"
-
-	if err := compare(sha1.New(), gqlhash.Options{}, a, b); err.Err != nil {
-		t.Errorf("string: %v", err)
-	}
-	if err := compare(
-		sha1.New(), gqlhash.Options{}, []byte(a), []byte(b),
-	); err.Err != nil {
-		t.Errorf("[]byte: %v", err)
-	}
-
-	sumString, err := gqlhash.AppendHash(nil, sha1.New(), gqlhash.Options{}, a)
-	if err.Err != nil {
-		t.Fatalf("string: %v", err)
-	}
-	sumBytes, err := gqlhash.AppendHash(
-		nil, sha1.New(), gqlhash.Options{}, []byte(a),
-	)
-	if err.Err != nil {
-		t.Fatalf("[]byte: %v", err)
-	}
-	if string(sumString) != string(sumBytes) {
-		t.Error("a string and a []byte document must hash alike")
-	}
-}
-
 func TestCompare(t *testing.T) {
 	f := func(t *testing.T, expect error, a, b string) {
 		t.Helper()
-		received := compare(sha1.New(), gqlhash.Options{}, []byte(a), []byte(b))
-		if expect != received.Err {
-			t.Errorf("expected %v; received: %v", expect, received)
+		check := func(name string, received gqlhash.Error) {
+			t.Helper()
+			if expect != received.Err {
+				t.Errorf("%s: expected %v; received: %v", name, expect, received)
+			}
 		}
+
+		// Every pair below is read in both input types: the generic entry points
+		// must instantiate for a string and for a []byte and agree on the verdict.
+		// What the two types mean for a document is the parser's,
+		// see TestParseInputTypes.
+		check("string", compare(sha1.New(), gqlhash.Options{}, a, b))
+		check("[]byte", compare(sha1.New(), gqlhash.Options{}, []byte(a), []byte(b)))
 
 		// Provide nil buffer.
-		received = compareWithBuffer(
+		check("nil buffer", compareWithBuffer(
 			nil, sha1.New(), gqlhash.Options{}, []byte(a), []byte(b),
-		)
-		if expect != received.Err {
-			t.Errorf("expected %v; received: %v", expect, received)
-		}
+		))
 
 		// Provide buffer that's too small in len.
-		received = compareWithBuffer(
+		check("short buffer", compareWithBuffer(
 			make([]byte, 1), sha1.New(), gqlhash.Options{}, []byte(a), []byte(b),
-		)
-		if expect != received.Err {
-			t.Errorf("expected %v; received: %v", expect, received)
-		}
+		))
 
 		// Provide buffer with len 0 and some capacity.
-		received = compareWithBuffer(
+		check("empty buffer", compareWithBuffer(
 			make([]byte, 0, 1), sha1.New(), gqlhash.Options{}, []byte(a), []byte(b),
+		))
+
+		// The two input types don't just agree on the verdict: a document
+		// hashes to the same bytes, and fails the same way, either way.
+		sumString, errString := gqlhash.AppendHash(
+			nil, sha1.New(), gqlhash.Options{}, a,
 		)
-		if expect != received.Err {
-			t.Errorf("expected %v; received: %v", expect, received)
+		sumBytes, errBytes := gqlhash.AppendHash(
+			nil, sha1.New(), gqlhash.Options{}, []byte(a),
+		)
+		// Compared by message: a [parser.SyntaxError] is a pointer,
+		// so two equal errors are still two values.
+		if fmt.Sprint(errString) != fmt.Sprint(errBytes) ||
+			!bytes.Equal(sumString, sumBytes) {
+			t.Errorf(
+				"a string and a []byte document must hash alike; %x (%v) and %x (%v)",
+				sumString, errString, sumBytes, errBytes)
 		}
 	}
 
@@ -245,14 +234,14 @@ func TestCompare(t *testing.T) {
 		`{f(s:"""`+"a\r\nb\rc\nd"+`""")}`,
 		`{f(s:"""`+"a\nb\nc\nd"+`""")}`)
 
-	// CRLF is a single LineTerminator, not two, so it must not introduce a
-	// blank line. This guards a fix that treats CR and LF independently.
+	// CRLF is a single LineTerminator, not two, so it must not introduce a blank line.
+	// This guards a fix that treats CR and LF independently.
 	f(t, errDiffer,
 		`{f(s:"""`+"a\r\nb"+`""")}`,
 		`{f(s:"""`+"a\n\nb"+`""")}`)
 
-	// Common indentation is stripped per line, so it must be recognized after
-	// any LineTerminator, not just after LF.
+	// Common indentation is stripped per line,
+	// so it must be recognized after any LineTerminator, not just after LF.
 	f(t, nil,
 		`{f(s:"""`+"\r\n  line1\r\n  line2\r\n  "+`""")}`,
 		`{f(s:"""`+"\n  line1\n  line2\n  "+`""")}`)
@@ -273,8 +262,8 @@ func TestCompare(t *testing.T) {
 	// A string is hashed by its value, not by how it's written
 	// (https://spec.graphql.org/September2025/#sec-String-Value).
 
-	// Escape sequences count in a normal string but not in a block string, so
-	// a line feed and the two characters `\` and `n` are different values.
+	// Escape sequences count in a normal string but not in a block string,
+	// so a line feed and the two characters `\` and `n` are different values.
 	f(t, errDiffer, `{f(s:"\n")}`, `{f(s:"""\n""")}`)
 	f(t, errDiffer, `{f(s:"\t")}`, `{f(s:"""\t""")}`)
 	f(t, nil, `{f(s:"\u0041")}`, `{f(s:"""A""")}`)
@@ -302,9 +291,9 @@ func TestCompare(t *testing.T) {
 	f(t, nil, `{f(s:"a\"b")}`, `{f(s:"""a"b""")}`)
 	f(t, nil, `{f(s:"\tx")}`, `{f(s:"""`+"\tx"+`""")}`)
 
-	// An escaped byte must not be able to imitate a hash prefix: 0x07 is
-	// [parser.HPrefField], so the string below would otherwise collide with an
-	// empty string followed by the field x.
+	// An escaped byte must not be able to imitate a hash prefix:
+	// 0x07 is [parser.HPrefField], so the string below would otherwise collide
+	// with an empty string followed by the field x.
 	f(t, errDiffer, `{f(a:"\u0007x")}`, `{f(a:"") x}`)
 	// A block string holds those bytes raw, which must not collide either.
 	f(t, errDiffer, `{f(a:"""`+"\x07x"+`""")}`, `{f(a:"""""") x}`)
@@ -314,8 +303,8 @@ func TestCompare(t *testing.T) {
 	f(t, errDiffer,
 		`{f(a:"\u0011\u0007x\u0012")}`, `{f(a:""){x}}`)
 
-	// A description is documentation and isn't hashed, so documents differing
-	// only in their descriptions are equal
+	// A description is documentation and isn't hashed,
+	// so documents differing only in their descriptions are equal
 	// (https://spec.graphql.org/September2025/#sec-Descriptions).
 	f(t, nil, `"A" query Q { f }`, `query Q { f }`)
 	f(t, nil, `"A" query Q { f }`, `"B" query Q { f }`)
@@ -327,27 +316,10 @@ func TestCompare(t *testing.T) {
 	f(t, nil, `query Q("A" $x: Int) { f }`, `query Q("B" $x: Int) { f }`)
 
 	// A '$' not followed by a Name leaves the variable definition list unclosed,
-	// so the document is invalid and must be rejected rather than hashed. It
-	// otherwise collides with the valid operation that declares no variables.
+	// so the document is invalid and must be rejected rather than hashed.
+	// It otherwise collides with the valid operation that declares no variables.
 	f(t, gqlhash.ErrUnexpectedToken, `query($ {f}`, `query {f}`)
 	f(t, gqlhash.ErrUnexpectedToken, `query($@dir {f}`, `query @dir {f}`)
-}
-
-// TestPosition covers the [gqlhash.Position] wrapper.
-func TestPosition(t *testing.T) {
-	const src = "query Q {\n  f(a: 01)\n}"
-	_, err := gqlhash.AppendHash(nil, sha1.New(), gqlhash.Options{}, src)
-	if !err.IsErr() {
-		t.Fatal("expected an error")
-	}
-	if line, column := gqlhash.Position(src, err.Offset); line != 2 || column != 9 {
-		t.Errorf("expected line 2, column 9; received line %d, column %d",
-			line, column)
-	}
-	// A hash mismatch has no position.
-	if line, column := gqlhash.Position(src, -1); line != 0 || column != 0 {
-		t.Errorf("expected no position; received line %d, column %d", line, column)
-	}
 }
 
 func TestCompareErr(t *testing.T) {
@@ -360,20 +332,38 @@ func TestCompareErr(t *testing.T) {
 	if received.Err != gqlhash.ErrUnexpectedEOF {
 		t.Errorf("expected %v; received: %v", gqlhash.ErrUnexpectedEOF, received)
 	}
+
+	// The offset an error carries is meant to be read with [gqlhash.Position],
+	// which re-exports the parser's and must report what it reports.
+	// The source below puts the error on a line and a column that differ,
+	// so a wrapper returning them the wrong way round doesn't pass.
+	// What a position means, including the negative offset of an error without one,
+	// is the parser's: see TestPosition and TestErrorPosition there.
+	const src = "query Q {\n  f(a: 01)\n}"
+	_, err := gqlhash.AppendHash(nil, sha1.New(), gqlhash.Options{}, src)
+	if !err.IsErr() {
+		t.Fatal("expected an error")
+	}
+	expectLine, expectColumn := parser.Position(src, err.Offset)
+	if line, column := gqlhash.Position(src, err.Offset); line != expectLine ||
+		column != expectColumn {
+		t.Errorf("expected line %d, column %d; received line %d, column %d",
+			expectLine, expectColumn, line, column)
+	}
 }
 
 // TestNarrowHash pins that every function takes [gqlhash.Hash] and none of them
-// needs Size: [internal.NoopHash] is no [hash.Hash] and still goes everywhere.
+// needs Size: [gqlhashtest.NoopHash] is no [hash.Hash] and still goes everywhere.
 func TestNarrowHash(t *testing.T) {
-	h := internal.NoopHash{}
+	h := gqlhashtest.NoopHash{}
 
 	sum, err := gqlhash.AppendHash(nil, h, gqlhash.Options{}, "{x}")
 	if err.IsErr() || string(sum) != "mock-hash-sum" {
 		t.Errorf("AppendHash: %q, %v", sum, err)
 	}
 
-	// The sum is constant, so any two valid documents count as equal and an
-	// invalid one still fails.
+	// The sum is constant,
+	// so any two valid documents count as equal and an invalid one still fails.
 	if equal, err := gqlhash.Compare(h, gqlhash.Options{}, "{x}", "{y}"); err.IsErr() ||
 		!equal {
 		t.Errorf("Compare: equal %t, %v", equal, err)
@@ -402,8 +392,8 @@ func TestHasher(t *testing.T) {
 		{Ignore: gqlhash.IgnoreVariables},
 	} {
 		hasher := gqlhash.NewHasher[string](sha1.New(), options)
-		// Twice over the same documents: the second pass runs on the grown
-		// buffers of the first.
+		// Twice over the same documents:
+		// the second pass runs on the grown buffers of the first.
 		for pass := range 2 {
 			for _, doc := range fuzzSeeds {
 				want, errWant := gqlhash.AppendHash(nil, sha1.New(), options, doc)
@@ -581,11 +571,15 @@ var benchQueries = []struct {
 	Formatted string
 	Minified  string
 
-	// SchemaInvalid excludes the query from everything that involves the
-	// schema. An adversarial document doesn't respect a schema, and a
-	// hash-based firewall has to reject it before validation gets to see it,
+	// SchemaInvalid excludes the query from everything that involves the schema.
+	// An adversarial document doesn't respect a schema,
+	// and a hash-based firewall has to reject it before validation gets to see it,
 	// which is exactly why hashing it must stay cheap.
 	SchemaInvalid bool
+
+	// DepthLimit is what the query needs to be read at all, 0 for the default.
+	// Only the adversarial one nests past it.
+	DepthLimit int
 }{
 	{
 		Name:   "blockstring",
@@ -626,13 +620,14 @@ var benchQueries = []struct {
 		Minified:  benchQueryBigMinified,
 	},
 	{
-		// Deeply nested selection sets, inline fragments, list values, input
-		// object values and list types.
+		// Deeply nested selection sets, inline fragments, list values,
+		// input object values and list types.
 		Name:          "nesting_attack",
 		Schema:        benchSchema,
 		Formatted:     benchQueryNestingAttack,
 		Minified:      benchQueryNestingAttackMinified,
 		SchemaInvalid: true,
+		DepthLimit:    10_000,
 	},
 }
 
@@ -641,12 +636,13 @@ func BenchmarkCompare(b *testing.B) {
 		b.Run(q.Name, func(b *testing.B) {
 			varForm, varMin := []byte(q.Formatted), []byte(q.Minified)
 			h := sha1.New()
+			options := gqlhash.Options{DepthLimit: q.DepthLimit}
 			b.ResetTimer()
 
 			b.Run("alloc_buffer", func(b *testing.B) {
 				for range b.N {
 					if err := compare(
-						h, gqlhash.Options{}, varForm, varMin,
+						h, options, varForm, varMin,
 					); err.Err != nil {
 						b.Fatal(err)
 					}
@@ -656,7 +652,7 @@ func BenchmarkCompare(b *testing.B) {
 			b.Run("reuse_buffer", func(b *testing.B) {
 				buf := make([]byte, 0, h.Size()*2)
 				for range b.N {
-					err := compareWithBuffer(buf, h, gqlhash.Options{}, varForm, varMin)
+					err := compareWithBuffer(buf, h, options, varForm, varMin)
 					if err.Err != nil {
 						b.Fatal(err)
 					}
@@ -666,7 +662,7 @@ func BenchmarkCompare(b *testing.B) {
 	}
 }
 
-func TestBenchQueries(t *testing.T) {
+func TestBenchQueryCorpus(t *testing.T) {
 	for _, q := range benchQueries {
 		t.Run(q.Name, func(t *testing.T) {
 			// Prepare vektah schema
@@ -688,7 +684,8 @@ func TestBenchQueries(t *testing.T) {
 			}
 
 			errCmp := compare(
-				sha1.New(), gqlhash.Options{}, []byte(q.Formatted), []byte(q.Minified),
+				sha1.New(), gqlhash.Options{DepthLimit: q.DepthLimit},
+				[]byte(q.Formatted), []byte(q.Minified),
 			)
 			if errCmp.Err != nil {
 				t.Errorf("unexpected error: %v", err)
@@ -715,8 +712,8 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 			if err != nil {
 				b.Fatalf("parsing schema: %v", err)
 			}
-			// Construct the validation rules once, mirroring real-world
-			// vektah usage instead of rebuilding them on every parse.
+			// Construct the validation rules once, mirroring real-world vektah usage
+			// instead of rebuilding them on every parse.
 			vektahRules := rules.NewDefaultRules()
 			hashBuffer := make([]byte, 64)
 			h := sha1.New()
@@ -774,10 +771,10 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 // an input's validity, and that a valid query never differs from itself.
 func FuzzHashing(f *testing.F) {
 	// Invalid inputs.
-	for _, q := range internal.TestUnexpectedEOF {
+	for _, q := range gqlhashtest.UnexpectedEOF {
 		f.Add(q)
 	}
-	for _, q := range internal.TestErrUnexpectedToken {
+	for _, q := range gqlhashtest.UnexpectedToken {
 		f.Add(q)
 	}
 
@@ -802,7 +799,7 @@ func FuzzHashing(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, a string) {
 		in := []byte(a)
-		h := internal.NoopHash{}
+		h := gqlhashtest.NoopHash{}
 
 		// Public wrappers must not panic.
 		_, _ = gqlhash.AppendHash(nil, h, gqlhash.Options{}, in)
@@ -816,14 +813,14 @@ func FuzzHashing(f *testing.F) {
 			if i == 0 {
 				first = err
 			} else if fmt.Sprint(err) != fmt.Sprint(first) {
-				// Compared by message: a [parser.SyntaxError] is a pointer, so
-				// two equal errors are still two values.
+				// Compared by message: a [parser.SyntaxError] is a pointer,
+				// so two equal errors are still two values.
 				t.Fatalf("options %+v returned %v; want %v", o, err, first)
 			}
 		}
 
-		// A valid query must never differ from itself, for any options. This
-		// exercises hashing determinism and buffer reuse and needs a real hash
+		// A valid query must never differ from itself, for any options.
+		// This exercises hashing determinism and buffer reuse and needs a real hash
 		// (NoopHash has a constant sum). Skip invalid inputs (first != nil).
 		if first == nil {
 			sh := sha1.New()
@@ -836,10 +833,10 @@ func FuzzHashing(f *testing.F) {
 	})
 }
 
-// benchHashFunctions are the hash functions the CLI offers, in the order of its
-// -hash documentation. The constructors are written out here rather than taken
-// from the command packages, so the library's benchmarks depend on nothing but
-// the library.
+// benchHashFunctions are the hash functions the CLI offers, in the order
+// of its -hash documentation. The constructors are written out here rather
+// than taken from the command packages,
+// so the library's benchmarks depend on nothing but the library.
 var benchHashFunctions = []struct {
 	Name string
 	New  func() hash.Hash
@@ -871,9 +868,9 @@ var benchHashFunctions = []struct {
 }
 
 // BenchmarkHashFunctions measures hashing one document with each hash function.
-// The parsing is identical across them and dominates the total, so the
-// differences are small. [BenchmarkHashFunctionsRaw] is the same set without the
-// parsing, which is what makes the overhead of gqlhash readable.
+// The parsing is identical across them and dominates the total,
+// so the differences are small. [BenchmarkHashFunctionsRaw] is the same set
+// without the parsing, which is what makes the overhead of gqlhash readable.
 func BenchmarkHashFunctions(b *testing.B) {
 	query, err := os.ReadFile("testdata/big.graphql")
 	if err != nil {
@@ -888,8 +885,8 @@ func BenchmarkHashFunctions(b *testing.B) {
 			b.ReportAllocs()
 
 			for b.Loop() {
-				// errHash is no error: assigning it to one would make it
-				// non-nil even when there's no error.
+				// errHash is no error:
+				// assigning it to one would make it non-nil even when there's no error.
 				var errHash gqlhash.Error
 				buf, errHash = gqlhash.AppendHash(
 					buf[:0], h, gqlhash.Options{}, query,
@@ -902,8 +899,8 @@ func BenchmarkHashFunctions(b *testing.B) {
 	}
 }
 
-// BenchmarkHashFunctionsRaw measures each hash function on its own, over a buffer
-// the size of the document [BenchmarkHashFunctions] uses.
+// BenchmarkHashFunctionsRaw measures each hash function on its own,
+// over a buffer the size of the document [BenchmarkHashFunctions] uses.
 func BenchmarkHashFunctionsRaw(b *testing.B) {
 	query, err := os.ReadFile("testdata/big.graphql")
 	if err != nil {
@@ -923,5 +920,48 @@ func BenchmarkHashFunctionsRaw(b *testing.B) {
 				buf = h.Sum(buf[:0])
 			}
 		})
+	}
+}
+
+// TestAppendKeepsTheBuffer covers what the AppendX convention promises:
+// a document that's rejected leaves the caller's buffer as it was.
+//
+// Reusing one across calls is the point of taking it, and a caller that writes
+// buf, err = AppendHash(buf, ...) would otherwise lose everything buf held,
+// and its capacity with it, to one document that didn't parse.
+func TestAppendKeepsTheBuffer(t *testing.T) {
+	const kept = "what the caller had"
+	const broken = "{ unterminated"
+
+	// A rejected document through the package function.
+	buffer := make([]byte, 0, 256)
+	buffer = append(buffer, kept...)
+	got, err := gqlhash.AppendHash(buffer, sha1.New(), gqlhash.Options{}, broken)
+	if !err.IsErr() {
+		t.Fatal("AppendHash: expected the document to be rejected")
+	}
+	if string(got) != kept || cap(got) != cap(buffer) {
+		t.Errorf("AppendHash: expected the buffer kept; received %q with capacity %d",
+			got, cap(got))
+	}
+
+	// And through a Hasher, which is the one a per-request path uses.
+	hasher := gqlhash.NewHasher[string](sha1.New(), gqlhash.Options{})
+	got, err = hasher.Append(buffer, broken)
+	if !err.IsErr() {
+		t.Fatal("Hasher.Append: expected the document to be rejected")
+	}
+	if string(got) != kept || cap(got) != cap(buffer) {
+		t.Errorf("Hasher.Append: expected the buffer kept; received %q with capacity %d",
+			got, cap(got))
+	}
+
+	// A document that parses appends to what's there, rather than replacing it.
+	got, err = gqlhash.AppendHash(buffer, sha1.New(), gqlhash.Options{}, "{x}")
+	if err.IsErr() {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(string(got), kept) || len(got) <= len(kept) {
+		t.Errorf("expected the hash appended to what was there; received %q", got)
 	}
 }

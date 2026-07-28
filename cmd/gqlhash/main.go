@@ -1,8 +1,8 @@
-// Command gqlhash hashes GraphQL executable documents, ignoring differences in
-// formatting.
+// Command gqlhash hashes GraphQL executable documents,
+// ignoring differences in formatting.
 //
-// The proxy is gqlhash-proxy, a separate binary, so an HTTP server and a metrics
-// client stay out of this one.
+// The proxy is gqlhash-proxy, a separate binary, so an HTTP server,
+// a metrics client and a schema validator stay out of this one.
 package main
 
 import (

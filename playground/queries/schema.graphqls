@@ -1,0 +1,22 @@
+# The schema of the API behind the proxy. Every document in this directory is
+# checked against it, so a query naming a field the API doesn't have never
+# reaches the allowlist. Remove this file and the documents are only hashed.
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+type Query {
+  user(id: ID!): User
+  users(limit: Int = 10): [User!]!
+}
+
+type Mutation {
+  deleteUser(id: ID!): Boolean!
+}
+
+type User {
+  id: ID!
+  name: String!
+  email: String!
+}
