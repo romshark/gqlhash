@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"net"
@@ -15,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/romshark/gqlhash/v2"
 	"github.com/romshark/gqlhash/v2/internal/app/config"
@@ -34,7 +35,8 @@ func TestRunProxyFlagErrors(t *testing.T) {
 		t.Helper()
 		var out, errOut strings.Builder
 		code := Run(context.Background(), "gqlhash-proxy", "dev",
-			append([]string{"gqlhash-proxy"}, args...), &out, &errOut)
+			append([]string{"gqlhash-proxy", "-control.listen", "127.0.0.1:0"}, args...),
+			&out, &errOut)
 		if code != expectCode {
 			t.Errorf("expected code %d; received %d; args %v; stderr: %s",
 				expectCode, code, args, errOut.String())
@@ -46,12 +48,12 @@ func TestRunProxyFlagErrors(t *testing.T) {
 
 	// The flags are validated by the config package, which tests every value.
 	// What's left here is what only a run can fail at.
-	f(t, 2, "-upstream", "http://x", "-allowlist", dir, "-log-level", "nope")
+	f(t, 2, "-upstream.url", "http://x", "-allowlist", dir, "-log.level", "nope")
 
-	// A directory that can't be read stops the start. An empty one, or one
-	// holding only documents that don't parse, doesn't: it serves and rejects
-	// everything, which the allowlist tests cover.
-	f(t, 1, "-upstream", "http://x", "-allowlist", filepath.Join(dir, "nope"))
+	// A directory that can't be read stops the start. An empty one, or one holding
+	// only documents that don't parse, doesn't: it serves and rejects everything,
+	// which the allowlist tests cover.
+	f(t, 1, "-upstream.url", "http://x", "-allowlist", filepath.Join(dir, "nope"))
 
 	// An address already in use is a start failure, not a panic.
 	held, err := net.Listen("tcp", "127.0.0.1:0")
@@ -59,8 +61,8 @@ func TestRunProxyFlagErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = held.Close() }()
-	f(t, 1, "-upstream", "http://x", "-allowlist", dir,
-		"-listen", held.Addr().String())
+	f(t, 1, "-upstream.url", "http://x", "-allowlist", dir,
+		"-server.listen", held.Addr().String())
 
 	var out, errOut strings.Builder
 	if code := Run(context.Background(), "gqlhash-proxy", "1.2.3-test",
@@ -72,8 +74,7 @@ func TestRunProxyFlagErrors(t *testing.T) {
 	}
 }
 
-// syncBuffer collects log output while the server writes to it from its own
-// goroutines.
+// syncBuffer collects log output while the server writes to it from its own goroutines.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf strings.Builder
@@ -105,11 +106,13 @@ func freePort(t *testing.T) string {
 	return address
 }
 
-// serve starts the proxy on a port of its own and returns the address it
-// reports, which is the only way to learn the port behind -listen :0.
+// serve starts the proxy on a port of its own and returns the address it reports,
+// which is the only way to learn the port behind -server.listen :0.
 func serve(t *testing.T, args ...string) (address string, logs *syncBuffer) {
 	t.Helper()
-	logs = start(t, append([]string{"-listen", "127.0.0.1:0"}, args...)...)
+	logs = start(t, append([]string{
+		"-server.listen", "127.0.0.1:0", "-control.listen", "127.0.0.1:0",
+	}, args...)...)
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -179,27 +182,20 @@ func upstreamServer(t *testing.T) (*url.URL, *upstreamSpy) {
 	return mustURL(t, server.URL+"/graphql"), spy
 }
 
-// TestRunProxyEndToEnd drives the proxy over real HTTP, from its flags to
-// the upstream API.
+// TestRunProxyEndToEnd drives the proxy over real HTTP,
+// from its flags to the upstream API.
 func TestRunProxyEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	writeDoc(t, dir, "get-user.graphql",
 		"query GetUser {\n  # the allowed operation\n  user(id: 1) {\n    name\n  }\n}")
 
 	upstream, spy := upstreamServer(t)
-	address, logs := serve(t, "-upstream", upstream.String(), "-allowlist", dir,
-		"-status", "/healthz", "-log-requests", "-log-level", "debug")
-	client := &http.Client{Timeout: 10 * time.Second}
+	controlAddress := freePort(t)
+	address, logs := serve(t, "-upstream.url", upstream.String(), "-allowlist", dir,
+		"-control.listen", controlAddress, "-log.requests", "-log.level", "debug")
 	post := func(t *testing.T, body string) (int, string) {
 		t.Helper()
-		res, err := client.Post("http://"+address+"/graphql",
-			"application/json", strings.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = res.Body.Close() }()
-		answer, _ := io.ReadAll(res.Body)
-		return res.StatusCode, string(answer)
+		return postGraphQL(t, address, body)
 	}
 
 	// The allowed document, however it's written.
@@ -216,18 +212,18 @@ func TestRunProxyEndToEnd(t *testing.T) {
 		if answer != upstreamAnswer {
 			t.Errorf("expected the upstream answer; received %s", answer)
 		}
-		// The path of -upstream is the endpoint, whatever the client used.
-		if spy.LastPath != "/graphql" {
-			t.Errorf("expected /graphql upstream; received %s", spy.LastPath)
+		// The path of -upstream.url is the endpoint, whatever the client used.
+		if spy.lastPath != "/graphql" {
+			t.Errorf("expected /graphql upstream; received %s", spy.lastPath)
 		}
 		// The body upstream receives is the one the client sent.
-		if spy.LastBody != body {
-			t.Errorf("expected upstream to receive %s; received %s", body, spy.LastBody)
+		if spy.lastBody != body {
+			t.Errorf("expected upstream to receive %s; received %s", body, spy.lastBody)
 		}
 	}
 
-	// One that isn't allowed, and the anonymous form of the allowed one, which
-	// is a different document.
+	// One that isn't allowed, and the anonymous form of the allowed one,
+	// which is a different document.
 	for _, body := range []string{
 		`{"query":"query GetUser{user(id:1){email}}"}`,
 		`{"query":"{user(id:1){name}}"}`,
@@ -246,21 +242,15 @@ func TestRunProxyEndToEnd(t *testing.T) {
 	}
 
 	// A GET request carries the document in the query string.
-	res, err := client.Get("http://" + address +
-		"/graphql?query=query%20GetUser%7Buser(id%3A1)%7Bname%7D%7D")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Errorf("GET: expected 200; received %d", res.StatusCode)
+	if code, _ := get(t, "http://"+address+
+		"/graphql?query=query%20GetUser%7Buser(id%3A1)%7Bname%7D%7D"); code !=
+		http.StatusOK {
+		t.Errorf("GET: expected 200; received %d", code)
 	}
 
-	// The status endpoint counts what happened.
-	res, err = client.Get("http://" + address + "/healthz")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The status endpoint of the control server counts what happened. It's no
+	// route of the traffic port: that one forwards everything it doesn't reject.
+	_, statusBody := get(t, "http://"+controlAddress+"/status")
 	var status struct {
 		Documents int    `json:"documents"`
 		LoadedAt  string `json:"loaded_at"`
@@ -268,10 +258,8 @@ func TestRunProxyEndToEnd(t *testing.T) {
 		Rejected  int    `json:"rejected"`
 		Malformed int    `json:"malformed"`
 	}
-	errDecode := json.NewDecoder(res.Body).Decode(&status)
-	_ = res.Body.Close()
-	if errDecode != nil {
-		t.Fatal(errDecode)
+	if err := json.Unmarshal([]byte(statusBody), &status); err != nil {
+		t.Fatal(err)
 	}
 	if status.Documents != 1 || status.Allowed != 4 ||
 		status.Rejected != 2 || status.Malformed != 1 {
@@ -280,120 +268,186 @@ func TestRunProxyEndToEnd(t *testing.T) {
 	if status.LoadedAt == "" {
 		t.Error("expected a load time")
 	}
+	if _, trafficBody := get(t, "http://"+address+"/status"); strings.Contains(
+		trafficBody, `"documents"`,
+	) {
+		t.Errorf("expected no status on the traffic port; received %s", trafficBody)
+	}
 
-	// A rejection is logged, and -log-requests logs what was forwarded.
+	// A rejection is logged, and -log.requests logs what was forwarded.
 	if !strings.Contains(logs.String(), "not on the allowlist") {
 		t.Error("expected a rejection to be logged")
 	}
 	if !strings.Contains(logs.String(), "forwarding") {
-		t.Error("expected -log-requests to log a forwarded request")
+		t.Error("expected -log.requests to log a forwarded request")
 	}
 }
 
-// TestRunProxyEndToEndWatch covers the one flag whose behaviour needs files on
-// disk and a running server. Every other flag is covered by TestBuildWiring and
-// the handler tests.
-func TestRunProxyEndToEndWatch(t *testing.T) {
+// TestRunProxyReload covers the control server end to end: files on disk,
+// a running proxy and a reload request.
+// Every other flag is covered by TestBuildWiring and the handler tests.
+func TestRunProxyReload(t *testing.T) {
 	dir := t.TempDir()
 	writeDoc(t, dir, "a.graphql", "{ a }")
 	upstream, _ := upstreamServer(t)
-	client := &http.Client{Timeout: 10 * time.Second}
-
 	post := func(t *testing.T, address, body string) int {
 		t.Helper()
-		res, err := client.Post("http://"+address+"/graphql",
-			"application/json", strings.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = res.Body.Close() }()
-		_, _ = io.Copy(io.Discard, res.Body)
-		return res.StatusCode
+		code, _ := postGraphQL(t, address, body)
+		return code
+	}
+	controlAddress := freePort(t)
+	reload := func(t *testing.T, method, token string) (int, string) {
+		t.Helper()
+		return send(t, requestTo(t, method, controlAddress, "/reload", token))
 	}
 
-	address, logs := serve(t, "-upstream", upstream.String(),
-		"-allowlist", dir, "-watch", "-watch-interval", "20ms")
+	// The token has no flag: the environment is the only way to give it.
+	t.Setenv(config.EnvName("control-token"), "s3cret")
+	address, logs := serve(t, "-upstream.url", upstream.String(),
+		"-allowlist", dir, "-control.listen", controlAddress)
 
 	if code := post(t, address, `{"query":"{new}"}`); code != http.StatusForbidden {
 		t.Errorf("expected 403 before the document exists; received %d", code)
 	}
 	writeDoc(t, dir, "new.graphql", "{ new }")
-	waitFor(t, func() bool {
-		return post(t, address, `{"query":"{new}"}`) == http.StatusOK
-	}, "the new document to become allowed")
 
+	// A document on disk waits for a reload,
+	// and a reload needs the token and the method.
+	if code := post(t, address, `{"query":"{new}"}`); code != http.StatusForbidden {
+		t.Errorf("expected 403 before the reload; received %d", code)
+	}
+	if code, _ := reload(t, http.MethodGet, "s3cret"); code !=
+		http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for GET; received %d", code)
+	}
+	if code, _ := reload(t, http.MethodPost, ""); code != http.StatusUnauthorized {
+		t.Errorf("expected 401 without the token; received %d", code)
+	}
+	if code, _ := reload(t, http.MethodPost, "wrong"); code !=
+		http.StatusUnauthorized {
+		t.Errorf("expected 401 for a wrong token; received %d", code)
+	}
+	if code, body := reload(t, http.MethodPost, "s3cret"); code != http.StatusOK ||
+		!strings.Contains(body, `"total":2`) ||
+		!strings.Contains(body, "new.graphql") {
+		t.Errorf("expected 200 and the two loaded files; received %d %s",
+			code, body)
+	}
+	if code := post(t, address, `{"query":"{new}"}`); code != http.StatusOK {
+		t.Errorf("expected the new document after the reload; received %d", code)
+	}
+
+	// A removed document stops being allowed once reloaded.
 	if err := os.Remove(filepath.Join(dir, "a.graphql")); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool {
-		return post(t, address, `{"query":"{a}"}`) == http.StatusForbidden
-	}, "the removed document to stop being allowed")
+	if code, _ := reload(t, http.MethodPost, "s3cret"); code != http.StatusOK {
+		t.Fatalf("reload: received %d", code)
+	}
+	if code := post(t, address, `{"query":"{a}"}`); code != http.StatusForbidden {
+		t.Errorf("expected the removed document to be rejected; received %d", code)
+	}
 
 	// A broken document is skipped, the working ones keep being served.
 	writeDoc(t, dir, "broken.graphql", "{ unterminated")
-	time.Sleep(200 * time.Millisecond)
+	code, body := reload(t, http.MethodPost, "s3cret")
+	if code != http.StatusOK || !strings.Contains(body, "new.graphql") {
+		t.Errorf("expected the broken document to be skipped; received %d %s",
+			code, body)
+	}
+	// The answer names it, so a deployment doesn't have to read the log.
+	if !strings.Contains(body, `"total":1`) ||
+		!strings.Contains(body, "broken.graphql:1:15") {
+		t.Errorf("expected the skipped document in the answer; received %s", body)
+	}
 	if code := post(t, address, `{"query":"{new}"}`); code != http.StatusOK {
 		t.Errorf("expected the working document to stay allowed; received %d", code)
 	}
-	if !strings.Contains(logs.String(), "skipping a document that doesn't parse") {
+	// The allowlist reports the skip, the proxy is what logs it,
+	// and the reason travels as the error of the event rather than as its message.
+	if !strings.Contains(logs.String(), `"message":"skipping a document"`) ||
+		!strings.Contains(logs.String(), "broken.graphql:1:15") {
 		t.Errorf("expected the skip to be logged; received %s", logs.String())
 	}
-}
 
-func TestWriteStatus(t *testing.T) {
-	dir := t.TempDir()
-	writeDoc(t, dir, "a.graphql", "{ foo }")
-	store, loader := newTestLoader(t, dir, false)
-	if err := loader.Load(); err != nil {
-		t.Fatal(err)
-	}
-	p := NewProxy(store, mustURL(t, "http://x"), sha256.New,
-		ProxyConfig{MaxBody: 1 << 20}, nil, testLogger())
-	p.counters.Allowed.Add(2)
-	p.counters.Rejected.Add(1)
-	p.counters.Upstream.Add(3)
-
-	w := httptest.NewRecorder()
-	writeStatus(w, store, p)
-	body := w.Body.String()
-	for _, want := range []string{
-		`"documents":1`, `"allowed":2`, `"rejected":1`, `"malformed":0`,
-		`"upstream_errors":3`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("expected %s in %s", want, body)
+	// The token guards the reload and nothing else on that server.
+	// A scraper carries no Authorization header, so /metrics and /status have to answer
+	// without one even where a token is configured.
+	for _, path := range []string{"/metrics", "/status"} {
+		code, body := send(t, requestTo(t, http.MethodGet, controlAddress, path, ""))
+		if code != http.StatusOK {
+			t.Errorf("expected 200 from %s without a token; received %d %s",
+				path, code, body)
 		}
 	}
-	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
-		t.Errorf("expected a JSON content type; received %q", ct)
-	}
-	var parsed map[string]any
-	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
-		t.Errorf("expected valid JSON: %v", err)
+	// The exposition is the whole point of the scrape, so an empty 200 is no pass.
+	if _, exposition := get(
+		t, "http://"+controlAddress+"/metrics",
+	); !strings.Contains(exposition, "gqlhash_proxy_allowlist_documents") {
+		t.Errorf("expected the exposition; received %s", exposition)
 	}
 }
 
-// TestRunProxyMetrics covers the -metrics endpoint end to end.
+// TestRunProxyTrafficPortServesNoControl pins that the control endpoints live
+// on the control address alone. The traffic port routes nothing but the proxy,
+// so a request to one of their paths is read as a GraphQL request and answered as one,
+// whatever the path says.
+func TestRunProxyTrafficPortServesNoControl(t *testing.T) {
+	dir := t.TempDir()
+	writeDoc(t, dir, "a.graphql", "{ a }")
+	upstream, spy := upstreamServer(t)
+	controlAddress := freePort(t)
+
+	address, _ := serve(t, "-upstream.url", upstream.String(), "-allowlist", dir,
+		"-control.listen", controlAddress)
+
+	// An empty body is no GraphQL request, so the proxy answers 400
+	// on every one of these paths. A route would answer something else.
+	for _, path := range []string{"/reload", "/metrics", "/status"} {
+		code, body := send(t, requestTo(t, http.MethodPost, address, path, ""))
+		if code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400 from the proxy; received %d: %s",
+				path, code, body)
+		}
+		if !strings.Contains(body, `"code":"BAD_REQUEST"`) {
+			t.Errorf("%s: expected the answer of the proxy; received %s", path, body)
+		}
+	}
+
+	// The same paths answer on the control address, which is what makes the point:
+	// they exist, just not there.
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/status"},
+		{http.MethodGet, "/metrics"},
+		{http.MethodPost, "/reload"},
+	} {
+		if code, body := send(t,
+			requestTo(t, c.method, controlAddress, c.path, ""),
+		); code != http.StatusOK {
+			t.Errorf("%s on the control address: expected 200; received %d: %s",
+				c.path, code, body)
+		}
+	}
+
+	// None of it reached the API.
+	if spy.requests != 0 {
+		t.Errorf("expected nothing to be forwarded; received %d", spy.requests)
+	}
+}
+
+// TestRunProxyMetrics covers the metrics of the control server end to end.
 func TestRunProxyMetrics(t *testing.T) {
 	dir := t.TempDir()
 	writeDoc(t, dir, "a.graphql", "{ a }")
 	upstream, _ := upstreamServer(t)
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	metricsAddress := freePort(t)
-	address, _ := serve(t, "-upstream", upstream.String(), "-allowlist", dir,
-		"-metrics", metricsAddress)
+	controlAddress := freePort(t)
+	address, logs := serve(t, "-upstream.url", upstream.String(), "-allowlist", dir,
+		"-control.listen", controlAddress)
 
 	post := func(t *testing.T, body string) int {
 		t.Helper()
-		res, err := client.Post("http://"+address+"/graphql",
-			"application/json", strings.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = res.Body.Close() }()
-		_, _ = io.Copy(io.Discard, res.Body)
-		return res.StatusCode
+		code, _ := postGraphQL(t, address, body)
+		return code
 	}
 
 	if code := post(t, `{"query":"{a}"}`); code != http.StatusOK {
@@ -408,16 +462,16 @@ func TestRunProxyMetrics(t *testing.T) {
 		t.Fatalf("expected 400; received %d", code)
 	}
 
-	res, err := client.Get("http://" + metricsAddress + "/metrics")
-	if err != nil {
-		t.Fatal(err)
+	// The startup reports the address the metrics are served on.
+	if got := findLogged(logs.String(), "listening", "control"); got != controlAddress {
+		t.Errorf("expected the control address %q in the log; received %q",
+			controlAddress, got)
 	}
-	body, _ := io.ReadAll(res.Body)
-	_ = res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 from /metrics; received %d", res.StatusCode)
+
+	code, exposition := get(t, "http://"+controlAddress+"/metrics")
+	if code != http.StatusOK {
+		t.Fatalf("expected 200 from /metrics; received %d", code)
 	}
-	exposition := string(body)
 
 	for _, want := range []string{
 		`gqlhash_proxy_requests_total{decision="allowed"} 1`,
@@ -438,97 +492,37 @@ func TestRunProxyMetrics(t *testing.T) {
 	}
 
 	// The metrics port serves nothing else.
-	res, err = client.Get("http://" + metricsAddress + "/graphql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = res.Body.Close()
-	if res.StatusCode != http.StatusNotFound {
-		t.Errorf("expected 404 outside /metrics; received %d", res.StatusCode)
+	if code, _ := get(
+		t, "http://"+controlAddress+"/graphql",
+	); code != http.StatusNotFound {
+		t.Errorf("expected 404 outside /metrics; received %d", code)
 	}
 
 	// The traffic port serves no metrics, so a scrape target isn't reachable
 	// where the clients are. /metrics there is just a request without a document.
-	res, err = client.Get("http://" + address + "/metrics")
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaked, _ := io.ReadAll(res.Body)
-	_ = res.Body.Close()
-	if strings.Contains(string(leaked), "gqlhash_proxy_requests_total") {
+	if _, leaked := get(t, "http://"+address+"/metrics"); strings.Contains(
+		leaked, "gqlhash_proxy_requests_total",
+	) {
 		t.Errorf("expected no exposition on the traffic port; received %s", leaked)
 	}
-
 }
 
-// TestRunProxyMetricsDisabled covers what happens without -metrics: the proxy
-// serves, and nothing exposes an exposition anywhere.
-func TestRunProxyMetricsDisabled(t *testing.T) {
-	dir := t.TempDir()
-	writeDoc(t, dir, "a.graphql", "{ a }")
-	upstream, _ := upstreamServer(t)
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	address, logs := serve(t, "-upstream", upstream.String(), "-allowlist", dir)
-
-	res, err := client.Post("http://"+address+"/graphql", "application/json",
-		strings.NewReader(`{"query":"{a}"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Errorf("expected 200; received %d", res.StatusCode)
-	}
-
-	// Nothing is served on the traffic port either.
-	res, err = client.Get("http://" + address + "/metrics")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(res.Body)
-	_ = res.Body.Close()
-	if strings.Contains(string(body), "gqlhash_proxy_requests_total") {
-		t.Errorf("expected no exposition; received %s", body)
-	}
-
-	// The startup says metrics are off, and no second address is reported.
-	if !strings.Contains(logs.String(), `"metrics":false`) {
-		t.Errorf("expected metrics to be reported as off; received %s", logs.String())
-	}
-	if strings.Contains(logs.String(), "serving metrics") {
-		t.Errorf("expected no metrics listener; received %s", logs.String())
-	}
-}
-
-// TestRunProxyMetricsUpstreamErrors covers the one counter the other metrics test
-// can only see at zero.
+// TestRunProxyMetricsUpstreamErrors covers the one counter the other metrics test can
+// only see at zero.
 func TestRunProxyMetricsUpstreamErrors(t *testing.T) {
 	dir := t.TempDir()
 	writeDoc(t, dir, "a.graphql", "{ a }")
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	metricsAddress := freePort(t)
+	controlAddress := freePort(t)
 	// An upstream nothing listens on, so an allowed document fails to forward.
-	address, _ := serve(t, "-upstream", "http://127.0.0.1:1/graphql",
-		"-allowlist", dir, "-metrics", metricsAddress)
+	address, _ := serve(t, "-upstream.url", "http://127.0.0.1:1/graphql",
+		"-allowlist", dir, "-control.listen", controlAddress)
 
-	res, err := client.Post("http://"+address+"/graphql", "application/json",
-		strings.NewReader(`{"query":"{a}"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = res.Body.Close()
-	if res.StatusCode != http.StatusBadGateway {
-		t.Fatalf("expected 502; received %d", res.StatusCode)
+	if code, _ := postGraphQL(t, address, `{"query":"{a}"}`); code !=
+		http.StatusBadGateway {
+		t.Fatalf("expected 502; received %d", code)
 	}
 
-	res, err = client.Get("http://" + metricsAddress + "/metrics")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(res.Body)
-	_ = res.Body.Close()
+	_, body := get(t, "http://"+controlAddress+"/metrics")
 	exposition := string(body)
 	if !strings.Contains(exposition, "gqlhash_proxy_upstream_errors_total 1") {
 		t.Errorf("expected an upstream error to be counted; received %s", exposition)
@@ -541,9 +535,9 @@ func TestRunProxyMetricsUpstreamErrors(t *testing.T) {
 	}
 }
 
-// TestRunProxyMetricsAddressInUse makes sure a metrics address that can't be
-// bound stops the start instead of serving without metrics.
-func TestRunProxyMetricsAddressInUse(t *testing.T) {
+// TestRunProxyControlAddressInUse makes sure a control address that can't be
+// bound stops the start instead of serving without it.
+func TestRunProxyControlAddressInUse(t *testing.T) {
 	dir := t.TempDir()
 	writeDoc(t, dir, "a.graphql", "{ a }")
 	held, err := net.Listen("tcp", "127.0.0.1:0")
@@ -554,28 +548,28 @@ func TestRunProxyMetricsAddressInUse(t *testing.T) {
 
 	var out, errOut strings.Builder
 	code := Run(context.Background(), "gqlhash-proxy", "dev", []string{"gqlhash-proxy",
-		"-listen", "127.0.0.1:0",
-		"-upstream", "http://127.0.0.1:1/graphql",
+		"-server.listen", "127.0.0.1:0",
+		"-upstream.url", "http://127.0.0.1:1/graphql",
 		"-allowlist", dir,
-		"-metrics", held.Addr().String(),
+		"-control.listen", held.Addr().String(),
 	}, &out, &errOut)
 	if code != 1 {
 		t.Errorf("expected code 1; received %d; stderr: %s", code, errOut.String())
 	}
-	if !strings.Contains(errOut.String(), "listening for metrics") {
-		t.Errorf("expected the metrics bind to be reported; received %s",
+	if !strings.Contains(errOut.String(), "listening for the control server") {
+		t.Errorf("expected the control bind to be reported; received %s",
 			errOut.String())
 	}
 }
 
-// TestRunProxyGracefulShutdown asserts that a request in flight when the
-// shutdown starts is answered instead of being cut off.
+// TestRunProxyGracefulShutdown asserts that a request in flight when
+// the shutdown starts is answered instead of being cut off.
 func TestRunProxyGracefulShutdown(t *testing.T) {
 	dir := t.TempDir()
 	writeDoc(t, dir, "a.graphql", "{ a }")
 
-	// An upstream that answers slowly, so a request is certainly in flight when
-	// the shutdown starts.
+	// An upstream that answers slowly,
+	// so a request is certainly in flight when the shutdown starts.
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	mux := http.NewServeMux()
@@ -594,10 +588,11 @@ func TestRunProxyGracefulShutdown(t *testing.T) {
 	stopped := make(chan int, 1)
 	go func() {
 		stopped <- Run(ctx, "gqlhash-proxy", "dev", []string{"gqlhash-proxy",
-			"-listen", address,
-			"-upstream", upstream.URL + "/graphql",
+			"-server.listen", address,
+			"-upstream.url", upstream.URL + "/graphql",
 			"-allowlist", dir,
-			"-shutdown-timeout", "10s",
+			"-control.listen", "127.0.0.1:0",
+			"-server.shutdown-timeout", "10s",
 		}, io.Discard, logs)
 	}()
 	waitFor(t, func() bool {
@@ -606,16 +601,7 @@ func TestRunProxyGracefulShutdown(t *testing.T) {
 
 	answered := make(chan int, 1)
 	go func() {
-		client := &http.Client{Timeout: 20 * time.Second}
-		res, err := client.Post("http://"+address+"/graphql", "application/json",
-			strings.NewReader(`{"query":"{a}"}`))
-		if err != nil {
-			answered <- 0
-			return
-		}
-		_, _ = io.Copy(io.Discard, res.Body)
-		_ = res.Body.Close()
-		answered <- res.StatusCode
+		answered <- postFrom(address, `{"query":"{a}"}`, 20*time.Second)
 	}()
 
 	<-entered // The request reached the upstream.
@@ -645,8 +631,8 @@ func TestRunProxyGracefulShutdown(t *testing.T) {
 	}
 }
 
-// TestRunProxyShutdownTimeout asserts that the wait is bounded and reported. Past
-// -shutdown-timeout whatever is still running is abandoned.
+// TestRunProxyShutdownTimeout asserts that the wait is bounded and reported.
+// Past -server.shutdown-timeout whatever is still running is abandoned.
 func TestRunProxyShutdownTimeout(t *testing.T) {
 	dir := t.TempDir()
 	writeDoc(t, dir, "a.graphql", "{ a }")
@@ -659,8 +645,8 @@ func TestRunProxyShutdownTimeout(t *testing.T) {
 		<-release
 	})
 	upstream := httptest.NewServer(mux)
-	// The handler is released before the server is closed: Close waits for the
-	// requests in flight, so the other order deadlocks.
+	// The handler is released before the server is closed:
+	// Close waits for the requests in flight, so the other order deadlocks.
 	defer upstream.Close()
 	defer close(release)
 
@@ -670,24 +656,18 @@ func TestRunProxyShutdownTimeout(t *testing.T) {
 	stopped := make(chan int, 1)
 	go func() {
 		stopped <- Run(ctx, "gqlhash-proxy", "dev", []string{"gqlhash-proxy",
-			"-listen", address,
-			"-upstream", upstream.URL + "/graphql",
+			"-server.listen", address,
+			"-upstream.url", upstream.URL + "/graphql",
 			"-allowlist", dir,
-			"-shutdown-timeout", "100ms",
+			"-control.listen", "127.0.0.1:0",
+			"-server.shutdown-timeout", "100ms",
 		}, io.Discard, logs)
 	}()
 	waitFor(t, func() bool {
 		return strings.Contains(logs.String(), "listening")
 	}, "the proxy to listen")
 
-	go func() {
-		client := &http.Client{Timeout: 20 * time.Second}
-		res, err := client.Post("http://"+address+"/graphql", "application/json",
-			strings.NewReader(`{"query":"{a}"}`))
-		if err == nil {
-			_ = res.Body.Close()
-		}
-	}()
+	go func() { _ = postFrom(address, `{"query":"{a}"}`, 20*time.Second) }()
 
 	<-entered
 	cancel()
@@ -705,39 +685,44 @@ func TestRunProxyShutdownTimeout(t *testing.T) {
 	}
 }
 
-// TestBuildWiring asserts that every field of a config reaches the component it
-// configures. A swapped field is what this catches, which no behavioural test
-// would show as anything but a puzzling result.
+// TestBuildWiring asserts that every field of a config reaches the component
+// it configures. A swapped field is what this catches,
+// which no behavioural test would show as anything but a puzzling result.
 func TestBuildWiring(t *testing.T) {
 	dir := t.TempDir()
 	writeDoc(t, dir, "a.graphql", "{ a }")
 
-	// Every value differs from its default, so a field that reads the wrong
-	// source is visible.
+	// Every value differs from its default,
+	// so a field that reads the wrong source is visible.
 	cfg := config.Proxy{
-		Listen:         "127.0.0.1:0",
-		Upstream:       mustURL(t, "http://upstream.example:4000/graphql"),
-		Allowlist:      dir,
-		Watch:          true,
-		WatchInterval:  7 * time.Second,
-		Hash:           config.HashFunctionBLAKE3,
+		AllowlistDir:   dir,
+		HashFunc:       config.HashFunctionBLAKE3,
 		Ignore:         gqlhash.IgnoreInputs,
-		Exact:          false,
-		MaxBody:        4096,
 		AllowBatch:     true,
 		OpaqueErrors:   true,
-		LogRequests:    true,
 		TrustForwarded: true,
-		LogLevel:       "debug",
-		LogJSON:        true,
-		Timeout:        11 * time.Second,
-		Shutdown:       13 * time.Second,
-		Status:         "/healthz",
-		Metrics:        "127.0.0.1:0",
-
-		MaxIdleConnsPerHost: 7,
-		MaxIdleConns:        9,
-		HTTP2:               false,
+		Server: config.ProxyServer{
+			Listen:          "127.0.0.1:0",
+			MaxBody:         4096,
+			ShutdownTimeout: 13 * time.Second,
+			// Every listener timeout differs from the others,
+			// so a field that reads the wrong one is visible.
+			ReadHeaderTimeout: 3 * time.Second,
+			ReadTimeout:       17 * time.Second,
+			WriteTimeout:      23 * time.Second,
+			IdleTimeout:       29 * time.Second,
+		},
+		Upstream: config.ProxyUpstream{
+			URL:                 mustURL(t, "http://upstream.example:4000/graphql"),
+			Timeout:             11 * time.Second,
+			MaxIdleConnsPerHost: 7,
+			MaxIdleConns:        9,
+			HTTP2:               false,
+		},
+		Control: config.ProxyControl{Address: "127.0.0.1:0", Token: "s3cret"},
+		Log: config.ProxyLog{
+			Level: "debug", JSON: true, Requests: true,
+		},
 	}
 
 	log, ok := newLogger(cfg, io.Discard)
@@ -750,102 +735,112 @@ func TestBuildWiring(t *testing.T) {
 	}
 
 	// The handler.
-	p := c.Proxy
-	if p.maxBody != cfg.MaxBody {
-		t.Errorf("MaxBody: expected %d; received %d", cfg.MaxBody, p.maxBody)
+	p := c.proxy
+	if p.maxBody != cfg.Server.MaxBody {
+		t.Errorf("MaxBody: expected %d; received %d", cfg.Server.MaxBody, p.maxBody)
 	}
 	if p.options.Ignore != cfg.Ignore {
 		t.Errorf("Ignore: expected %v; received %v", cfg.Ignore, p.options.Ignore)
 	}
-	if p.exact != cfg.Exact || p.allowBatch != cfg.AllowBatch ||
+	if p.allowBatch != cfg.AllowBatch ||
 		p.opaqueErrors != cfg.OpaqueErrors ||
 		p.trustForwarded != cfg.TrustForwarded {
 		t.Errorf("a switch didn't reach the handler: %+v", p)
 	}
-	// -log-requests only logs where the level keeps a debug event.
+	// -log.requests only logs where the level keeps a debug event.
 	if !p.logRequests || !p.debug {
 		t.Errorf("expected debug logging of requests; debug %t requests %t",
 			p.debug, p.logRequests)
 	}
 	if p.metrics == nil {
-		t.Error("expected metrics, -metrics names an address")
+		t.Error("expected the metrics, -control.listen names an address")
 	}
 
-	// The loader, and the hash function it keys the allowlist by.
-	if c.Loader.dir != cfg.Allowlist {
-		t.Errorf("Allowlist: expected %q; received %q", cfg.Allowlist, c.Loader.dir)
-	}
-	if c.Loader.exact != cfg.Exact {
-		t.Errorf("Exact: expected %t; received %t", cfg.Exact, c.Loader.exact)
-	}
-	h := config.NewHasher(cfg.Hash)
+	// The allowlist. A hit for a document of cfg.AllowlistDir under the key of
+	// cfg.HashFunc and cfg.Ignore covers the directory, the hash function and
+	// the ignore mode in one assertion.
+	h, _ := config.NewHasher(cfg.HashFunc)
 	sum, errHash := gqlhash.AppendHash(nil, h,
 		gqlhash.Options{Ignore: cfg.Ignore}, "{ a }")
 	if errHash.IsErr() {
 		t.Fatal(errHash)
 	}
-	if c.Store.Load().Lookup(sum) == nil {
+	if !c.allowlist.Allowed(sum) {
 		t.Error("expected the allowlist to be keyed by -hash and -ignore")
 	}
 
 	// The servers.
-	if c.Server.Addr != cfg.Listen {
-		t.Errorf("Listen: expected %q; received %q", cfg.Listen, c.Server.Addr)
+	if c.server.Addr != cfg.Server.Listen {
+		t.Errorf("Listen: expected %q; received %q", cfg.Server.Listen, c.server.Addr)
 	}
-	if c.Server.WriteTimeout != cfg.Timeout+10*time.Second {
-		t.Errorf("Timeout: expected %v; received %v",
-			cfg.Timeout+10*time.Second, c.Server.WriteTimeout)
+	if c.server.ReadHeaderTimeout != cfg.Server.ReadHeaderTimeout ||
+		c.server.ReadTimeout != cfg.Server.ReadTimeout ||
+		c.server.WriteTimeout != cfg.Server.WriteTimeout ||
+		c.server.IdleTimeout != cfg.Server.IdleTimeout {
+		t.Errorf("a listener timeout didn't reach the server: %+v", c.server)
 	}
-	if c.Metrics == nil {
-		t.Fatal("expected a metrics server")
+	if c.control == nil {
+		t.Fatal("expected a control server, -control.listen names an address")
 	}
-	if c.Metrics.Addr != cfg.Metrics {
-		t.Errorf("Metrics: expected %q; received %q", cfg.Metrics, c.Metrics.Addr)
+	if c.control.Addr != cfg.Control.Address {
+		t.Errorf("Control: expected %q; received %q",
+			cfg.Control.Address, c.control.Addr)
 	}
-	if c.Metrics.Addr == c.Server.Addr && cfg.Metrics != cfg.Listen {
-		t.Error("expected the metrics server on its own address")
+	if c.control.Addr == c.server.Addr && cfg.Control.Address != cfg.Server.Listen {
+		t.Error("expected the control server on its own address")
 	}
-	transport, okT := c.Proxy.upstream.Transport.(*http.Transport)
+	// It serves the metrics, the reload and the status.
+	for _, path := range []string{"/metrics", "/reload", "/status"} {
+		if rec := serveTo(
+			t, c.control.Handler, http.MethodPost, path,
+		); rec.Code == http.StatusNotFound {
+			t.Errorf("expected the control server to serve %s", path)
+		}
+	}
+	transport, okT := c.proxy.upstream.Transport.(*http.Transport)
 	if !okT {
 		t.Fatalf("expected an *http.Transport; received %T",
-			c.Proxy.upstream.Transport)
+			c.proxy.upstream.Transport)
 	}
-	if transport.ResponseHeaderTimeout != cfg.Timeout {
+	if transport.ResponseHeaderTimeout != cfg.Upstream.Timeout {
 		t.Errorf("Timeout: expected %v upstream; received %v",
-			cfg.Timeout, transport.ResponseHeaderTimeout)
+			cfg.Upstream.Timeout, transport.ResponseHeaderTimeout)
 	}
-	if transport.MaxIdleConnsPerHost != cfg.MaxIdleConnsPerHost ||
-		transport.MaxIdleConns != cfg.MaxIdleConns ||
-		transport.ForceAttemptHTTP2 != cfg.HTTP2 {
+	if transport.MaxIdleConnsPerHost != cfg.Upstream.MaxIdleConnsPerHost ||
+		transport.MaxIdleConns != cfg.Upstream.MaxIdleConns ||
+		transport.ForceAttemptHTTP2 != cfg.Upstream.HTTP2 {
 		t.Errorf("the upstream connection settings didn't reach the transport: "+
 			"%+v", transport)
 	}
 
-	// -status serves the status, and the traffic route still answers.
-	rec := httptest.NewRecorder()
-	c.Server.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, cfg.Status, nil))
-	if !strings.Contains(rec.Body.String(), `"documents":1`) {
-		t.Errorf("expected the status on %s; received %s", cfg.Status, rec.Body)
+	// The traffic server routes nothing but the proxy.
+	if rec := serveTo(
+		t, c.server.Handler, http.MethodGet, "/status",
+	); strings.Contains(rec.Body.String(), `"documents":1`) {
+		t.Errorf("expected no status on the traffic server; received %s", rec.Body)
 	}
 
-	// Without -metrics and -status there is no second server and no extra route.
-	cfg.Metrics, cfg.Status = "", ""
-	c2, err := build(cfg, log)
-	if err != nil {
-		t.Fatal(err)
+	// A run always has the second server, and the metrics it exposes. There's no
+	// -control.listen that turns it off, which config.ParseProxy enforces and
+	// TestParseProxyErrors covers, so nothing downstream hedges against it.
+	if c.control == nil {
+		t.Fatal("expected a control server")
 	}
-	if c2.Metrics != nil {
-		t.Error("expected no metrics server")
+	if c.control.Addr != cfg.Control.Address {
+		t.Errorf("Control.Addr: expected %q; received %q",
+			cfg.Control.Address, c.control.Addr)
 	}
-	if c2.Proxy.metrics != nil {
-		t.Error("expected no metrics in the handler")
+	if c.proxy.metrics == nil {
+		t.Error("expected the proxy to keep metrics")
 	}
 }
 
 // TestNewLogger covers the flags the logger is built from.
 func TestNewLogger(t *testing.T) {
 	var out strings.Builder
-	log, ok := newLogger(config.Proxy{LogLevel: "info", LogJSON: true}, &out)
+	log, ok := newLogger(config.Proxy{
+		Log: config.ProxyLog{Level: "info", JSON: true},
+	}, &out)
 	if !ok {
 		t.Fatal("expected info to parse")
 	}
@@ -856,7 +851,9 @@ func TestNewLogger(t *testing.T) {
 
 	// The readable format is no JSON.
 	out.Reset()
-	log, ok = newLogger(config.Proxy{LogLevel: "info", LogJSON: false}, &out)
+	log, ok = newLogger(config.Proxy{
+		Log: config.ProxyLog{Level: "info", JSON: false},
+	}, &out)
 	if !ok {
 		t.Fatal("expected info to parse")
 	}
@@ -870,7 +867,9 @@ func TestNewLogger(t *testing.T) {
 
 	// The level drops what's below it.
 	out.Reset()
-	log, ok = newLogger(config.Proxy{LogLevel: "error", LogJSON: true}, &out)
+	log, ok = newLogger(config.Proxy{
+		Log: config.ProxyLog{Level: "error", JSON: true},
+	}, &out)
 	if !ok {
 		t.Fatal("expected error to parse")
 	}
@@ -885,10 +884,75 @@ func TestNewLogger(t *testing.T) {
 
 	// An unknown level is reported to stderr, not guessed at.
 	out.Reset()
-	if _, ok := newLogger(config.Proxy{LogLevel: "shout"}, &out); ok {
+	if _, ok := newLogger(config.Proxy{Log: config.ProxyLog{Level: "shout"}}, &out); ok {
 		t.Error("expected an unknown level to fail")
 	}
 	if !strings.Contains(out.String(), `unsupported log level "shout"`) {
 		t.Errorf("expected the level in the message; received %q", out.String())
+	}
+}
+
+// TestRunProxyServeFails covers the traffic server failing while it runs, which
+// is neither a bind failure nor a shutdown: the listener goes away under it.
+// That's the one way out of a run that isn't asked for,
+// so it has to be reported and it has to leave a nonzero exit code behind.
+func TestRunProxyServeFails(t *testing.T) {
+	dir := t.TempDir()
+	writeDoc(t, dir, "a.graphql", "{ a }")
+	upstream, _ := upstreamServer(t)
+
+	logs := new(syncBuffer)
+	log := zerolog.New(logs)
+	cfg := config.Proxy{
+		AllowlistDir: dir,
+		HashFunc:     config.HashFunctionSHA2,
+		Server: config.ProxyServer{
+			Listen:          "127.0.0.1:0",
+			MaxBody:         1 << 20,
+			ShutdownTimeout: 5 * time.Second,
+		},
+		Upstream: config.ProxyUpstream{URL: upstream, Timeout: 5 * time.Second},
+	}
+	c, err := build(cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing cancels the context: the run ends because serving ended.
+	code := make(chan int, 1)
+	go func() {
+		code <- c.serveOn(context.Background(), listener, cfg, log)
+	}()
+
+	// The listener is taken away from under a server that is already serving,
+	// which is what a serving failure looks like: Serve stops with an error that
+	// is no ErrServerClosed.
+	waitFor(t, func() bool {
+		return findLogged(logs.String(), "listening", "address") != ""
+	}, "the server to report listening")
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case received := <-code:
+		if received != 1 {
+			t.Errorf("expected the run to fail; received %d", received)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run didn't end")
+	}
+
+	if !strings.Contains(logs.String(), `"message":"serving"`) {
+		t.Errorf("expected the failure to be logged; received %s", logs.String())
+	}
+	// It isn't a shutdown, so nothing says it was one.
+	if strings.Contains(logs.String(), "shutting down") {
+		t.Errorf("expected no shutdown; received %s", logs.String())
 	}
 }

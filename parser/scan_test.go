@@ -10,8 +10,8 @@ import (
 )
 
 // TestParseScanOffsets runs every kind of token at every length the unrolled
-// scanners can end a chunk at. Every document below is valid: a misstep shows up
-// as a syntax error or a wrong stream.
+// scanners can end a chunk at. Every document below is valid:
+// a misstep shows up as a syntax error or a wrong stream.
 func TestParseScanOffsets(t *testing.T) {
 	for n := 1; n <= 20; n++ {
 		name := strings.Repeat("a", n)
@@ -19,8 +19,8 @@ func TestParseScanOffsets(t *testing.T) {
 		comment := "#" + strings.Repeat("c", n) + "\n"
 		text := strings.Repeat("s", n)
 
-		// A Name of this length in every position a Name can appear in, and
-		// Ignored tokens of this length between the tokens.
+		// A Name of this length in every position a Name can appear in,
+		// and Ignored tokens of this length between the tokens.
 		for _, input := range []string{
 			"{" + name + "}",
 			"{alias:" + name + "}",
@@ -52,8 +52,8 @@ func TestParseScanOffsets(t *testing.T) {
 			}
 		}
 
-		// A malformed byte at this offset ends the comment. The byte is then an
-		// unexpected token.
+		// A malformed byte at this offset ends the comment.
+		// The byte is then an unexpected token.
 		input := "{f}#" + strings.Repeat("c", n) + "\xff"
 		if _, err := parse(parser.Options{}, input); !errors.Is(
 			err.Err, parser.ErrUnexpectedToken,
@@ -103,7 +103,7 @@ func TestParseHugeDocument(t *testing.T) {
 		parser.HPrefSelectionSetEnd,
 	)
 
-	p := parser.NewParser[string](0, 0)
+	p := parser.NewParser[string](0)
 	for range 2 {
 		r := new(recorder)
 		if err := p.Parse(r, parser.Options{}, input); err.Err != nil {
@@ -176,15 +176,22 @@ func TestError(t *testing.T) {
 func TestParseNestingAttack(t *testing.T) {
 	src := readTestdata(t, "nesting-attack.graphql")
 
+	// The default limit rejects it, which is what the limit is for. The rest of
+	// this test is about the parser holding up where the limit allows it.
+	if e := parser.Parse(io.Discard, parser.Options{}, src); e.Err != parser.ErrTooDeep {
+		t.Errorf("expected the default depth limit to reject it; received %v", e)
+	}
+	noLimit := parser.Options{DepthLimit: 10_000}
+
 	// A parser with the smallest possible buffers must grow into it and agree
 	// with a default one.
-	want, err := parse(parser.Options{}, src)
+	want, err := parse(noLimit, src)
 	if err.Err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// The minified variant is the same document and produces the same form.
-	min, errMin := parse(parser.Options{}, readTestdata(t, "nesting-attack.min.graphql"))
+	min, errMin := parse(noLimit, readTestdata(t, "nesting-attack.min.graphql"))
 	if errMin.Err != nil {
 		t.Fatalf("minified: unexpected error: %v", errMin)
 	}
@@ -192,7 +199,7 @@ func TestParseNestingAttack(t *testing.T) {
 		t.Error("minified variant must produce the same stream")
 	}
 	r := new(recorder)
-	if e := parser.NewParser[string](1, 1).Parse(r, parser.Options{}, src); e.Err != nil {
+	if e := parser.NewParser[string](1).Parse(r, noLimit, src); e.Err != nil {
 		t.Fatalf("minimal parser: %v", e)
 	}
 	if r.String() != want {
@@ -200,10 +207,10 @@ func TestParseNestingAttack(t *testing.T) {
 	}
 
 	// Reading it twice must not leave anything behind in the reused buffers.
-	p := parser.NewParser[string](0, 0)
+	p := parser.NewParser[string](0)
 	for range 2 {
 		r := new(recorder)
-		if e := p.Parse(r, parser.Options{}, src); e.Err != nil {
+		if e := p.Parse(r, noLimit, src); e.Err != nil {
 			t.Fatalf("unexpected error: %v", e)
 		}
 		if r.String() != want {
@@ -218,8 +225,10 @@ func TestParseNestingAttack(t *testing.T) {
 		t.Errorf("expected no allocations; received %v", n)
 	}
 
-	// Nesting deeper than a recursive parser survives.
+	// Nesting deeper than a recursive parser survives, where the limit allows it.
 	const deep = 100_000
+	// The list-in-object case alternates, so it reaches twice the repeat count.
+	deepOptions := parser.Options{DepthLimit: 2*deep + 1}
 	for _, input := range []string{
 		strings.Repeat("{a", deep) + "b" + strings.Repeat("}", deep),
 		"{f(a:" + strings.Repeat("[", deep) + "1" + strings.Repeat("]", deep) + ")}",
@@ -228,7 +237,7 @@ func TestParseNestingAttack(t *testing.T) {
 		"query Q($v:" + strings.Repeat("[", deep) + "Int" +
 			strings.Repeat("]", deep) + "){f}",
 	} {
-		if e := p.Parse(io.Discard, parser.Options{}, input); e.Err != nil {
+		if e := p.Parse(io.Discard, deepOptions, input); e.Err != nil {
 			t.Errorf("%d levels deep: %v", deep, e)
 		}
 	}
@@ -240,7 +249,7 @@ func TestParseNestingAttack(t *testing.T) {
 		"{f(a:" + strings.Repeat("{k:", deep),
 		"query Q($v:" + strings.Repeat("[", deep),
 	} {
-		if e := p.Parse(io.Discard, parser.Options{}, input); e.Err !=
+		if e := p.Parse(io.Discard, deepOptions, input); e.Err !=
 			parser.ErrUnexpectedEOF {
 			t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, e)
 		}

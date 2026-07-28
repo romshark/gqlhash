@@ -34,22 +34,22 @@ func TestExtractJSON(t *testing.T) {
 
 	// A query member of an object other than the request isn't the document.
 	f(t, nil, []string{"{f}"}, `{"query":"{f}","variables":{"query":"nope"}}`, false)
-	f(t, ErrNoQuery, nil, `{"variables":{"query":"nope"}}`, false)
+	f(t, errNoQuery, nil, `{"variables":{"query":"nope"}}`, false)
 
 	// Only a string is a document.
-	f(t, ErrNoQuery, nil, `{"query":null}`, false)
-	f(t, ErrNoQuery, nil, `{"query":42}`, false)
-	f(t, ErrNoQuery, nil, `{}`, false)
+	f(t, errNoQuery, nil, `{"query":null}`, false)
+	f(t, errNoQuery, nil, `{"query":42}`, false)
+	f(t, errNoQuery, nil, `{}`, false)
 
-	f(t, ErrMalformedJSON, nil, `{"query":`, false)
-	f(t, ErrMalformedJSON, nil, `not json`, false)
-	f(t, ErrMalformedJSON, nil, ``, false)
+	f(t, errMalformedJSON, nil, `{"query":`, false)
+	f(t, errMalformedJSON, nil, `not json`, false)
+	f(t, errMalformedJSON, nil, ``, false)
 
 	// A batch is rejected unless it's allowed, then every document is returned.
-	f(t, ErrBatch, nil, `[{"query":"{a}"},{"query":"{b}"}]`, false)
+	f(t, errBatch, nil, `[{"query":"{a}"},{"query":"{b}"}]`, false)
 	f(t, nil, []string{"{a}", "{b}"}, `[{"query":"{a}"},{"query":"{b}"}]`, true)
 	f(t, nil, []string{"{a}"}, `{"query":"{a}"}`, true)
-	f(t, ErrNoQuery, nil, `[{"variables":{}}]`, true)
+	f(t, errNoQuery, nil, `[{"variables":{}}]`, true)
 }
 
 func TestUnescapeJSON(t *testing.T) {
@@ -117,18 +117,20 @@ func TestExtractQueryParam(t *testing.T) {
 	f(t, nil, "{ f }", "query=%7B+f+%7D")
 	f(t, nil, "{f}", "query=%7Bf%7D")
 	f(t, nil, "", "query=")
-	f(t, ErrNoQuery, "", "")
-	f(t, ErrNoQuery, "", "operationName=Q")
+	f(t, errNoQuery, "", "")
+	f(t, errNoQuery, "", "operationName=Q")
 	// A parameter whose name merely ends in query is not the query.
-	f(t, ErrNoQuery, "", "notquery={f}")
-	f(t, ErrInvalidEscape, "", "query=%7")
-	f(t, ErrInvalidEscape, "", "query=%zz")
+	f(t, errNoQuery, "", "notquery={f}")
+	f(t, errInvalidEscape, "", "query=%7")
+	f(t, errInvalidEscape, "", "query=%zz")
 }
 
 // TestExtractZeroCopy asserts that the paths without escapes hand back a view of
 // the input and allocate nothing.
 func TestExtractZeroCopy(t *testing.T) {
-	body := []byte(`{"operationName":"Q","query":"{ user(id: 1) { name } }","variables":{}}`)
+	body := []byte(
+		`{"operationName":"Q","query":"{ user(id: 1) { name } }","variables":{}}`,
+	)
 	spans := make([]span, 0, 4)
 	scratch := make([]byte, 0, 1024)
 

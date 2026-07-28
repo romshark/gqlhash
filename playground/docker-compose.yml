@@ -17,17 +17,15 @@ services:
       - api
     ports:
       - "8080:8080"
+      # The control port. A deployment keeps this one unreachable.
       - "9090:9090"
     volumes:
-      # The allowlist is mounted, so editing a file here reloads the proxy.
+      # The allowlist is mounted, so a file written here is one reload away.
       - ./queries:/queries:ro
     command:
-      - "-listen=:8080"
-      - "-upstream=http://api:4000/graphql"
+      - "-server.listen=:8080"
+      - "-upstream.url=http://api:4000/graphql"
       - "-allowlist=/queries"
-      - "-watch"
-      - "-watch-interval=2s"
-      - "-metrics=:9090"
-      - "-status=/healthz"
-      - "-log-json=false"
-      - "-log-level=debug"
+      - "-control.listen=:9090"
+      - "-log.json=false"
+      - "-log.level=debug"

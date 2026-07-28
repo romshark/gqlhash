@@ -45,6 +45,9 @@ const (
 //
 //   - https://spec.graphql.org/September2025/#Document
 func parse(p *state, dst io.Writer, o Options, src string) Error {
+	if o.DepthLimit < 1 {
+		o.DepthLimit = DefaultDepthLimit
+	}
 	var (
 		w     = writer{dst: dst, buf: p.buf[:0]}
 		stack = p.stack[:0]
@@ -54,6 +57,10 @@ func parse(p *state, dst io.Writer, o Options, src string) Error {
 		start  int   // Start of the token being read.
 		e      error // Sentinel error, set before goto ERROR.
 		errPos int   // Offset the error is reported at.
+
+		// depthLimit is how deeply selection sets and values may nest, see
+		// [Options.DepthLimit].
+		depthLimit = o.DepthLimit
 
 		selDepth  int // Number of SelectionSets currently open.
 		typeDepth int // Number of ListType brackets currently open.
@@ -111,7 +118,7 @@ DEFINITION:
 			e, errPos = ErrUnexpectedToken, i
 			goto ERROR
 		}
-		w.pref(HPrefQuery)
+		w.writeByte(HPrefQuery)
 		goto SEL_SET
 	}
 	if isKeywordAt(src, i, "fragment") {
@@ -122,13 +129,13 @@ DEFINITION:
 	// (https://spec.graphql.org/September2025/#sec-Language.Operations).
 	switch {
 	case isKeywordAt(src, i, "query"):
-		w.pref(HPrefQuery)
+		w.writeByte(HPrefQuery)
 		i += len("query")
 	case isKeywordAt(src, i, "mutation"):
-		w.pref(HPrefMutation)
+		w.writeByte(HPrefMutation)
 		i += len("mutation")
 	case isKeywordAt(src, i, "subscription"):
-		w.pref(HPrefSubscription)
+		w.writeByte(HPrefSubscription)
 		i += len("subscription")
 	default:
 		e, errPos = ErrUnexpectedToken, i
@@ -266,7 +273,7 @@ VARDEF:
 		goto ERROR
 	}
 	i = skipIgnorables(src, i+1)
-	w.pref(HPrefType)
+	w.writeByte(HPrefType)
 	typeDepth = 0
 	goto TYPE
 
@@ -282,7 +289,7 @@ TYPE:
 		i = w.nameStr(src, i)
 	case src[i] == '[':
 		typeDepth++
-		w.pref('[')
+		w.writeByte('[')
 		i = skipIgnorables(src, i+1)
 		goto TYPE
 	default:
@@ -294,7 +301,7 @@ TYPE_AFTER:
 	// NonNullType, whose '!' an Ignored token may precede.
 	j = skipIgnorables(src, i)
 	if j < len(src) && src[j] == '!' {
-		w.pref('!')
+		w.writeByte('!')
 		i = j + 1
 	}
 	if typeDepth > 0 {
@@ -307,7 +314,7 @@ TYPE_AFTER:
 			e, errPos = ErrUnexpectedToken, j
 			goto ERROR
 		}
-		w.pref(']')
+		w.writeByte(']')
 		i = j + 1
 		typeDepth--
 		goto TYPE_AFTER
@@ -482,7 +489,7 @@ VALUE:
 			if e != nil {
 				goto ERROR
 			}
-			w.pref(HPrefValueString)
+			w.writeByte(HPrefValueString)
 			if hasContent {
 				// BlockStringValue joins the lines with a single line feed.
 				w.blockStringValue(src[start:i-3], prefixLen)
@@ -494,18 +501,22 @@ VALUE:
 		if e != nil {
 			goto ERROR
 		}
-		w.pref(HPrefValueString)
+		w.writeByte(HPrefValueString)
 		w.stringValue(src[start:i-1], esc)
 		goto AFTER_VALUE
 
 	case '[':
 		// ListValue (https://spec.graphql.org/September2025/#sec-List-Value).
-		w.pref(HPrefValueList)
+		w.writeByte(HPrefValueList)
 		i = skipIgnorables(src, i+1)
 		if i < len(src) && src[i] == ']' {
 			// No list end for an empty list: there are no items to separate.
 			i++
 			goto AFTER_VALUE
+		}
+		if len(stack) >= depthLimit {
+			e, errPos = ErrTooDeep, i
+			goto ERROR
 		}
 		stack = append(stack, frameList)
 		goto VALUE
@@ -513,12 +524,16 @@ VALUE:
 	case '{':
 		// InputObjectValue
 		// (https://spec.graphql.org/September2025/#sec-Input-Object-Values).
-		w.pref(HPrefValueInputObject)
+		w.writeByte(HPrefValueInputObject)
 		i = skipIgnorables(src, i+1)
 		if i < len(src) && src[i] == '}' {
 			// No object end for an empty input object: there are no fields.
 			i++
 			goto AFTER_VALUE
+		}
+		if len(stack) >= depthLimit {
+			e, errPos = ErrTooDeep, i
+			goto ERROR
 		}
 		stack = append(stack, frameObject)
 		goto OBJECT_FIELD
@@ -541,18 +556,18 @@ VALUE:
 
 	if isKeywordAt(src, i, "null") {
 		// NullValue (https://spec.graphql.org/September2025/#sec-Null-Value).
-		w.pref(HPrefValueNull)
+		w.writeByte(HPrefValueNull)
 		i += len("null")
 		goto AFTER_VALUE
 	}
 	if isKeywordAt(src, i, "true") {
 		// BooleanValue (https://spec.graphql.org/September2025/#sec-Boolean-Value).
-		w.pref(HPrefValueTrue)
+		w.writeByte(HPrefValueTrue)
 		i += len("true")
 		goto AFTER_VALUE
 	}
 	if isKeywordAt(src, i, "false") {
-		w.pref(HPrefValueFalse)
+		w.writeByte(HPrefValueFalse)
 		i += len("false")
 		goto AFTER_VALUE
 	}
@@ -579,7 +594,7 @@ AFTER_VALUE:
 		if src[i] != ']' {
 			goto VALUE // The next item of the list.
 		}
-		w.pref(HPrefValueListEnd)
+		w.writeByte(HPrefValueListEnd)
 		i++
 		stack = stack[:len(stack)-1]
 		goto AFTER_VALUE
@@ -587,7 +602,7 @@ AFTER_VALUE:
 	if src[i] != '}' {
 		goto OBJECT_FIELD // The next field of the input object.
 	}
-	w.pref(HPrefInputObjectEnd)
+	w.writeByte(HPrefInputObjectEnd)
 	i++
 	stack = stack[:len(stack)-1]
 	goto AFTER_VALUE
@@ -627,8 +642,12 @@ SEL_SET:
 		goto ERROR
 	}
 	i = skipIgnorables(src, i+1)
-	w.pref(HPrefSelectionSet)
+	w.writeByte(HPrefSelectionSet)
 	selDepth++
+	if selDepth > depthLimit {
+		e, errPos = ErrTooDeep, i
+		goto ERROR
+	}
 
 SELECTION:
 	// Selection (https://spec.graphql.org/September2025/#Selection).
@@ -651,7 +670,7 @@ SELECTION:
 				e, errPos = ErrUnexpectedToken, i
 				goto ERROR
 			}
-			w.pref(HPrefInlineFragment)
+			w.writeByte(HPrefInlineFragment)
 			i = w.nameTok(HPrefType, src, i)
 			i = skipIgnorables(src, i)
 			constant = false
@@ -668,7 +687,7 @@ SELECTION:
 			goto DIRECTIVES
 		}
 		// InlineFragment without a TypeCondition.
-		w.pref(HPrefInlineFragment)
+		w.writeByte(HPrefInlineFragment)
 		constant = false
 		dirRet = retDirSelectionSet
 		goto DIRECTIVES
@@ -741,7 +760,7 @@ AFTER_SELECTION:
 	if src[i] != '}' {
 		goto SELECTION // The next selection of this selection set.
 	}
-	w.pref(HPrefSelectionSetEnd)
+	w.writeByte(HPrefSelectionSetEnd)
 	i++
 	selDepth--
 	if selDepth == 0 {

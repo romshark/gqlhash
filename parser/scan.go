@@ -1,6 +1,10 @@
 package parser
 
-import "unicode/utf8"
+import (
+	"unicode/utf8"
+
+	"github.com/romshark/gqlhash/v2/internal/unicodeesc"
+)
 
 // bom is the UTF-8 encoding of UnicodeBOM (U+FEFF). bomFirstByte is its first
 // byte, which [skipIgnorables] dispatches on.
@@ -393,9 +397,9 @@ func scanStringLine(s string, i int) (end int, esc bool, errPos int, err error) 
 					// range: v must not overflow.
 					var v uint32
 					outOfRange := false
-					for ; j < len(s) && lutHex[s[j]]; j++ {
+					for ; j < len(s) && unicodeesc.IsHexDigit(s[j]); j++ {
 						if !outOfRange {
-							v = v<<4 | hexByteValue(s[j])
+							v = v<<4 | unicodeesc.DigitValue(s[j])
 							outOfRange = v > 0x10FFFF
 						}
 					}
@@ -406,7 +410,7 @@ func scanStringLine(s string, i int) (end int, esc bool, errPos int, err error) 
 						// No hex digits, or an unexpected non-hex character.
 						return i, esc, i + 1, ErrInvalidEscape
 					}
-					if outOfRange || !isUnicodeScalarValue(v) {
+					if outOfRange || !unicodeesc.IsScalarValue(v) {
 						// Above U+10FFFF, or a surrogate code point.
 						return i, esc, i + 1, ErrInvalidEscape
 					}
@@ -417,12 +421,12 @@ func scanStringLine(s string, i int) (end int, esc bool, errPos int, err error) 
 				if i+5 >= len(s) {
 					return i, esc, i + 1, ErrUnexpectedEOF
 				}
-				if !lutHex[s[i+2]] || !lutHex[s[i+3]] ||
-					!lutHex[s[i+4]] || !lutHex[s[i+5]] {
+				if !unicodeesc.IsHexDigit(s[i+2]) || !unicodeesc.IsHexDigit(s[i+3]) ||
+					!unicodeesc.IsHexDigit(s[i+4]) || !unicodeesc.IsHexDigit(s[i+5]) {
 					return i, esc, i + 1, ErrInvalidEscape
 				}
-				leading := fixedWidthEscapeValue(s[i+2:])
-				if isLeadingSurrogate(leading) {
+				leading := unicodeesc.Value(s[i+2:])
+				if unicodeesc.IsLeadingSurrogate(leading) {
 					// A Leading Surrogate is only legal as the first half of a
 					// surrogate pair. The second half is another fixed-width
 					// escape holding a Trailing Surrogate.
@@ -441,17 +445,17 @@ func scanStringLine(s string, i int) (end int, esc bool, errPos int, err error) 
 					if i+11 >= len(s) {
 						return i, esc, i + 1, ErrUnexpectedEOF
 					}
-					if !lutHex[s[i+8]] || !lutHex[s[i+9]] ||
-						!lutHex[s[i+10]] || !lutHex[s[i+11]] {
+					if !unicodeesc.IsHexDigit(s[i+8]) || !unicodeesc.IsHexDigit(s[i+9]) ||
+						!unicodeesc.IsHexDigit(s[i+10]) || !unicodeesc.IsHexDigit(s[i+11]) {
 						return i, esc, i + 1, ErrInvalidEscape
 					}
-					if !isTrailingSurrogate(fixedWidthEscapeValue(s[i+8:])) {
+					if !unicodeesc.IsTrailingSurrogate(unicodeesc.Value(s[i+8:])) {
 						return i, esc, i + 1, ErrInvalidEscape
 					}
 					i += 12
 					continue
 				}
-				if !isUnicodeScalarValue(leading) {
+				if !unicodeesc.IsScalarValue(leading) {
 					// A Trailing Surrogate without a preceding Leading Surrogate.
 					return i, esc, i + 1, ErrInvalidEscape
 				}
@@ -678,21 +682,6 @@ var lutNameCont = func() (t [256]bool) {
 //   - https://spec.graphql.org/September2025/#Digit
 var lutDigit = func() (t [256]bool) {
 	for b := '0'; b <= '9'; b++ {
-		t[b] = true
-	}
-	return t
-}()
-
-// lutHex marks the hexadecimal digits.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#EscapedUnicode
-var lutHex = func() (t [256]bool) {
-	t = lutDigit
-	for b := 'a'; b <= 'f'; b++ {
-		t[b] = true
-	}
-	for b := 'A'; b <= 'F'; b++ {
 		t[b] = true
 	}
 	return t

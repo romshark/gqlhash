@@ -58,15 +58,11 @@ func (*resolver) User(_ context.Context, args struct{ ID graphql.ID }) *userReso
 	return nil
 }
 
+// Users returns at most Limit of them.
+//
 // Limit is no pointer: the schema gives it a default, so it always has a value.
 func (*resolver) Users(_ context.Context, args struct{ Limit int32 }) []*userResolver {
-	limit := len(users)
-	if int(args.Limit) < limit {
-		limit = int(args.Limit)
-	}
-	if limit < 0 {
-		limit = 0
-	}
+	limit := max(min(int(args.Limit), len(users)), 0)
 	out := make([]*userResolver, 0, limit)
 	for i := range users[:limit] {
 		out = append(out, &userResolver{users[i]})

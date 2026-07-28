@@ -62,15 +62,16 @@ echo "building"
 go build -o "$WORK/gqlhash-proxy" "$ROOT/cmd/gqlhash-proxy"
 
 echo "starting the upstream on $UPSTREAM_ADDR"
-go run "$ROOT/scripts/loadtest_upstream.go" -listen "$UPSTREAM_ADDR" \
+go run "$ROOT/scripts/loadtest_upstream.go" -server.listen "$UPSTREAM_ADDR" \
 	> "$WORK/upstream.log" 2>&1 &
 
 echo "starting the proxy on $PROXY_ADDR"
 "$WORK/gqlhash-proxy" \
-	-listen "$PROXY_ADDR" \
-	-upstream "http://${UPSTREAM_ADDR}/graphql" \
+	-server.listen "$PROXY_ADDR" \
+	-upstream.url "http://${UPSTREAM_ADDR}/graphql" \
 	-allowlist "$WORK/queries" \
-	-log-level warn \
+	-control.listen "127.0.0.1:14003" \
+	-log.level warn \
 	> "$WORK/proxy.log" 2>&1 &
 
 # Wait for both to answer before measuring anything.

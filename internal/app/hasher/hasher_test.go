@@ -5,12 +5,15 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/romshark/gqlhash/v2"
 	"github.com/romshark/gqlhash/v2/internal/app/config"
 	"github.com/romshark/gqlhash/v2/internal/app/hasher"
 )
@@ -95,9 +98,8 @@ func TestRun(t *testing.T) {
 	f(t, 0, nil, stdout(`77cc3c305bf54e20`),
 		args(`-format`, `hex`, `-hash`, `crc64`), "{foo}")
 
-	// Err arguments
-	// The config package tests every rejected value. This one case proves the
-	// message reaches the stderr of Run.
+	// Err arguments The config package tests every rejected value.
+	// This one case proves the message reaches the stderr of Run.
 	f(t, 2, stderr(`unsupported hash function "sha9", use any of: `+
 		config.SupportedHashFunctions+"\n"), nil,
 		args(`-hash`, `sha9`), "{foo}")
@@ -179,44 +181,53 @@ func TestRunOutputEncodings(t *testing.T) {
 	}
 }
 
+// TestRunIgnoreOptions asserts that every -ignore mode reaches [gqlhash.Options],
+// which is all the command adds. What the modes mean for a document is the
+// parser's, see TestParseIgnoreInputs and TestParseIgnoreVariables there.
 func TestRunIgnoreOptions(t *testing.T) {
-	hash := func(t *testing.T, stdin string, a ...string) string {
-		t.Helper()
-		out, errOut := new(IORecorder), new(IORecorder)
-		if code := hasher.Run("gqlhash", "dev", args(a...), out, errOut, strings.NewReader(stdin)); code != 0 {
-			t.Fatalf("code %d; stderr: %v", code, *errOut)
+	// The document carries a value and a variable definition, so each mode
+	// leaves out something the previous one kept and the three hashes differ.
+	const doc = `query Q($v: Int) { f(a: $v, b: 1) }`
+
+	modes := []struct {
+		flag   string
+		expect gqlhash.Ignore
+	}{
+		{"nothing", gqlhash.IgnoreNothing},
+		{"inputs", gqlhash.IgnoreInputs},
+		{"variables", gqlhash.IgnoreVariables},
+	}
+
+	// -hash defaults to sha1 and -format to hex, so this is what the command
+	// must print if, and only if, the flag reached Options.
+	expected := make(map[string]string, len(modes))
+	for _, m := range modes {
+		h, _ := config.NewHasher(config.HashFunctionSHA1)
+		sum, err := gqlhash.AppendHash(nil, h,
+			gqlhash.Options{Ignore: m.expect}, doc)
+		if err.IsErr() {
+			t.Fatalf("%s: %v", m.flag, err)
 		}
-		return strings.Join(*out, "")
+		expected[m.flag] = hex.EncodeToString(sum)
+	}
+	// A mode taken for another one has to be visible in the document above,
+	// otherwise the comparisons below hold whatever the flag does.
+	if len(slices.Compact(slices.Sorted(maps.Values(expected)))) != len(modes) {
+		t.Fatalf("the document must hash differently under every mode: %v", expected)
 	}
 
-	// -ignore=inputs: queries differing only in input values (and their types)
-	// hash the same, but differ from the default (full) hash.
-	full := hash(t, `{ f(x: 1) }`)
-	in1 := hash(t, `{ f(x: 1) }`, "-ignore=inputs")
-	in2 := hash(t, `{ f(x: "different") }`, "-ignore=inputs")
-	if in1 != in2 {
-		t.Errorf("-ignore=inputs: expected equal hashes, got %q and %q", in1, in2)
-	}
-	if in1 == full {
-		t.Error("-ignore=inputs must change the hash")
-	}
-
-	// -ignore=variables implies -ignore=inputs and also drops the variable, so a
-	// parameterized query matches its literal, unparameterized form.
-	v1 := hash(t, `query Q($v: Int) { f(a: $v) }`, "-ignore=variables")
-	v2 := hash(t, `query Q { f(a: 1) }`, "-ignore=variables")
-	if v1 != v2 {
-		t.Errorf("-ignore=variables: expected equal hashes, got %q and %q", v1, v2)
-	}
-	// Under -ignore=inputs a variable usage is ignored like any other value,
-	// but the variable signature (definition) is kept.
-	if hash(t, `{ f(a: $v) }`, "-ignore=inputs") !=
-		hash(t, `{ f(a: 1) }`, "-ignore=inputs") {
-		t.Error("-ignore=inputs must ignore a variable usage like a literal")
-	}
-	if hash(t, `query ($v: ID) { f(a: $v) }`, "-ignore=inputs") ==
-		hash(t, `{ f(a: 1) }`, "-ignore=inputs") {
-		t.Error("-ignore=inputs must keep the variable signature")
+	for _, m := range modes {
+		t.Run(m.flag, func(t *testing.T) {
+			out, errOut := new(IORecorder), new(IORecorder)
+			if code := hasher.Run("gqlhash", "dev", args("-ignore="+m.flag),
+				out, errOut, strings.NewReader(doc)); code != 0 {
+				t.Fatalf("code %d; stderr: %v", code, *errOut)
+			}
+			if received := strings.Join(*out, ""); received != expected[m.flag] {
+				t.Errorf("expected the hash of Ignore %v (%s); received %s",
+					m.expect, expected[m.flag], received)
+			}
+		})
 	}
 }
 
@@ -244,10 +255,35 @@ func TestRunVersion(t *testing.T) {
 		}
 	}
 
-	// The output names the binary that ran, so a bug report says which one, and
-	// carries the license and the build information a report needs.
+	// The output names the binary that ran, so a bug report says which one,
+	// and carries the license and the build information a report needs.
 	f(t, "gqlhash", "1.2.3-test", 0,
 		[]string{"gqlhash v1.2.3-test", "MIT License", "Copyright",
 			"github.com/romshark/gqlhash/v2"},
 		args("-version"))
+}
+
+// TestRunWriteFails covers a stdout that can't be written to, which is what a
+// closed pipe looks like: `gqlhash -file q.graphql | head -1` leaves nobody to
+// read the answer. Every other failure of this command is an exit code, and this
+// one is too, rather than a goroutine dump over whatever the reader did get.
+func TestRunWriteFails(t *testing.T) {
+	errOut := new(IORecorder)
+	code := hasher.Run("gqlhash", "dev", args(), brokenPipe{}, errOut,
+		strings.NewReader("{ foo }"))
+
+	if code != 1 {
+		t.Errorf("expected code 1; received %d", code)
+	}
+	if got := strings.Join(*errOut, ""); !strings.Contains(got, "writing the hash") ||
+		!strings.Contains(got, "broken pipe") {
+		t.Errorf("expected the reason on stderr; received %q", got)
+	}
+}
+
+// brokenPipe is a stdout nobody is reading.
+type brokenPipe struct{}
+
+func (brokenPipe) Write([]byte) (int, error) {
+	return 0, errors.New("write /dev/stdout: broken pipe")
 }

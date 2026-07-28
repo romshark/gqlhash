@@ -109,8 +109,8 @@ func TestParseHashFunction(t *testing.T) {
 	f(t, config.HashFunctionCRC64, "CRC64")
 }
 
-// TestNewHasher asserts that every supported name maps to a hasher, and that the
-// digest widths are the ones the documentation of the flag promises.
+// TestNewHasher asserts that every supported name maps to a hasher,
+// and that the digest widths are the ones the documentation of the flag promises.
 func TestNewHasher(t *testing.T) {
 	widths := map[string]int{
 		"sha1":    20,
@@ -138,8 +138,8 @@ func TestNewHasher(t *testing.T) {
 			t.Errorf("%s: expected the name to parse", name)
 			continue
 		}
-		h := config.NewHasher(f)
-		if h == nil {
+		h, ok := config.NewHasher(f)
+		if !ok {
 			t.Errorf("%s: expected a hasher", name)
 			continue
 		}
@@ -154,8 +154,96 @@ func TestNewHasher(t *testing.T) {
 		}
 	}
 
-	// An unparsed name has no hasher.
-	if h := config.NewHasher(0); h != nil {
-		t.Errorf("expected no hasher for the zero value; received %T", h)
+	// An unparsed name has no hasher, and says so rather than answering nil for
+	// the caller to trip over later.
+	if h, ok := config.NewHasher(0); ok || h != nil {
+		t.Errorf("expected no hasher for the zero value; received %T, %t", h, ok)
 	}
+}
+
+// TestTablesAgree covers the tables the flag vocabulary is derived from. Every
+// name, parser and constructor comes from one row now, and what a row can still
+// get wrong is being inconsistent with itself: a name that doesn't parse back, a
+// value two rows share, a hash function nothing can construct.
+//
+// The help strings are asserted as text because they're read by whoever runs
+// -help, so a row reordered or renamed is a change to the interface and should
+// have to be said out loud.
+func TestTablesAgree(t *testing.T) {
+	t.Run("the help strings", func(t *testing.T) {
+		for _, td := range []struct{ got, want string }{
+			{config.SupportedHashFunctions, "sha1, sha2, sha3, md5, blake2b, " +
+				"blake2s, blake3, fnv, fnv1a, xxh64, crc32, crc64"},
+			{config.SupportedProxyHashFunctions, "sha2, sha3, blake2b, blake2s, blake3"},
+			{config.SupportedOutputFormats, "hex, base32, base64, base64url"},
+			{config.SupportedIgnoreModes, "nothing, inputs, variables"},
+		} {
+			if td.got != td.want {
+				t.Errorf("expected %q; received %q", td.want, td.got)
+			}
+		}
+	})
+
+	// Every name a help string offers is one the parser takes and the rest of
+	// the vocabulary agrees on.
+	t.Run("hash functions", func(t *testing.T) {
+		seen := map[config.HashFunction]string{}
+		for name := range strings.SplitSeq(config.SupportedHashFunctions, ", ") {
+			f := config.ParseHashFunction(name)
+			if f == 0 {
+				t.Errorf("%q is offered and parses to nothing", name)
+				continue
+			}
+			if other, ok := seen[f]; ok {
+				t.Errorf("%q and %q are the same function", other, name)
+			}
+			seen[f] = name
+			if got := config.HashName(f); got != name {
+				t.Errorf("%q names %v, which names %q", name, f, got)
+			}
+			if _, ok := config.NewHasher(f); !ok {
+				t.Errorf("%q parses and builds no hasher", name)
+			}
+		}
+		// The proxy takes a subset of them and nothing else.
+		for name := range strings.SplitSeq(config.SupportedProxyHashFunctions, ", ") {
+			if config.ParseProxyHashFunction(name) != config.ParseHashFunction(name) {
+				t.Errorf("%q is offered to the proxy and refused by it", name)
+			}
+		}
+		for name := range strings.SplitSeq(config.SupportedHashFunctions, ", ") {
+			offered := strings.Contains(config.SupportedProxyHashFunctions, name)
+			if refused := config.ParseProxyHashFunction(name) == 0; offered == refused {
+				t.Errorf("%q: offered to the proxy %t, refused %t", name, offered, refused)
+			}
+		}
+	})
+
+	t.Run("ignore modes", func(t *testing.T) {
+		for name := range strings.SplitSeq(config.SupportedIgnoreModes, ", ") {
+			i, ok := config.ParseIgnore(name)
+			if !ok {
+				t.Errorf("%q is offered and parses to nothing", name)
+				continue
+			}
+			if got := config.IgnoreName(i); got != name {
+				t.Errorf("%q names %v, which names %q", name, i, got)
+			}
+		}
+	})
+
+	t.Run("output formats", func(t *testing.T) {
+		seen := map[config.Format]string{}
+		for name := range strings.SplitSeq(config.SupportedOutputFormats, ", ") {
+			f := config.ParseFormat(name)
+			if f == 0 {
+				t.Errorf("%q is offered and parses to nothing", name)
+				continue
+			}
+			if other, ok := seen[f]; ok {
+				t.Errorf("%q and %q are the same format", other, name)
+			}
+			seen[f] = name
+		}
+	})
 }
