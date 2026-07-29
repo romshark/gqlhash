@@ -431,7 +431,11 @@ func (p *proxy) reject(w http.ResponseWriter, code int, message, extension strin
 // escaped on the way out. Nothing today puts a quote in a message,
 // and the client parsing this body is what pays if anything ever does.
 func writeError(w http.ResponseWriter, code int, message, extension string) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	// Header.Set would build a one-element slice per rejection, which is the
+	// path a flood takes. The shared one is only ever read: Add on a full slice
+	// appends into a new one, and Del drops the entry rather than the value.
+	// The key has to be in canonical form to be assigned like this.
+	w.Header()["Content-Type"] = contentTypeJSON
 	w.WriteHeader(code)
 	_, _ = io.WriteString(w, `{"errors":[{"message":"`)
 	writeJSONString(w, message)
@@ -441,6 +445,10 @@ func writeError(w http.ResponseWriter, code int, message, extension string) {
 	_, _ = io.WriteString(w, extension)
 	_, _ = io.WriteString(w, `"}}]}`)
 }
+
+// contentTypeJSON is the header value every error answer carries, shared so
+// that writing one doesn't allocate the slice that holds it.
+var contentTypeJSON = []string{"application/json; charset=utf-8"}
 
 // jsonEscape is the escape for every byte a JSON string can't carry as it is.
 // A quote and a backslash are handled apart, being the only two above 0x1F.

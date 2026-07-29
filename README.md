@@ -11,10 +11,12 @@ gqlhash generates SHA1 ([and other](#hash-function)) hashes from GraphQL [execut
 
 It's shipped as:
 1. The Go package [github.com/romshark/gqlhash/v2](https://pkg.go.dev/github.com/romshark/gqlhash/v2) for fast GraphQL request document hashing.
-2. `github.com/romshark/gqlhash/v2/cmd/gqlhash` a [CLI tool](#usage) for scripts and CI pipelines.
-3. `github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy`, a fast [allowlist-firewall proxy](#proxy) you can put in front of a GraphQL API.
+2. `github.com/romshark/gqlhash/v2/cmd/gqlhash` a [CLI tool](#usage-gqlhash) for scripts and CI pipelines.
+3. `github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy`, a fast [allowlist-firewall proxy](#usage-proxy) you can put in front of a GraphQL API.
 
 Generating a gqlhash is [faster](#performance) than parsing a document into an AST and comparing the ASTs.
+
+On a 24-core Xeon the proxy turns away ~514,000 unknown documents a second at a median of 163 µs, and forwards ~161,000 allowed ones. A rejection costs a third of a forward and never opens the upstream connection — [the numbers and what moves them](GQLHASH_PROXY_TUNING.md).
 
 With [`-ignore=variables`](#ignoring-variables) the following two documents produce the same SHA1 hash, despite differing in formatting, comments, input values and variables:
 
@@ -331,7 +333,7 @@ Every flag of the proxy, with its default:
 - `-server.write-timeout` must stay above `-upstream.timeout`, or the proxy cuts off a response the upstream is still allowed to be sending. It follows that flag unless you set it, and a value at or below it is rejected at startup.
 - `-server.read-timeout` has to fit `-server.max-body` arriving over the slowest link you serve, and must not be below `-server.read-header-timeout`, which would leave that one without effect.
 - `-server.idle-timeout` belongs above the idle timeout of any load balancer in front, or the balancer reuses a connection the proxy is closing.
-- `-upstream.max-idle-conns-per-host` is what caps connection reuse: there is one upstream, so every forwarded request draws from that one pool.
+- `-upstream.max-idle-conns-per-host` is what caps connection reuse: there is one upstream, so every forwarded request draws from that one pool. It belongs at or above the requests you serve at once, or the surplus connections are dialed again per request, see [tuning](GQLHASH_PROXY_TUNING.md).
 
 `-hash` takes only the collision-resistant functions, unlike `gqlhash`. Rationale: an allowlist's security property is collision resistance, and `crc32`, `crc64`, `fnv`, `fnv1a` and `xxh64` are collidable by construction while `md5` and `sha1` are broken.
 
@@ -341,16 +343,7 @@ Exposed on `/metrics` are request counters by decision, upstream errors, the all
 
 Every flag can be given through the environment instead, as `GQLHASH_PROXY_` followed by its name with the dashes and dots as underscores: `GQLHASH_PROXY_SERVER_MAX_BODY=4096`, `GQLHASH_PROXY_UPSTREAM_URL=http://api:4000/graphql`. A flag given on the command line wins. `gqlhash` reads no environment, so a variable can't quietly change the hashes a pipeline produces.
 
-`scripts/loadtest.sh [generator] [duration]` load tests the proxy end to end: it starts an upstream API, puts the proxy in front of it and drives both the forwarded and the rejected path. It takes oha, vegeta, wrk, h2load or k6, whichever is installed.
-
-Measured on an Apple M4 Pro, 50 connections, loopback:
-
-| path | req/s |
-| --- | --- |
-| rejected by the proxy | ~129,000 |
-| forwarded upstream | ~43,000 |
-
-A rejection never opens the upstream connection, which is what makes it ~3x cheaper than a forward. `go test -bench BenchmarkProxy ./internal/app/proxy` measures the same paths without a load generator.
+[GQLHASH_PROXY_TUNING.md](GQLHASH_PROXY_TUNING.md) has the throughput and latency of both paths, what moves the forwarded one, and how to measure it without measuring the load generator instead. `scripts/loadtest.sh [generator] [duration] [connections]` runs it.
 
 [playground](playground) runs the proxy in front of a sample GraphQL API with `docker compose up --build`, with a few allowed documents and the schema they're checked against.
 

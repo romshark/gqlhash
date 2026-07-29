@@ -14,15 +14,25 @@ import (
 	"github.com/romshark/gqlhash/v2/internal/allowlist"
 )
 
-// decision is what the proxy did with a request. It's the label of a metric,
-// so the strings are the values a dashboard groups by.
-type decision string
+// decision is what the proxy did with a request. It's an index rather than the
+// label itself so that a request finds its histogram by offset, see [metrics].
+type decision uint8
 
 const (
-	decisionAllowed   decision = "allowed"
-	decisionRejected  decision = "rejected"
-	decisionMalformed decision = "malformed"
+	decisionAllowed decision = iota
+	decisionRejected
+	decisionMalformed
+	decisionCount
 )
+
+// decisionLabels is what a dashboard groups by, in the order of the decisions.
+var decisionLabels = [decisionCount]string{
+	decisionAllowed:   "allowed",
+	decisionRejected:  "rejected",
+	decisionMalformed: "malformed",
+}
+
+func (d decision) String() string { return decisionLabels[d] }
 
 // metrics exposes the state of the proxy in the Prometheus text format.
 //
@@ -32,6 +42,10 @@ const (
 type metrics struct {
 	registry *prometheus.Registry
 	duration *prometheus.HistogramVec
+	// observers is the histogram of each decision, resolved once. Asking the
+	// vector for one by its label per request hashes the label and looks it up
+	// under a lock, which was ~3% of the rejected path.
+	observers [decisionCount]prometheus.Observer
 }
 
 // newMetrics returns metrics over counters and the documents in use in list.
@@ -56,6 +70,12 @@ func newMetrics(counters *counters, list *allowlist.Allowlist) *metrics {
 		}, []string{"decision"}),
 	}
 
+	// Resolving every observer here also means all three series exist from the
+	// start, so a dashboard doesn't wait for the first request of a kind.
+	for d := range m.observers {
+		m.observers[d] = m.duration.WithLabelValues(decision(d).String())
+	}
+
 	m.registry.MustRegister(
 		m.duration,
 		&proxyCollector{counters: counters, allowlist: list},
@@ -67,7 +87,7 @@ func newMetrics(counters *counters, list *allowlist.Allowlist) *metrics {
 
 // Observe records one request. start is when it arrived.
 func (m *metrics) Observe(d decision, start time.Time) {
-	m.duration.WithLabelValues(string(d)).Observe(time.Since(start).Seconds())
+	m.observers[d].Observe(time.Since(start).Seconds())
 }
 
 // Handler serves the metrics.
@@ -128,7 +148,7 @@ func (c *proxyCollector) Collect(ch chan<- prometheus.Metric) {
 	made := c.counters.snapshot()
 	count := func(v uint64, d decision) {
 		ch <- prometheus.MustNewConstMetric(descRequests,
-			prometheus.CounterValue, float64(v), string(d))
+			prometheus.CounterValue, float64(v), d.String())
 	}
 	count(made.allowed, decisionAllowed)
 	count(made.rejected, decisionRejected)
