@@ -13,10 +13,34 @@ It's shipped as:
 1. The Go package [github.com/romshark/gqlhash/v2](https://pkg.go.dev/github.com/romshark/gqlhash/v2) for fast GraphQL request document hashing.
 2. `github.com/romshark/gqlhash/v2/cmd/gqlhash` a [CLI tool](#usage-gqlhash) for scripts and CI pipelines.
 3. `github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy`, a fast [allowlist-firewall proxy](#usage-proxy) you can put in front of a GraphQL API.
+4. `github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy-fhttp`, the same proxy served with [fasthttp](GQLHASH_PROXY_FHTTP.md) rather than Go's standard `net/http`.
 
 Generating a gqlhash is [faster](#performance) than parsing a document into an AST and comparing the ASTs.
 
-On a 24-core Xeon the proxy turns away ~514,000 unknown documents a second at a median of 163 µs, and forwards ~161,000 allowed ones. A rejection costs a third of a forward and never opens the upstream connection — [the numbers and what moves them](GQLHASH_PROXY_TUNING.md).
+On a 24-core Xeon `gqlhash-proxy` turns away **~632,000** unknown documents a second at a median of **155 µs**, and forwards **~209,000** allowed ones. A rejection costs a third of a forward and never opens the upstream connection. The fasthttp build forwards ~392,000.
+
+`gqlhash-proxy-fhttp` is another implementation based on [valyala/fasthttp](https://github.com/valyala/fasthttp), an alternative HTTP/1.1 only implementation.
+
+Each command at its best, wrk at 200 connections, median of three runs:
+
+| | `gqlhash-proxy` | `gqlhash-proxy-fhttp` |
+| --- | --- | --- |
+| rejected req/s | **~632,000** | ~604,000 |
+| rejected, median / p99 | **155 µs** / 0.97 ms | 170 µs / **0.56 ms** |
+| forwarded req/s | ~209,000 | **~392,000** |
+| forwarded, median / p99 | 0.96 ms / 4.51 ms | **392 µs** / **1.90 ms** |
+| CPU per rejection / forward | 22 / 65 µs | **19 / 28 µs** |
+| RSS peak | 161 MB | **57 MB** |
+| tuned with | `GOGC=800` | `GOGC=400` |
+
+`gqlhash-proxy-fhttp` is the same proxy and the same decision. Reach for it when forwarded volume or memory is genuinely the problem you have, and take it knowing what it trades for that:
+
+- **No cancellation on client disconnect.** A client that hangs up still costs the upstream a full round trip, bounded only by `-upstream.timeout`.
+- **HTTP/1.1 only, on both sides.** It refuses `-upstream.http2`; terminate HTTP/2 at the load balancer ahead of it.
+- **A less battle-tested parser.** net/http's has taken two decades of adversarial attention, whereas fasthttp's is younger and less exercised.
+- **Small differences on the wire.** Chunked bodies arrive upstream as `Content-Length`, and gzip is never requested.
+
+[The full list and what it costs](GQLHASH_PROXY_FHTTP.md). [The numbers and what moves them](TUNING_GQLHASH_PROXY.md), [where the CPU goes](PERFORMANCE.md).
 
 With [`-ignore=variables`](#ignoring-variables) the following two documents produce the same SHA1 hash, despite differing in formatting, comments, input values and variables:
 
@@ -119,6 +143,10 @@ go install github.com/romshark/gqlhash/v2/cmd/gqlhash@latest
 
 ```sh
 go install github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy@latest
+```
+
+```sh
+go install github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy-fhttp@latest
 ```
 
 This requires the latest version of [Go](https://go.dev).
@@ -321,6 +349,7 @@ Every flag of the proxy, with its default:
 | `-upstream.timeout` | 30s | how long an upstream request may take |
 | `-upstream.max-idle-conns-per-host` | 64 | connections kept open to the upstream |
 | `-upstream.max-idle-conns` | 256 | ceiling over the per-host pool, 0 for none |
+| `-upstream.max-conn-lifetime` | off | retire an upstream connection once it's this old |
 | `-upstream.http2` | on | allow HTTP/2 to an `https` upstream |
 | `-server.read-header-timeout` | 10s | how long a client may take to send the headers |
 | `-server.read-timeout` | 30s | how long a client may take to send the request |
@@ -333,7 +362,9 @@ Every flag of the proxy, with its default:
 - `-server.write-timeout` must stay above `-upstream.timeout`, or the proxy cuts off a response the upstream is still allowed to be sending. It follows that flag unless you set it, and a value at or below it is rejected at startup.
 - `-server.read-timeout` has to fit `-server.max-body` arriving over the slowest link you serve, and must not be below `-server.read-header-timeout`, which would leave that one without effect.
 - `-server.idle-timeout` belongs above the idle timeout of any load balancer in front, or the balancer reuses a connection the proxy is closing.
-- `-upstream.max-idle-conns-per-host` is what caps connection reuse: there is one upstream, so every forwarded request draws from that one pool. It belongs at or above the requests you serve at once, or the surplus connections are dialed again per request, see [tuning](GQLHASH_PROXY_TUNING.md).
+- `-upstream.max-idle-conns-per-host` is what caps connection reuse: there is one upstream, so every forwarded request draws from that one pool. It belongs at or above the requests you serve at once, or the surplus connections are dialed again per request, see [tuning](TUNING_GQLHASH_PROXY.md).
+- `-upstream.max-conn-lifetime` belongs on wherever the upstream is several backends behind one name. They're balanced per connection, so a pool that never turns over never reaches one added after it filled, and a large `-upstream.max-idle-conns-per-host` makes that worse rather than better.
+- `gqlhash-proxy-fhttp` takes the same flags and serves them with fasthttp, forwarding around 59% faster on a third of the memory, against cancellation on client disconnect, HTTP/2 and a well-worn HTTP parser. [GQLHASH_PROXY_FHTTP.md](GQLHASH_PROXY_FHTTP.md) has the whole trade, measured.
 
 `-hash` takes only the collision-resistant functions, unlike `gqlhash`. Rationale: an allowlist's security property is collision resistance, and `crc32`, `crc64`, `fnv`, `fnv1a` and `xxh64` are collidable by construction while `md5` and `sha1` are broken.
 
@@ -343,7 +374,7 @@ Exposed on `/metrics` are request counters by decision, upstream errors, the all
 
 Every flag can be given through the environment instead, as `GQLHASH_PROXY_` followed by its name with the dashes and dots as underscores: `GQLHASH_PROXY_SERVER_MAX_BODY=4096`, `GQLHASH_PROXY_UPSTREAM_URL=http://api:4000/graphql`. A flag given on the command line wins. `gqlhash` reads no environment, so a variable can't quietly change the hashes a pipeline produces.
 
-[GQLHASH_PROXY_TUNING.md](GQLHASH_PROXY_TUNING.md) has the throughput and latency of both paths, what moves the forwarded one, and how to measure it without measuring the load generator instead. `scripts/loadtest.sh [generator] [duration] [connections]` runs it.
+[TUNING_GQLHASH_PROXY.md](TUNING_GQLHASH_PROXY.md) has the throughput and latency of both paths, what moves the forwarded one, and how to measure it without measuring the load generator instead. `go run ./internal/cmd/loadtest` runs it.
 
 [playground](playground) runs the proxy in front of a sample GraphQL API with `docker compose up --build`, with a few allowed documents and the schema they're checked against.
 

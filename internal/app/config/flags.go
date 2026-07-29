@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -64,6 +65,11 @@ type Proxy struct {
 type ProxyServer struct {
 	Listen string
 
+	// Underlay names the HTTP implementation serving the traffic, which is a
+	// property of the binary rather than a flag. It's reported in the startup
+	// log so an operator can tell which one is running.
+	Underlay string
+
 	// MaxBody is the largest request body to accept, in bytes.
 	MaxBody int64
 
@@ -88,6 +94,13 @@ type ProxyUpstream struct {
 	// MaxIdleConns is the ceiling over it, 0 for none.
 	MaxIdleConnsPerHost int
 	MaxIdleConns        int
+
+	// MaxConnLifetime retires an upstream connection once it's this old, 0 to
+	// keep it for as long as the upstream will. It's what lets a pool follow an
+	// upstream that moves: a name resolving to several backends is balanced per
+	// connection, so a pool that never turns over never reaches a backend that
+	// wasn't there when it was filled.
+	MaxConnLifetime time.Duration
 
 	// HTTP2 allows h2 to an https upstream, which multiplexes onto one connection
 	// and makes the pool sizes matter little.
@@ -204,6 +217,22 @@ func EnvName(flag string) string {
 func ParseProxy(
 	name string, args []string, stderr io.Writer,
 ) (cfg Proxy, exitCode int, run bool) {
+	return ParseProxyFor("", false, name, args, stderr)
+}
+
+// ParseProxyFor is [ParseProxy] for a binary serving with a named underlay.
+//
+// underlay is reported in the startup log. http1Only refuses -upstream.http2:
+// an implementation that can't speak h2 stops the run rather than accepting the
+// flag and serving something other than what it asks for. An empty underlay is
+// net/http, which has neither restriction.
+func ParseProxyFor(
+	underlay string, http1Only bool,
+	name string, args []string, stderr io.Writer,
+) (cfg Proxy, exitCode int, run bool) {
+	if underlay == "" {
+		underlay = "nethttp"
+	}
 	cli := flag.NewFlagSet(name, flag.ContinueOnError)
 	cli.SetOutput(stderr)
 	var (
@@ -249,6 +278,11 @@ func ParseProxy(
 				"This is what caps connection reuse under load.")
 		fMaxIdleConns = cli.Int("upstream.max-idle-conns", 256,
 			"Ceiling over -upstream.max-idle-conns-per-host, 0 for none")
+		fMaxConnLifetime = cli.Duration("upstream.max-conn-lifetime", 0,
+			"Retire an upstream connection once it's this old, 0 to keep it.\n"+
+				"Set it where the upstream is several backends behind one name:\n"+
+				"they're balanced per connection, so a pool that never turns\n"+
+				"over never reaches one that was added after it filled.")
 		fHTTP2 = cli.Bool("upstream.http2", true,
 			"Allow HTTP/2 to an https upstream, which multiplexes the requests\n"+
 				"onto one connection instead of one connection each.\n"+
@@ -300,6 +334,7 @@ func ParseProxy(
 		TrustForwarded: *fTrustForwarded,
 		Server: ProxyServer{
 			Listen:            *fListen,
+			Underlay:          underlay,
 			MaxBody:           *fMaxBody,
 			ShutdownTimeout:   *fShutdown,
 			ReadHeaderTimeout: *fReadHeaderTimeout,
@@ -311,6 +346,7 @@ func ParseProxy(
 			Timeout:             *fTimeout,
 			MaxIdleConnsPerHost: *fMaxIdleConnsPerHost,
 			MaxIdleConns:        *fMaxIdleConns,
+			MaxConnLifetime:     *fMaxConnLifetime,
 			HTTP2:               *fHTTP2,
 		},
 		Control: ProxyControl{Address: *fControl},
@@ -393,6 +429,32 @@ func ParseProxy(
 			"-server.read-timeout %v must be at least "+
 				"-server.read-header-timeout %v, "+
 				"or 0 for none\n", cfg.Server.ReadTimeout, cfg.Server.ReadHeaderTimeout)
+		return cfg, 2, false
+	}
+
+	if http1Only {
+		// Rather than accept the flag and serve something other than what it
+		// asks for, the run stops here and says where h2 belongs instead.
+		if isSet(cli, "upstream.http2") && cfg.Upstream.HTTP2 {
+			_, _ = fmt.Fprintf(stderr,
+				"-upstream.http2 can't be served by %s, which speaks "+
+					"HTTP/1.1 only.\n"+
+					"Terminate HTTP/2 ahead of this proxy, at the load balancer "+
+					"or the ingress,\nand let it reach the upstream over HTTP/1.1. "+
+					"Set -upstream.http2=false to run\nwith this command.\n",
+				// The base of the invocation, so the message names the command
+				// rather than wherever it was built or installed.
+				filepath.Base(name))
+			return cfg, 2, false
+		}
+		// Unset, the default of the flag is true and no h2 is on offer, so what
+		// the run logs stays what the run does.
+		cfg.Upstream.HTTP2 = false
+	}
+
+	if cfg.Upstream.MaxConnLifetime < 0 {
+		_, _ = fmt.Fprintln(stderr,
+			"-upstream.max-conn-lifetime must be 0 or more")
 		return cfg, 2, false
 	}
 

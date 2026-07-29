@@ -249,7 +249,7 @@ func TestRunProxyEndToEnd(t *testing.T) {
 	}
 
 	// The status endpoint of the control server counts what happened. It's no
-	// route of the traffic port: that one forwards everything it doesn't reject.
+	// route of the data-plane port: that one forwards everything it doesn't reject.
 	_, statusBody := get(t, "http://"+controlAddress+"/status")
 	var status struct {
 		Documents int    `json:"documents"`
@@ -268,10 +268,10 @@ func TestRunProxyEndToEnd(t *testing.T) {
 	if status.LoadedAt == "" {
 		t.Error("expected a load time")
 	}
-	if _, trafficBody := get(t, "http://"+address+"/status"); strings.Contains(
-		trafficBody, `"documents"`,
+	if _, dataPlaneBody := get(t, "http://"+address+"/status"); strings.Contains(
+		dataPlaneBody, `"documents"`,
 	) {
-		t.Errorf("expected no status on the traffic port; received %s", trafficBody)
+		t.Errorf("expected no status on the data-plane port; received %s", dataPlaneBody)
 	}
 
 	// A rejection is logged, and -log.requests logs what was forwarded.
@@ -388,11 +388,11 @@ func TestRunProxyReload(t *testing.T) {
 	}
 }
 
-// TestRunProxyTrafficPortServesNoControl pins that the control endpoints live
-// on the control address alone. The traffic port routes nothing but the proxy,
+// TestRunProxyDataPlaneServesNoControl pins that the control endpoints live
+// on the control address alone. The data-plane port routes nothing but the proxy,
 // so a request to one of their paths is read as a GraphQL request and answered as one,
 // whatever the path says.
-func TestRunProxyTrafficPortServesNoControl(t *testing.T) {
+func TestRunProxyDataPlaneServesNoControl(t *testing.T) {
 	dir := t.TempDir()
 	writeDoc(t, dir, "a.graphql", "{ a }")
 	upstream, spy := upstreamServer(t)
@@ -498,12 +498,12 @@ func TestRunProxyMetrics(t *testing.T) {
 		t.Errorf("expected 404 outside /metrics; received %d", code)
 	}
 
-	// The traffic port serves no metrics, so a scrape target isn't reachable
+	// The data-plane port serves no metrics, so a scrape target isn't reachable
 	// where the clients are. /metrics there is just a request without a document.
 	if _, leaked := get(t, "http://"+address+"/metrics"); strings.Contains(
 		leaked, "gqlhash_proxy_requests_total",
 	) {
-		t.Errorf("expected no exposition on the traffic port; received %s", leaked)
+		t.Errorf("expected no exposition on the data-plane port; received %s", leaked)
 	}
 }
 
@@ -729,7 +729,7 @@ func TestBuildWiring(t *testing.T) {
 	if !ok {
 		t.Fatal("expected the log level to parse")
 	}
-	c, err := build(cfg, log)
+	c, err := build(cfg, log, Underlay{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -769,15 +769,20 @@ func TestBuildWiring(t *testing.T) {
 		t.Error("expected the allowlist to be keyed by -hash and -ignore")
 	}
 
-	// The servers.
-	if c.server.Addr != cfg.Server.Listen {
-		t.Errorf("Listen: expected %q; received %q", cfg.Server.Listen, c.server.Addr)
+	// The servers. net/http is the default underlay, so these are its fields.
+	under, okU := c.dataPlane.(netHTTPServer)
+	if !okU {
+		t.Fatalf("expected the net/http underlay by default; received %T", c.dataPlane)
 	}
-	if c.server.ReadHeaderTimeout != cfg.Server.ReadHeaderTimeout ||
-		c.server.ReadTimeout != cfg.Server.ReadTimeout ||
-		c.server.WriteTimeout != cfg.Server.WriteTimeout ||
-		c.server.IdleTimeout != cfg.Server.IdleTimeout {
-		t.Errorf("a listener timeout didn't reach the server: %+v", c.server)
+	srv := under.server
+	if srv.Addr != cfg.Server.Listen {
+		t.Errorf("Listen: expected %q; received %q", cfg.Server.Listen, srv.Addr)
+	}
+	if srv.ReadHeaderTimeout != cfg.Server.ReadHeaderTimeout ||
+		srv.ReadTimeout != cfg.Server.ReadTimeout ||
+		srv.WriteTimeout != cfg.Server.WriteTimeout ||
+		srv.IdleTimeout != cfg.Server.IdleTimeout {
+		t.Errorf("a listener timeout didn't reach the server: %+v", srv)
 	}
 	if c.control == nil {
 		t.Fatal("expected a control server, -control.listen names an address")
@@ -786,7 +791,7 @@ func TestBuildWiring(t *testing.T) {
 		t.Errorf("Control: expected %q; received %q",
 			cfg.Control.Address, c.control.Addr)
 	}
-	if c.control.Addr == c.server.Addr && cfg.Control.Address != cfg.Server.Listen {
+	if c.control.Addr == srv.Addr && cfg.Control.Address != cfg.Server.Listen {
 		t.Error("expected the control server on its own address")
 	}
 	// It serves the metrics, the reload and the status.
@@ -813,11 +818,11 @@ func TestBuildWiring(t *testing.T) {
 			"%+v", transport)
 	}
 
-	// The traffic server routes nothing but the proxy.
+	// The data-plane server routes nothing but the proxy.
 	if rec := serveTo(
-		t, c.server.Handler, http.MethodGet, "/status",
+		t, srv.Handler, http.MethodGet, "/status",
 	); strings.Contains(rec.Body.String(), `"documents":1`) {
-		t.Errorf("expected no status on the traffic server; received %s", rec.Body)
+		t.Errorf("expected no status on the data-plane server; received %s", rec.Body)
 	}
 
 	// A run always has the second server, and the metrics it exposes. There's no
@@ -892,7 +897,7 @@ func TestNewLogger(t *testing.T) {
 	}
 }
 
-// TestRunProxyServeFails covers the traffic server failing while it runs, which
+// TestRunProxyServeFails covers the data-plane server failing while it runs, which
 // is neither a bind failure nor a shutdown: the listener goes away under it.
 // That's the one way out of a run that isn't asked for,
 // so it has to be reported and it has to leave a nonzero exit code behind.
@@ -913,7 +918,7 @@ func TestRunProxyServeFails(t *testing.T) {
 		},
 		Upstream: config.ProxyUpstream{URL: upstream, Timeout: 5 * time.Second},
 	}
-	c, err := build(cfg, log)
+	c, err := build(cfg, log, Underlay{})
 	if err != nil {
 		t.Fatal(err)
 	}

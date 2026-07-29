@@ -1446,8 +1446,8 @@ func TestIgnoreDocExamples(t *testing.T) {
 func TestErrorValueSemantics(t *testing.T) {
 	// The trap the doc names. This is what an error variable does with it, not
 	// what anyone should write.
-	var asInterface error = parser.Error{}
-	if asInterface == nil {
+	//nolint:staticcheck // SA4023 proving this never nil is the point of the trap
+	if asInterface := error(parser.Error{}); asInterface == nil {
 		t.Error("expected an interface holding a zero value not to be nil")
 	}
 	// Which is why the value answers for itself.
