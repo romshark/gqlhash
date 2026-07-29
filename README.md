@@ -293,9 +293,13 @@ gqlhash-proxy \
   -control.listen 127.0.0.1:9090
 ```
 
+`-server.listen` serves the proxy on every path: the request path is never routed on, and `-upstream.url` is the endpoint the forwarded request reaches. The document is read where [GraphQL over HTTP](https://graphql.github.io/graphql-over-http/draft/) puts it: the `query` parameter of a `GET`, or the `query` member of an `application/json` body. That specification is a working draft and defines neither an `application/graphql` body nor batching; the proxy reads both anyway, the first as the document itself, the second under `-allow-batch`.
+
 `-allowlist` is a directory of `.graphql` and `.gql` files holding the allowed documents. The proxy hashes them itself, so the documents are the source of truth. Formatting and comments may differ between a file and what a client sends. The set of definitions may not: one file is one entry.
 
 A `.graphqls` file in the same directory is read as the schema, and every document is then checked against it: one asking for a field the schema doesn't have is skipped like one that doesn't parse. Without such a file nothing is checked against a schema. Several `.graphqls` files are read as one schema, and a schema that doesn't parse is reported and leaves the documents unchecked rather than unserved.
+
+The proxy rejects ambiguous requests with `400 Bad Request`. Both keys in `{"query":"<allowed>","quer\u0079":"<anything>"}` unescape to `query`. The proxy can't tell which document would reach the API, so it hashes neither and refuses. Same for a GET naming `query` twice, percent-encoded or not.
 
 Two files whose documents hash alike are both skipped: which one a request meant is unknowable, and allowing the wrong one is worse than allowing neither.
 
@@ -494,3 +498,20 @@ fragment userFields on User { id name }
 ```
 
 The reason is that hashing order-insensitively and inlining fragment is more work and that would reduce the effectiveness of the proxy firewall.
+
+## Development
+
+### Testing
+
+```sh
+make                               # lint, test, report coverage
+make test                          # tests alone
+make acceptance                    # both proxy binaries, over real HTTP
+make acceptance PROXY=./my-proxy   # any implementation of the same contract
+```
+
+`./internal/acceptance` starts a real server process and drives it over HTTP, which is what lets a server written in another language be tested the same way. The contract is documented in `internal/acceptance/doc.go`.
+
+### Coverage
+
+`make` reports it, `make cover` on its own. Two runs, since the acceptance suite drives the proxy as a separate process that `-coverprofile` can't see: `cover-unit` reports what the tests reach in process, `cover-servers` what the running servers reach. The second needs an absolute `GOCOVERDIR` and no `-cover` flag, or it silently collects nothing; the Makefile handles both. `make cover-profile` converts the servers' counters into a profile.
