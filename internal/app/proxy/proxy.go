@@ -22,6 +22,18 @@ import (
 	"github.com/romshark/gqlhash/v2/parser"
 )
 
+// upstreamCopyBuffer is what one answer is copied through. A GraphQL answer that
+// needs more than this takes more than one turn around the loop, which is
+// cheaper than holding 32KiB per request in flight.
+const upstreamCopyBuffer = 8 * 1024
+
+// bufferPool gives [httputil.ReverseProxy] the buffers it copies answers through,
+// so that forwarding doesn't allocate one per request.
+type bufferPool struct{ pool sync.Pool }
+
+func (b *bufferPool) Get() []byte  { return b.pool.Get().([]byte) }
+func (b *bufferPool) Put(p []byte) { b.pool.Put(p) } //nolint:staticcheck // the interface takes a slice
+
 // counters of what the proxy decided.
 type counters struct {
 	allowed   atomic.Uint64
@@ -182,6 +194,11 @@ func newProxy(
 		}
 	}
 	p.upstream = &httputil.ReverseProxy{
+		// Without a pool ReverseProxy allocates 32KiB to copy every answer,
+		// which is most of what forwarding costs when the answers are small.
+		BufferPool: &bufferPool{pool: sync.Pool{
+			New: func() any { return make([]byte, upstreamCopyBuffer) },
+		}},
 		Rewrite: func(r *httputil.ProxyRequest) {
 			// The upstream URL is the GraphQL endpoint,
 			// so it replaces the path instead of prefixing it. SetURL would join the
