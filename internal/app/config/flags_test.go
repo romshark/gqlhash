@@ -158,6 +158,7 @@ func TestParseProxy(t *testing.T) {
 		AllowBatch:   true, OpaqueErrors: true, TrustForwarded: true,
 		Server: config.ProxyServer{
 			Listen:            "127.0.0.1:1",
+			Underlay:          "nethttp",
 			MaxBody:           4096,
 			ShutdownTimeout:   2 * time.Second,
 			ReadHeaderTimeout: 3 * time.Second,
@@ -227,6 +228,7 @@ func TestParseProxyErrors(t *testing.T) {
 	f(t, 2, "-allowlist is required", "-upstream.url", "http://x")
 
 	const ok = "-upstream.url"
+
 	// The proxy takes only the collision-resistant functions, though the hashing
 	// form offers all twelve.
 	for _, weak := range []string{"sha1", "md5", "crc32", "crc64", "fnv", "fnv1a",
@@ -409,6 +411,7 @@ func TestFlagInventory(t *testing.T) {
 
 		"upstream.max-idle-conns":          "256",
 		"upstream.max-idle-conns-per-host": "64",
+		"upstream.max-conn-lifetime":       "",
 		"upstream.http2":                   "true",
 	})
 }
@@ -461,5 +464,100 @@ func TestVersionPrecedence(t *testing.T) {
 	if _, code, run := config.ParseHasher("gqlhash",
 		hasherArgs("-version", "-nonexistent"), &errOut); run || code != 2 {
 		t.Errorf("expected an unknown flag to fail; code %d run %t", code, run)
+	}
+}
+
+// TestParseProxyForHTTP1Only covers a command whose underlay can't speak h2.
+// Asking for it stops the run rather than quietly serving something else, and
+// leaving the flag alone turns it off so what's logged is what's served.
+func TestParseProxyForHTTP1Only(t *testing.T) {
+	var errOut strings.Builder
+	cfg, code, run := config.ParseProxyFor("fasthttp", true, "gqlhash-proxy-fhttp",
+		proxyArgs("-upstream.url", "http://api/graphql", "-allowlist", "./q"),
+		&errOut)
+	if !run || code != 0 {
+		t.Fatalf("expected it to parse without -upstream.http2; code %d, stderr: %s",
+			code, errOut.String())
+	}
+	if cfg.Server.Underlay != "fasthttp" {
+		t.Errorf("expected the underlay to be reported; received %q",
+			cfg.Server.Underlay)
+	}
+	if cfg.Upstream.HTTP2 {
+		t.Error("expected h2 off where the underlay can't speak it")
+	}
+
+	// Asking for it explicitly stops the run and says where h2 belongs.
+	errOut.Reset()
+	if _, code, run = config.ParseProxyFor("fasthttp", true, "gqlhash-proxy-fhttp",
+		proxyArgs("-upstream.url", "http://api/graphql", "-allowlist", "./q",
+			"-upstream.http2=true"), &errOut); run || code != 2 {
+		t.Fatalf("expected -upstream.http2 to be refused; code %d run %t", code, run)
+	}
+	for _, want := range []string{
+		"gqlhash-proxy-fhttp", "HTTP/1.1 only",
+		"Terminate HTTP/2 ahead of this proxy", "-upstream.http2=false",
+	} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("expected %q in the refusal; received %q", want, errOut.String())
+		}
+	}
+
+	// Turning it off explicitly is the way to ask for this command knowingly.
+	errOut.Reset()
+	if _, code, run = config.ParseProxyFor("fasthttp", true, "gqlhash-proxy-fhttp",
+		proxyArgs("-upstream.url", "http://api/graphql", "-allowlist", "./q",
+			"-upstream.http2=false"), &errOut); !run || code != 0 {
+		t.Fatalf("expected -upstream.http2=false to parse; code %d, stderr: %s",
+			code, errOut.String())
+	}
+
+	// The default command has neither restriction and still reports its underlay.
+	errOut.Reset()
+	cfg, code, run = config.ParseProxy("gqlhash-proxy",
+		proxyArgs("-upstream.url", "http://api/graphql", "-allowlist", "./q"),
+		&errOut)
+	if !run || code != 0 {
+		t.Fatalf("expected the default to parse; code %d, stderr: %s",
+			code, errOut.String())
+	}
+	if cfg.Server.Underlay != "nethttp" || !cfg.Upstream.HTTP2 {
+		t.Errorf("expected nethttp with h2 left on; received %+v", cfg.Server)
+	}
+}
+
+// TestParseProxyMaxConnLifetime covers the flag that lets an upstream pool
+// follow a name that stands for more than one backend.
+func TestParseProxyMaxConnLifetime(t *testing.T) {
+	var errOut strings.Builder
+	cfg, code, run := config.ParseProxy("gqlhash-proxy", proxyArgs(
+		"-upstream.url", "http://api/graphql", "-allowlist", "./q",
+		"-upstream.max-conn-lifetime", "30s",
+	), &errOut)
+	if !run || code != 0 {
+		t.Fatalf("expected it to parse; code %d, stderr: %s", code, errOut.String())
+	}
+	if cfg.Upstream.MaxConnLifetime != 30*time.Second {
+		t.Errorf("expected 30s; received %v", cfg.Upstream.MaxConnLifetime)
+	}
+
+	// Off by default: a single upstream has nothing to rebalance onto.
+	errOut.Reset()
+	if cfg, _, _ = config.ParseProxy("gqlhash-proxy", proxyArgs(
+		"-upstream.url", "http://api/graphql", "-allowlist", "./q",
+	), &errOut); cfg.Upstream.MaxConnLifetime != 0 {
+		t.Errorf("expected it off by default; received %v", cfg.Upstream.MaxConnLifetime)
+	}
+
+	// A negative lifetime is a mistake, not "off".
+	errOut.Reset()
+	if _, code, run = config.ParseProxy("gqlhash-proxy", proxyArgs(
+		"-upstream.url", "http://api/graphql", "-allowlist", "./q",
+		"-upstream.max-conn-lifetime", "-1s",
+	), &errOut); run || code != 2 {
+		t.Fatalf("expected a negative lifetime to be refused; code %d run %t", code, run)
+	}
+	if !strings.Contains(errOut.String(), "-upstream.max-conn-lifetime must be 0 or more") {
+		t.Errorf("unexpected message: %s", errOut.String())
 	}
 }

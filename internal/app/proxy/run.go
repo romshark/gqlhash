@@ -33,6 +33,18 @@ func Run(
 	args []string,
 	stdout, stderr io.Writer,
 ) (exitCode int) {
+	return RunWith(ctx, name, version, args, stdout, stderr, Underlay{})
+}
+
+// RunWith is [Run] on the given underlay. A zero [Underlay] serves with
+// net/http, which is what [Run] passes.
+func RunWith(
+	ctx context.Context,
+	name, version string,
+	args []string,
+	stdout, stderr io.Writer,
+	underlay Underlay,
+) (exitCode int) {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// The first signal starts the shutdown and restores the default handling, so
@@ -42,7 +54,8 @@ func Run(
 		stop()
 	}()
 
-	cfg, code, run := config.ParseProxy(args[0], args, stderr)
+	cfg, code, run := config.ParseProxyFor(underlay.Name, underlay.HTTP1Only,
+		args[0], args, stderr)
 	if !run {
 		return code
 	}
@@ -55,7 +68,7 @@ func Run(
 	if !ok {
 		return 2
 	}
-	c, err := build(cfg, log)
+	c, err := build(cfg, log, underlay)
 	if err != nil {
 		log.Error().Err(err).Msg("loading the allowlist")
 		return 1
@@ -85,15 +98,24 @@ type components struct {
 	allowlist *allowlist.Allowlist
 	proxy     *proxy
 
-	// server takes the traffic and control the metrics and the reloads, each on
-	// a listener of its own. A run has both: the control server has no off
-	// switch, see [config.ProxyControl].
-	server  *http.Server
-	control *http.Server
+	// recycle retires idle upstream connections on an interval, or is nil where
+	// -upstream.max-conn-lifetime is off. See [components.recycleConns].
+	recycle func()
+	// recycleEvery is how often it runs.
+	recycleEvery time.Duration
+
+	// dataPlane serves the requests the proxy exists for and control answers
+	// /metrics, /status and /reload, each on a listener of its own. A run has
+	// both: the control server has no off switch, see [config.ProxyControl].
+	//
+	// dataPlane is whichever HTTP implementation the command carries, see
+	// [Underlay]. control is net/http under every one of them.
+	dataPlane dataPlaneServer
+	control   *http.Server
 }
 
 // build assembles the components and loads the allowlist.
-func build(cfg config.Proxy, log zerolog.Logger) (*components, error) {
+func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components, error) {
 	options := gqlhash.Options{Ignore: cfg.Ignore}
 	// The function is checked once here rather than per request: a proxy that
 	// can't hash serves nothing, so it's a start failure and not a nil that
@@ -134,7 +156,7 @@ func build(cfg config.Proxy, log zerolog.Logger) (*components, error) {
 	}, transport, log)
 
 	// The metrics and the control endpoints share an address of their own, so
-	// neither is exposed on the port that serves traffic.
+	// neither is exposed on the data-plane port.
 	controlMux := http.NewServeMux()
 	controlMux.Handle("/metrics", p.metrics.Handler(log))
 	(&control{
@@ -147,20 +169,38 @@ func build(cfg config.Proxy, log zerolog.Logger) (*components, error) {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	mux := http.NewServeMux()
-	mux.Handle("/", p)
-
-	server := &http.Server{
-		Addr:              cfg.Server.Listen,
-		Handler:           mux,
-		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
-		ReadTimeout:       cfg.Server.ReadTimeout,
-		WriteTimeout:      cfg.Server.WriteTimeout,
-		IdleTimeout:       cfg.Server.IdleTimeout,
+	// The underlay is used here and nowhere else: past this point a run holds a
+	// [dataPlaneServer] and doesn't ask which one it got.
+	var server dataPlaneServer
+	var recycle func()
+	if underlay.New != nil {
+		// An underlay of its own owns its client, so retiring its connections is
+		// its own to do. fasthttp takes the lifetime as a setting.
+		server = underlay.New(p.Core(), cfg, cfg.Upstream.URL, log)
+	} else {
+		if cfg.Upstream.MaxConnLifetime > 0 {
+			// http.Transport has no lifetime of its own, and a connection can't
+			// be closed from under a request that's using it. Closing the idle
+			// ones on an interval is the safe form of the same thing: what's in
+			// flight is left alone, and what isn't gets dialled again, which
+			// resolves the name afresh.
+			recycle = transport.CloseIdleConnections
+		}
+		mux := http.NewServeMux()
+		mux.Handle("/", p)
+		server = netHTTPServer{server: &http.Server{
+			Addr:              cfg.Server.Listen,
+			Handler:           mux,
+			ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
+			ReadTimeout:       cfg.Server.ReadTimeout,
+			WriteTimeout:      cfg.Server.WriteTimeout,
+			IdleTimeout:       cfg.Server.IdleTimeout,
+		}}
 	}
 	return &components{
 		allowlist: list, proxy: p,
-		server: server, control: controlServer,
+		recycle: recycle, recycleEvery: cfg.Upstream.MaxConnLifetime,
+		dataPlane: server, control: controlServer,
 	}, nil
 }
 
@@ -179,17 +219,19 @@ func (c *components) serve(
 	return c.serveOn(ctx, listener, cfg, log)
 }
 
-// serveOn takes the traffic on listener and runs until ctx is done or a server fails.
-// It's separate from [components.serve] so a test can hand it a listener of its own,
-// which is the only way to fail the traffic server while it runs.
+// serveOn serves the data plane on listener and runs until ctx is done or a
+// server fails. It's separate from [components.serve] so a test can hand it a
+// listener of its own, which is the only way to fail the data-plane server
+// while it runs.
 func (c *components) serveOn(
 	ctx context.Context, listener net.Listener,
 	cfg config.Proxy, log zerolog.Logger,
 ) (exitCode int) {
-	list, server := c.allowlist, c.server
+	list, server := c.allowlist, c.dataPlane
 
 	errServe := make(chan error, 1)
 	go func() { errServe <- server.Serve(listener) }()
+	go c.recycleConns(ctx)
 
 	// controlAddress is the one in use, which is the only way to learn the port
 	// behind an address ending in :0. It stays empty where the control server is off.
@@ -197,7 +239,10 @@ func (c *components) serveOn(
 	if err != nil {
 		log.Error().Err(err).Str("address", c.control.Addr).
 			Msg("listening for the control server")
-		_ = server.Close()
+		// Nothing is in flight this early, so the shutdown returns at once.
+		stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(stopCtx)
 		return 1
 	}
 	controlAddress := controlListener.Addr().String()
@@ -220,6 +265,7 @@ func (c *components) serveOn(
 		// logged where a deployment can see them.
 		Int("upstream_max_idle_conns_per_host", cfg.Upstream.MaxIdleConnsPerHost).
 		Bool("upstream_http2", cfg.Upstream.HTTP2).
+		Str("underlay", cfg.Server.Underlay).
 		Str("control", controlAddress)
 	listening.Msg("listening")
 
@@ -228,7 +274,9 @@ func (c *components) serveOn(
 	var failed bool
 	select {
 	case err := <-errServe:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// An ordinary shutdown is reported as nil whichever underlay served,
+		// see [dataPlaneServer].
+		if err != nil {
 			log.Error().Err(err).Msg("serving")
 			failed = true
 		}
@@ -252,6 +300,28 @@ func (c *components) serveOn(
 		return 1
 	}
 	return 0
+}
+
+// recycleConns retires idle upstream connections every
+// -upstream.max-conn-lifetime, and returns at once where that's off.
+//
+// A pool that never turns over pins itself to the backends it first reached: a
+// name standing for several of them is balanced per connection, so one added
+// later takes no traffic until something lets go. This is that something.
+func (c *components) recycleConns(ctx context.Context) {
+	if c.recycle == nil || c.recycleEvery <= 0 {
+		return
+	}
+	ticker := time.NewTicker(c.recycleEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.recycle()
+		}
+	}
 }
 
 // logReload reports what a load of the allowlist did. The allowlist logs nothing

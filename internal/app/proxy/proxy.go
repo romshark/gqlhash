@@ -317,26 +317,44 @@ var errTooLarge = errors.New("request body too large")
 // It allocates nothing: the body lands in the buffer of st, the document is a
 // subslice of that buffer, and the allowlist is looked up by that subslice.
 func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
+	if r.Method == http.MethodGet {
+		return p.decide(st, true, r.URL.RawQuery, false, nil)
+	}
+	if err = p.readBody(st, r); err != nil {
+		return false, err
+	}
+	bodyIsDocument := isGraphQLContentType(r.Header.Get("Content-Type"))
+	return p.decide(st, false, "", bodyIsDocument, st.body)
+}
+
+// decide is the whole decision and the only copy of it. It takes what a request
+// carries rather than a request, so that every underlay reaches the same
+// answer: one reads the body itself, another is handed the bytes it already has.
+//
+// body is read and not kept, so an underlay owning buffers of its own can pass
+// them. It allocates nothing: the document is a subslice of body and the
+// allowlist is looked up by that subslice.
+//
+// bodyIsDocument is what the content type said, decided by the caller so that
+// neither underlay has to convert the header it holds to reach this.
+func (p *proxy) decide(
+	st *state, isGET bool, rawQuery string, bodyIsDocument bool, body []byte,
+) (allowed bool, err error) {
 	var value []byte
 
-	if r.Method == http.MethodGet {
-		value, st.scratch, err = extractQueryParam(st.scratch, r.URL.RawQuery)
+	if isGET {
+		value, st.scratch, err = extractQueryParam(st.scratch, rawQuery)
 		if err != nil {
 			return false, err
 		}
 		return p.allow(st, value), nil
 	}
 
-	if err = p.readBody(st, r); err != nil {
-		return false, err
+	if bodyIsDocument {
+		return p.allow(st, body), nil
 	}
 
-	if isGraphQLContentType(r.Header.Get("Content-Type")) {
-		// The body is the document.
-		return p.allow(st, st.body), nil
-	}
-
-	docs, err := extractJSON(st.spans[:0], st.body, p.allowBatch)
+	docs, err := extractJSON(st.spans[:0], body, p.allowBatch)
 	// The spans of st are kept whatever happened, so the room extractJSON grew
 	// for a batch is there for the next request. docs holds the same array and
 	// keeps its length, which is what the loop below reads.
@@ -345,7 +363,7 @@ func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
 		return false, err
 	}
 	for _, s := range docs {
-		value, st.scratch, err = unescapeJSON(st.scratch, st.body[s.start:s.end])
+		value, st.scratch, err = unescapeJSON(st.scratch, body[s.start:s.end])
 		if err != nil {
 			return false, err
 		}
@@ -416,11 +434,21 @@ func (p *proxy) readBody(st *state, r *http.Request) error {
 // reject answers with a GraphQL error body. Under -opaque-errors every rejection is
 // a 403 without detail, so a caller learns nothing about why.
 func (p *proxy) reject(w http.ResponseWriter, code int, message, extension string) {
+	code, message, extension = p.rejection(code, message, extension)
+	writeError(w, code, message, extension)
+}
+
+// rejection is what a rejection says after -opaque-errors has had its say. It's
+// the one copy of that rule: an underlay answering a rejection asks here first,
+// so none of them can leak a detail this is meant to withhold.
+func (p *proxy) rejection(
+	code int, message, extension string,
+) (int, string, string) {
 	if p.opaqueErrors {
-		code, message, extension = http.StatusForbidden,
+		return http.StatusForbidden,
 			"operation not allowed", "OPERATION_NOT_ALLOWED"
 	}
-	writeError(w, code, message, extension)
+	return code, message, extension
 }
 
 // writeError answers with the GraphQL error shape, which is what a client
@@ -437,6 +465,12 @@ func writeError(w http.ResponseWriter, code int, message, extension string) {
 	// The key has to be in canonical form to be assigned like this.
 	w.Header()["Content-Type"] = contentTypeJSON
 	w.WriteHeader(code)
+	writeErrorBody(w, message, extension)
+}
+
+// writeErrorBody writes the envelope alone. The status and the content type are
+// the underlay's to set, the shape of the answer is the same under all of them.
+func writeErrorBody(w io.Writer, message, extension string) {
 	_, _ = io.WriteString(w, `{"errors":[{"message":"`)
 	writeJSONString(w, message)
 	// The code is a constant of this package and never comes from a request,

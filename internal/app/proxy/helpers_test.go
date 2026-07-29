@@ -64,7 +64,7 @@ func send(t *testing.T, req *http.Request) (code int, body string) {
 	return res.StatusCode, string(b)
 }
 
-// postGraphQL sends body to the traffic port of a proxy as a GraphQL request.
+// postGraphQL sends body to the data-plane port of a proxy as a GraphQL request.
 func postGraphQL(t *testing.T, address, body string) (code int, answer string) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, "http://"+address+"/graphql",
