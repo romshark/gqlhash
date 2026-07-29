@@ -148,13 +148,15 @@ func FuzzUnescapeJSONAgainstEncodingJSON(f *testing.F) {
 }
 
 // FuzzExtractJSONAgainstEncodingJSON holds the private body reader against the
-// standard one over the question a duplicate key asks: encoding/json keeps the
-// last "query" member, jscan reports every one of them, and the proxy requires
-// all of them to be allowed.
+// standard one over the question a duplicate key asks: encoding/json unescapes
+// a key before it matches it and keeps the last "query" member, so the proxy
+// refuses a request that names the member twice and reads the one document out
+// of the rest.
 //
 // What's under test is that the document an API would run is among the ones checked here.
 // Checking more than it runs costs a request that could have been forwarded;
-// checking fewer would run a document nobody read.
+// checking fewer would run a document nobody read. A refused request runs
+// nothing, which is why the escapes below are only followed where one is read.
 func FuzzExtractJSONAgainstEncodingJSON(f *testing.F) {
 	for _, seed := range []string{
 		`{"query":"{a}"}`,
@@ -169,6 +171,11 @@ func FuzzExtractJSONAgainstEncodingJSON(f *testing.F) {
 		`[{"query":"{a}"},{"a":1}]`,
 		`[{"query":"{a}","query":"{b}"}]`,
 		`[{"query":"{a}"},{"query":"{b}"}]`, `{"query":"💩"}`,
+		`{"quer\u0079":"{a}"}`, `{"\u0051uery":"{a}"}`,
+		`{"query":"{a}","quer\u0079":"{b}"}`,
+		`{"quer\u0079":"{b}","query":"{a}"}`,
+		`{"query":"{a}","QUERY":"{b}"}`, `{"query":"{a}","query":null}`,
+		`[{"query":"{a}","quer\u0079":"{b}"}]`,
 	} {
 		f.Add(seed)
 	}

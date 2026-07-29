@@ -55,6 +55,11 @@ type server struct {
 	log                zerolog.Logger
 }
 
+// readBufferSize is what a request line and the headers of one are read into.
+// A GET carrying a document of the size an allowlist holds fits in this,
+// and a connection costs it while it's open.
+const readBufferSize = 64 << 10
+
 // New builds the underlay over core.
 func New(
 	core *proxy.Core, cfg config.Proxy, upstream *url.URL, log zerolog.Logger,
@@ -72,9 +77,17 @@ func New(
 		log:     log,
 	}
 	s.client = &fasthttp.HostClient{
-		Addr:                upstream.Host,
-		IsTLS:               upstream.Scheme == "https",
+		Addr:  upstream.Host,
+		IsTLS: upstream.Scheme == "https",
+		// -upstream.max-idle-conns-per-host sizes the pool of connections kept.
+		// fasthttp has no separate limit for the ones opened, so MaxConns is both,
+		// and a request past it fails with ErrNoFreeConns rather than
+		// being redialed the way net/http redials one. MaxConnWaitTimeout is
+		// what keeps the flag a pool size instead of a concurrency limit:
+		// the surplus waits for a free connection, bounded by -upstream.timeout,
+		// and is answered rather than refused.
 		MaxConns:            cfg.Upstream.MaxIdleConnsPerHost,
+		MaxConnWaitTimeout:  cfg.Upstream.Timeout,
 		MaxIdleConnDuration: 90 * time.Second,
 		// Where net/http needs the idle connections closed on an interval,
 		// fasthttp retires one by its own age, after the request using it is
@@ -95,7 +108,14 @@ func New(
 		// handler and is answered with the same envelope the net/http underlay
 		// gives. Anything past that fasthttp refuses itself,
 		// which lands in ErrorHandler below and is answered the same way.
-		MaxRequestBodySize:    int(min(cfg.Server.MaxBody+1, math.MaxInt32)),
+		MaxRequestBodySize: int(min(cfg.Server.MaxBody+1, math.MaxInt32)),
+		// The request line and the headers are read into this buffer,
+		// which fasthttp defaults to 4KiB: a GET carrying its document in the query
+		// string is refused past that, where net/http grows its own.
+		// It's a buffer per connection rather than a limit, so it's sized for the
+		// documents a GET carries and not for -server.max-body,
+		// and GQLHASH_PROXY_FHTTP.md names the ceiling it leaves.
+		ReadBufferSize:        readBufferSize,
 		ErrorHandler:          s.handleReadError,
 		Logger:                &logger{log: log},
 		NoDefaultServerHeader: true,

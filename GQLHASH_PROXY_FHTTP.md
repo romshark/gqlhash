@@ -62,6 +62,18 @@ An allowed document sent with `Transfer-Encoding: chunked`, as the upstream rece
 
 Both answer 200. fasthttp's framing is unambiguous, but it differs: an upstream that treats chunked bodies differently sees a different request.
 
+### Connection pooling
+
+`-upstream.max-idle-conns-per-host` sizes the pool of connections kept. fasthttp has no separate limit for the ones opened, so the flag caps both, and the surplus waits for a free connection instead of being redialed the way net/http redials one. The wait is bounded by `-upstream.timeout`, so a request over the cap is answered late rather than refused, and past that timeout it is a 504.
+
+`-upstream.max-idle-conns`, the total across hosts, has no fasthttp equivalent and is ignored: one upstream URL is one host, which the per-host flag already bounds.
+
+### A GET carries its document in a 64 KiB request line
+
+fasthttp reads the request line and the headers into a buffer of a fixed size, one per open connection, where net/http grows its own. `gqlhash-proxy-fhttp` sizes it at 64 KiB, so a document sent in the query string is refused past that with a 400, while `gqlhash-proxy` takes what its 1 MiB header limit allows. `-server.max-body` bounds bodies and neither bounds this. A document that large belongs in a POST body under either command.
+
+`-server.read-header-timeout` has no fasthttp equivalent either: `-server.read-timeout` covers the whole request there.
+
 ### Added headers
 
 - fasthttp sets `User-Agent: fasthttp` when the request carried none.
