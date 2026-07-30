@@ -22,10 +22,12 @@ package proxyfast
 import (
 	"context"
 	"errors"
+	"io"
 	"math"
 	"net"
 	"net/http"
 	"net/url"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -89,6 +91,13 @@ func New(
 		MaxConns:            cfg.Upstream.MaxIdleConnsPerHost,
 		MaxConnWaitTimeout:  cfg.Upstream.Timeout,
 		MaxIdleConnDuration: 90 * time.Second,
+		// A connection taken from the pool may have been closed by the upstream
+		// since it was put there, which an API restarting closes all of them.
+		// The request never reached it, so it goes again on a fresh connection
+		// rather than turning a rolling deploy into a burst of 502s. Once,
+		// and only where the connection failed: a timeout means the API may have
+		// the request already, and no proxy may send that twice.
+		RetryIfErr: retryDeadConn,
 		// Where net/http needs the idle connections closed on an interval,
 		// fasthttp retires one by its own age, after the request using it is
 		// done. Zero leaves the connection for as long as the upstream will.
@@ -115,8 +124,12 @@ func New(
 		// It's a buffer per connection rather than a limit, so it's sized for the
 		// documents a GET carries and not for -server.max-body,
 		// and GQLHASH_PROXY_FHTTP.md names the ceiling it leaves.
-		ReadBufferSize:        readBufferSize,
-		ErrorHandler:          s.handleReadError,
+		ReadBufferSize: readBufferSize,
+		ErrorHandler:   s.handleReadError,
+		// fasthttp answers text/plain where a handler set no content type.
+		// The answer of the API is what a client reads, headers included,
+		// so an answer that carried none arrives with none.
+		NoDefaultContentType:  true,
 		Logger:                &logger{log: log},
 		NoDefaultServerHeader: true,
 		CloseOnShutdown:       true,
@@ -137,9 +150,17 @@ func (s *server) Shutdown(ctx context.Context) error {
 func (s *server) handle(ctx *fasthttp.RequestCtx) {
 	start := time.Now()
 
-	req := proxy.Request{IsGET: ctx.IsGet()}
+	req := proxy.Request{
+		IsGET: ctx.IsGet(),
+		// Read whatever the method: a request whose document is its body and
+		// which names a query parameter too is refused, not forwarded.
+		RawQuery: string(ctx.URI().QueryString()),
+	}
 	if req.IsGET {
-		req.RawQuery = string(ctx.URI().QueryString())
+		// fasthttp reads the body whatever the method, so a body on a GET is
+		// there to be seen. The decision refuses it: the document is in the
+		// query string, and a body is a second place it could be.
+		req.HasBody = len(ctx.PostBody()) > 0
 	} else {
 		// The body is read and owned by ctx, so the decision runs over those
 		// bytes rather than a copy of them.
@@ -172,14 +193,32 @@ func (s *server) handle(ctx *fasthttp.RequestCtx) {
 	s.core.Observe(proxy.VerdictAllowed, start)
 }
 
+// retryDeadConn reports whether a failed forward goes again.
+// Only the first attempt, and only where the connection itself failed:
+// those are the requests the upstream never saw.
+func retryDeadConn(_ *fasthttp.Request, attempts int, err error) (
+	resetTimeout, retry bool,
+) {
+	if attempts > 1 {
+		return false, false
+	}
+	return false, errors.Is(err, fasthttp.ErrConnectionClosed) ||
+		errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE)
+}
+
 // handleReadError answers a request fasthttp couldn't read. The handler never
 // runs for one, so the count is raised through the core to keep the totals
-// whole. The duration isn't recorded: nothing was decided, so nothing was timed.
+// whole, and the answer is timed like every other:
+// a request that produced a status is one a dashboard has to see.
 func (s *server) handleReadError(ctx *fasthttp.RequestCtx, err error) {
+	start := time.Now()
 	if s.core.Debug() {
 		s.log.Debug().Err(err).Msg("rejecting a request that couldn't be read")
 	}
-	s.answer(ctx, s.core.ReadError(errors.Is(err, fasthttp.ErrBodyTooLarge)))
+	verdict, answer := s.core.ReadError(errors.Is(err, fasthttp.ErrBodyTooLarge))
+	s.answer(ctx, answer)
+	s.core.Observe(verdict, start)
 }
 
 // answer writes what the core decided.
@@ -236,6 +275,9 @@ func (s *server) forward(ctx *fasthttp.RequestCtx, body []byte, isGET bool) {
 	}
 
 	res.Header.CopyTo(&ctx.Response.Header)
+	// CopyTo carries the setting with the headers, so the server's own is set
+	// again here: an answer that named no type reaches the client with none.
+	ctx.Response.Header.SetNoDefaultContentType(true)
 	removeHopByHop(&ctx.Response.Header)
 	ctx.SetStatusCode(res.StatusCode())
 	_, _ = ctx.Write(res.Body())

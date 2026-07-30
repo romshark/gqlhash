@@ -77,7 +77,7 @@ var (
 type Error struct {
 	// Err is nil when there's no error. Otherwise it's [ErrUnexpectedEOF],
 	// [ErrUnexpectedToken], one of the errors wrapping [ErrUnexpectedToken],
-	// or the error of the [io.Writer].
+	// [ErrTooDeep], or the error of the [io.Writer].
 	Err error
 
 	// Offset is the byte index into the document where parsing stopped, and -1
@@ -226,7 +226,8 @@ type Options struct {
 
 	// DepthLimit is how deeply selection sets, list values and input object
 	// values may nest before a document is rejected with [ErrTooDeep].
-	// 0 takes [DefaultDepthLimit].
+	// Anything below 1 takes [DefaultDepthLimit], so there is no value that
+	// turns the limit off.
 	//
 	// Nesting is what a document can grow cheaply,
 	// so this is the bound on the work one costs.

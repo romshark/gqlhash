@@ -20,5 +20,10 @@
 //
 // Nothing is asked of what it logs: a test learns it's serving by connecting to it.
 //
+// The tests that need no flags of their own share one server per target and
+// publish the allowlist they need through its control server, so none of them
+// may depend on having run after another. Run them with -shuffle=on,
+// which the Makefile does, and one that does fails.
+//
 // The rest is the behavior under test.
 package acceptance

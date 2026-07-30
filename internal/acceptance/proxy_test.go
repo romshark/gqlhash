@@ -20,7 +20,8 @@ import (
 // API receives.
 func TestForwarding(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 
 		// The allowed document, however it's written: what's hashed is the
 		// document, not its formatting.
@@ -39,14 +40,14 @@ func TestForwarding(t *testing.T) {
 			if answer != upstreamAnswer {
 				t.Errorf("expected the upstream answer; received %q", answer)
 			}
-			_, gotBody, gotPath, _ := e.api.snapshot()
+			got := e.api.last(t)
 			// The body upstream receives is the one the client sent.
-			if gotBody != body {
-				t.Errorf("expected upstream to receive %s; received %s", body, gotBody)
+			if got.body != body {
+				t.Errorf("expected upstream to receive %s; received %s", body, got.body)
 			}
 			// The path of -upstream.url is the endpoint, whatever the client used.
-			if gotPath != "/graphql" {
-				t.Errorf("expected /graphql upstream; received %s", gotPath)
+			if got.path != "/graphql" {
+				t.Errorf("expected /graphql upstream; received %s", got.path)
 			}
 		}
 
@@ -63,7 +64,8 @@ func TestForwarding(t *testing.T) {
 // that differ from an allowed document by the least a document can differ by.
 func TestRejected(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 
 		for _, body := range []string{
 			docRejected,
@@ -104,7 +106,8 @@ func TestRejectsUnparsableDocuments(t *testing.T) {
 	documents := slices.Concat(gqlhashtest.UnexpectedEOF, gqlhashtest.UnexpectedToken)
 
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 
 		for _, document := range documents {
 			body, err := jsonRequest(document)
@@ -129,7 +132,8 @@ func TestRejectsUnparsableDocuments(t *testing.T) {
 // different answer from one carrying a document that isn't allowed.
 func TestMalformed(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 
 		for _, body := range []string{
 			`not json`, `{"variables":{}}`, `{"query":`, `{"query":null}`,
@@ -154,7 +158,8 @@ func TestMalformed(t *testing.T) {
 // query string.
 func TestContentTypes(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 
 		graphql := func(t *testing.T, contentType, document string) int {
 			t.Helper()
@@ -290,7 +295,8 @@ func TestNamedOperations(t *testing.T) {
 		// The allowed file holds two operations, and a request runs one of them.
 		t.Run("an operation of an allowed file", func(t *testing.T) {
 			both := getUser + "\n\n" + getPosts
-			e := newEnv(t, tgt, []string{both})
+			e := shared(t, tgt)
+			e.allow(t, both)
 
 			for _, name := range []string{"GetUser", "GetPosts", ""} {
 				code, answer := post(t, e.server, body(name, both))
@@ -302,10 +308,10 @@ func TestNamedOperations(t *testing.T) {
 				// The name is forwarded untouched, since resolving it is the
 				// API's job. An empty one against a document of two operations
 				// is an error there, which the proxy has no opinion about.
-				_, gotBody, _, _ := e.api.snapshot()
-				if !strings.Contains(gotBody, `"operationName":`+strconv.Quote(name)) {
+				got := e.api.last(t)
+				if !strings.Contains(got.body, `"operationName":`+strconv.Quote(name)) {
 					t.Errorf("operationName %q: expected it forwarded; received %s",
-						name, gotBody)
+						name, got.body)
 				}
 			}
 
@@ -327,7 +333,8 @@ func TestNamedOperations(t *testing.T) {
 		// The other direction, and the one that matters: the request selects an
 		// operation that is allowed on its own, and carries one that isn't.
 		t.Run("an operation smuggled in beside an allowed one", func(t *testing.T) {
-			e := newEnv(t, tgt, []string{getUser})
+			e := shared(t, tgt)
+			e.allow(t, getUser)
 
 			if code, answer := post(t, e.server, body("GetUser", getUser)); code !=
 				http.StatusOK {
@@ -369,7 +376,8 @@ func TestDepthLimit(t *testing.T) {
 
 	each(t, func(t *testing.T, tgt target) {
 		atLimit := nested(limit)
-		e := newEnv(t, tgt, []string{atLimit})
+		e := shared(t, tgt)
+		e.allow(t, atLimit)
 
 		// A document at the limit is deep, not too deep: it's allowed like any
 		// other, so nesting on its own isn't what rejects the next one.
@@ -447,16 +455,14 @@ func TestForwardedHeaders(t *testing.T) {
 		if code, body := send(t, req); code != http.StatusOK {
 			t.Fatalf("expected 200; received %d: %s", code, body)
 		}
-		_, _, _, header := e.api.snapshot()
-		if header == nil {
-			t.Fatal("the upstream saw no request")
-		}
-		return header
+		return e.api.last(t).header
 	}
 
 	each(t, func(t *testing.T, tgt target) {
 		t.Run("without trust", func(t *testing.T) {
-			got := claim(t, newEnv(t, tgt, []string{allowedDoc}))
+			e := shared(t, tgt)
+			e.allow(t, allowedDoc)
+			got := claim(t, e)
 
 			// The client is the direct peer, whatever it claims.
 			if v := got.Get("X-Forwarded-For"); strings.Contains(v, "203.0.113.9") {
@@ -507,8 +513,7 @@ func TestForwardedHeaders(t *testing.T) {
 			}
 			// The peer is the whole chain, and it's where the request came from
 			// rather than anything a client said.
-			_, _, _, got := e.api.snapshot()
-			if v := got.Get("X-Forwarded-For"); v != "127.0.0.1" {
+			if v := e.api.last(t).header.Get("X-Forwarded-For"); v != "127.0.0.1" {
 				t.Errorf("expected the peer alone; received %q", v)
 			}
 		})
@@ -520,7 +525,8 @@ func TestForwardedHeaders(t *testing.T) {
 // reach the upstream.
 func TestAmbiguousFraming(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 		length := strconv.Itoa(len(docAllowed))
 
 		for _, tc := range []struct{ name, request string }{
@@ -559,7 +565,8 @@ func TestAmbiguousFraming(t *testing.T) {
 // executed. It answers rather than choosing.
 func TestDuplicateQueryParam(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 		allowed := url.QueryEscape(allowedText)
 		evil := url.QueryEscape(rejectedText)
 
@@ -613,7 +620,8 @@ func TestQueryKeyCollision(t *testing.T) {
 	)
 
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 
 		// One name, however it's written, is a request like any other.
 		for _, name := range []string{plain, escY, escQ, upper} {

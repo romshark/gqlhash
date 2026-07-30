@@ -7,6 +7,7 @@ import (
 
 	"github.com/romshark/gqlhash/v2"
 	"github.com/romshark/gqlhash/v2/internal/app/config"
+	"github.com/romshark/gqlhash/v2/parser"
 )
 
 // hasherArgs prefixes the command name the way a shell does.
@@ -172,7 +173,8 @@ func TestParseProxy(t *testing.T) {
 			MaxIdleConns:        16,
 			HTTP2:               false,
 		},
-		Control: config.ProxyControl{Address: "127.0.0.1:3"},
+		DepthLimit: parser.DefaultDepthLimit,
+		Control:    config.ProxyControl{Address: "127.0.0.1:3"},
 		Log: config.ProxyLog{
 			Level: "debug", JSON: false, Requests: true,
 		},
@@ -377,11 +379,12 @@ func TestFlagInventory(t *testing.T) {
 		_, code, run := config.ParseHasher(n, a, w)
 		return code, run
 	}, hasherArgs("-help"), map[string]string{
-		"file":    "",
-		"format":  `"hex"`,
-		"hash":    `"sha1"`,
-		"ignore":  `"nothing"`,
-		"version": "",
+		"depth-limit": "128",
+		"file":        "",
+		"format":      `"hex"`,
+		"hash":        `"sha1"`,
+		"ignore":      `"nothing"`,
+		"version":     "",
 	})
 
 	f(t, func(n string, a []string, w *strings.Builder) (int, bool) {
@@ -390,6 +393,7 @@ func TestFlagInventory(t *testing.T) {
 	}, proxyArgs("-help"), map[string]string{
 		"allow-batch":                "",
 		"allowlist":                  "",
+		"depth-limit":                "128",
 		"hash":                       `"sha2"`,
 		"ignore":                     `"nothing"`,
 		"server.listen":              `":8080"`,

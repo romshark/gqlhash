@@ -2,6 +2,8 @@ package acceptance
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -95,7 +97,8 @@ func TestConcurrentReloads(t *testing.T) {
 	const concurrent = 8
 
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 
 		var wg sync.WaitGroup
 		codes := make([]int, concurrent)
@@ -126,6 +129,52 @@ func TestConcurrentReloads(t *testing.T) {
 		// What was being served throughout is still being served.
 		if code, _ := post(t, e.server, docAllowed); code != http.StatusOK {
 			t.Errorf("expected the allowlist intact; received %d", code)
+		}
+	})
+}
+
+// TestDepthLimitFlag covers -depth-limit, which is the bound on what a document
+// costs to hash. Nesting is what a document grows cheaply, so a deployment
+// facing the open internet lowers it, and one serving a legitimately deep
+// document raises it: without the flag neither could.
+func TestDepthLimitFlag(t *testing.T) {
+	// nested returns a document whose selection sets nest depth deep.
+	nested := func(depth int) string {
+		return "{" + strings.Repeat("f{", depth-1) + "f" + strings.Repeat("}", depth)
+	}
+
+	each(t, func(t *testing.T, tgt target) {
+		// A document deeper than the default, which needs the flag raised for
+		// the allowlist to take it at all.
+		deep := nested(200)
+		e := newEnv(t, tgt, []string{deep, "{ shallow }"}, "-depth-limit", "256")
+		if code, answer := post(t, e.server,
+			`{"query":`+strconv.Quote(deep)+`}`,
+		); code != http.StatusOK {
+			t.Errorf("expected the raised limit to serve it; received %d: %s",
+				code, answer)
+		}
+
+		// Lowered, a document the default would take is refused, and the
+		// allowlist can't hold it either.
+		low := newEnv(t, tgt, []string{"{ shallow }"}, "-depth-limit", "3")
+		if code, _ := post(t, low.server, `{"query":"{ shallow }"}`); code !=
+			http.StatusOK {
+			t.Errorf("expected a shallow document served; received %d", code)
+		}
+		if code, _ := post(t, low.server,
+			`{"query":`+strconv.Quote(nested(4))+`}`,
+		); code != http.StatusForbidden {
+			t.Errorf("expected the lowered limit to refuse it; received %d", code)
+		}
+
+		// Below 1 is the default rather than no limit at all, so a document
+		// past the default is still refused.
+		off := newEnv(t, tgt, []string{"{ shallow }"}, "-depth-limit", "0")
+		if code, _ := post(t, off.server,
+			`{"query":`+strconv.Quote(nested(200))+`}`,
+		); code != http.StatusForbidden {
+			t.Errorf("expected 0 to take the default; received %d", code)
 		}
 	})
 }

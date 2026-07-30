@@ -2,10 +2,12 @@ package acceptance
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestControlStatus covers /status: what the allowlist holds and what the proxy
@@ -37,13 +39,17 @@ func TestControlStatus(t *testing.T) {
 			Allowed   int    `json:"allowed"`
 			Rejected  int    `json:"rejected"`
 			Malformed int    `json:"malformed"`
+			TooLarge  int    `json:"too_large"`
+			Ambiguous int    `json:"ambiguous"`
+			TooDeep   int    `json:"too_deep"`
 			Upstream  int    `json:"upstream_errors"`
 		}
 		if err := json.Unmarshal([]byte(body), &status); err != nil {
 			t.Fatalf("answering no JSON: %v: %s", err, body)
 		}
 		if status.Documents != 1 || status.Allowed != 1 || status.Rejected != 2 ||
-			status.Malformed != 1 || status.Upstream != 0 {
+			status.Malformed != 1 || status.TooLarge != 0 ||
+			status.Ambiguous != 0 || status.TooDeep != 0 || status.Upstream != 0 {
 			t.Errorf("unexpected status: %+v", status)
 		}
 		if status.LoadedAt == "" {
@@ -58,7 +64,8 @@ func TestControlStatus(t *testing.T) {
 // one, whatever the path says.
 func TestControlOnlyOnControlAddress(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 
 		// An empty body is no GraphQL request, so the proxy answers 400 on every
 		// one of these paths. A route would answer something else.
@@ -109,7 +116,8 @@ func TestControlOnlyOnControlAddress(t *testing.T) {
 
 // reloadAnswer is what a reload replies, read rather than searched:
 // a deployment fails on these numbers, so their shape is part of the contract.
-func reloadAnswer(t *testing.T, body string) (answer struct {
+// reloadAnswerShape is the shape of that answer, which a test reads by field.
+type reloadAnswerShape struct {
 	Documents struct {
 		Total int      `json:"total"`
 		Files []string `json:"files"`
@@ -118,7 +126,9 @@ func reloadAnswer(t *testing.T, body string) (answer struct {
 		Total  int      `json:"total"`
 		Errors []string `json:"errors"`
 	} `json:"skipped"`
-}) {
+}
+
+func reloadAnswer(t *testing.T, body string) (answer reloadAnswerShape) {
 	t.Helper()
 	if err := json.Unmarshal([]byte(body), &answer); err != nil {
 		t.Fatalf("answering no JSON: %v: %s", err, body)
@@ -130,7 +140,8 @@ func reloadAnswer(t *testing.T, body string) (answer struct {
 // a running proxy and the request that publishes them.
 func TestControlReload(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 		const added = `{"query":"{new}"}`
 
 		// A document on disk waits for a reload.
@@ -200,7 +211,8 @@ func TestControlReload(t *testing.T) {
 // and what parsed keeps being served.
 func TestControlReloadReportsSkipped(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 		writeDoc(t, e.dir, "broken.graphql", "query Q {\n  f(a: 01)\n}")
 
 		code, body := control(t, e.server, http.MethodPost, "/reload", "")
@@ -236,7 +248,8 @@ func TestControlReloadReportsSkipped(t *testing.T) {
 // and JSON tells the two apart even though Go's zero value doesn't.
 func TestControlReloadEmptyDirectory(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, nil)
+		e := shared(t, tgt)
+		e.allow(t)
 
 		code, body := control(t, e.server, http.MethodPost, "/reload", "")
 		if code != http.StatusOK {
@@ -288,8 +301,8 @@ func TestControlReloadFails(t *testing.T) {
 }
 
 // TestControlToken covers the token: it guards the reload and nothing else on
-// that server. A scraper carries no Authorization header, so /metrics and
-// /status have to answer without one even where a token is configured.
+// that server. A scraper carries no Authorization header,
+// so /metrics and /status have to answer without one even where a token is configured.
 func TestControlToken(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		t.Setenv(controlTokenEnv, "s3cret")
@@ -365,6 +378,12 @@ func TestControlMetrics(t *testing.T) {
 			`gqlhash_proxy_requests_total{decision="allowed"} 1`,
 			`gqlhash_proxy_requests_total{decision="rejected"} 2`,
 			`gqlhash_proxy_requests_total{decision="malformed"} 1`,
+			// Every decision has a series from the start, so a dashboard reads
+			// zero rather than nothing where one hasn't happened yet.
+			`gqlhash_proxy_requests_total{decision="too_large"} 0`,
+			`gqlhash_proxy_request_duration_seconds_count{decision="too_large"} 0`,
+			`gqlhash_proxy_requests_total{decision="ambiguous"} 0`,
+			`gqlhash_proxy_requests_total{decision="too_deep"} 0`,
 			`gqlhash_proxy_upstream_errors_total 0`,
 			`gqlhash_proxy_allowlist_documents 1`,
 			"gqlhash_proxy_allowlist_loaded_timestamp_seconds",
@@ -409,12 +428,13 @@ func TestControlReloadSchema(t *testing.T) {
 	)
 
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 		writeDoc(t, e.dir, "b.graphql", unknownField)
 		writeDoc(t, e.dir, "schema.graphqls", schema)
 
-		// Checked against the schema, one of the two documents is left out, and
-		// the answer names the file and the position of what it asked for.
+		// Checked against the schema, one of the two documents is left out,
+		// and the answer names the file and the position of what it asked for.
 		_, body := control(t, e.server, http.MethodPost, "/reload", "")
 		answer := reloadAnswer(t, body)
 		if answer.Documents.Total != 1 || answer.Skipped.Total != 1 {
@@ -455,7 +475,8 @@ func TestControlReloadSchema(t *testing.T) {
 // which one a request meant is unknowable, so neither is served and both are named.
 func TestControlReloadDuplicateHash(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 		// The same document written differently, which hashes alike.
 		writeDoc(t, e.dir, "b.graphql", "query GetUser{user(id:1){name}}")
 
@@ -471,6 +492,175 @@ func TestControlReloadDuplicateHash(t *testing.T) {
 		}
 		if code, _ := post(t, e.server, docAllowed); code != http.StatusForbidden {
 			t.Errorf("expected neither of them served; received %d", code)
+		}
+	})
+}
+
+// TestControlMethodsAndTypes covers what the control endpoints answer to,
+// and what they say they are. /status and /metrics read state, so every method
+// reaches them: a health checker sends HEAD, and a scraper that can't read the
+// exposition's content type can't parse it.
+func TestControlMethodsAndTypes(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
+
+		for _, path := range []string{"/status", "/metrics"} {
+			for _, method := range []string{
+				http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+			} {
+				code, _, header := controlFor(t, e.server, method, path, "")
+				if code != http.StatusOK {
+					t.Errorf("%s %s: expected 200; received %d", method, path, code)
+					continue
+				}
+				if got := header.Get("Content-Type"); got == "" {
+					t.Errorf("%s %s: expected a content type", method, path)
+				}
+			}
+		}
+
+		// What each of them says it is.
+		_, _, header := controlFor(t, e.server, http.MethodGet, "/status", "")
+		if got := header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+			t.Errorf("/status: expected JSON; received %q", got)
+		}
+		_, _, header = controlFor(t, e.server, http.MethodGet, "/metrics", "")
+		if got := header.Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
+			t.Errorf("/metrics: expected the exposition format; received %q", got)
+		}
+		_, _, header = controlFor(t, e.server, http.MethodPost, "/reload", "")
+		if got := header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+			t.Errorf("/reload: expected JSON; received %q", got)
+		}
+	})
+}
+
+// TestControlStatusLoadedAt covers the timestamp of the allowlist:
+// it's the time the list in use was loaded, in RFC 3339, and a reload moves it.
+// A deployment reads it to see whether the reload it just asked for happened.
+func TestControlStatusLoadedAt(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
+
+		loadedAt := func(t *testing.T) time.Time {
+			t.Helper()
+			_, body := control(t, e.server, http.MethodGet, "/status", "")
+			var status struct {
+				LoadedAt string `json:"loaded_at"`
+			}
+			if err := json.Unmarshal([]byte(body), &status); err != nil {
+				t.Fatalf("answering no JSON: %v: %s", err, body)
+			}
+			at, err := time.Parse(time.RFC3339, status.LoadedAt)
+			if err != nil {
+				t.Fatalf("expected RFC 3339; received %q: %v", status.LoadedAt, err)
+			}
+			return at
+		}
+
+		first := loadedAt(t)
+		if time.Since(first) > time.Hour || time.Until(first) > time.Minute {
+			t.Errorf("expected the time of the load; received %s", first)
+		}
+
+		// A second passes here for the timestamp to differ at the resolution
+		// RFC 3339 carries.
+		time.Sleep(1100 * time.Millisecond)
+		if code, body := control(
+			t, e.server, http.MethodPost, "/reload", "",
+		); code != http.StatusOK {
+			t.Fatalf("reload: %d: %s", code, body)
+		}
+		if second := loadedAt(t); !second.After(first) {
+			t.Errorf("expected the reload to move it; %s then %s", first, second)
+		}
+	})
+}
+
+// TestControlTokenScheme covers the scheme of the Authorization header,
+// which RFC 7235 defines without case. The token that follows it is matched exactly.
+func TestControlTokenScheme(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		t.Setenv(controlTokenEnv, "s3cret")
+		e := newEnv(t, tgt, []string{allowedDoc})
+
+		for _, authorization := range []string{
+			"Bearer s3cret", "bearer s3cret", "BEARER s3cret", "BeArEr s3cret",
+			// Trailing space and all: HTTP doesn't carry the whitespace around
+			// a header value, so this arrives as the line above it.
+			"Bearer s3cret ",
+		} {
+			req, err := http.NewRequest(http.MethodPost,
+				"http://"+e.control+"/reload", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", authorization)
+			if code, _ := send(t, req); code != http.StatusOK {
+				t.Errorf("%q: expected it authorized; received %d", authorization, code)
+			}
+		}
+
+		// The token itself is a secret, matched as one.
+		for _, authorization := range []string{
+			"Bearer S3CRET", "Bearer  s3cret", "Basic s3cret", "s3cret",
+		} {
+			req, err := http.NewRequest(http.MethodPost,
+				"http://"+e.control+"/reload", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", authorization)
+			if code, _ := send(t, req); code != http.StatusUnauthorized {
+				t.Errorf("%q: expected 401; received %d", authorization, code)
+			}
+		}
+	})
+}
+
+// TestReloadServesThroughout covers the window a reload opens: there is none.
+// The list in use answers every request until the new one is ready,
+// so a reload under traffic refuses nothing it would have served a moment earlier.
+func TestReloadServesThroughout(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		e := newEnv(t, tgt, []string{allowedDoc})
+
+		// Enough documents that a reload takes long enough to race.
+		for i := range 200 {
+			writeDoc(t, e.dir, fmt.Sprintf("d%d.graphql", i),
+				fmt.Sprintf("query D%d {\n  user(id: %d) {\n    name\n  }\n}", i, i))
+		}
+
+		stop := make(chan struct{})
+		refused := make(chan int, 1)
+		go func() {
+			for {
+				select {
+				case <-stop:
+					refused <- 0
+					return
+				default:
+				}
+				if code := <-postAsync(e.address, docAllowed); code != http.StatusOK {
+					refused <- code
+					return
+				}
+			}
+		}()
+
+		for range 5 {
+			if code, body := control(
+				t, e.server, http.MethodPost, "/reload", "",
+			); code != http.StatusOK {
+				t.Fatalf("reload: %d: %s", code, body)
+			}
+		}
+		close(stop)
+
+		if code := <-refused; code != 0 {
+			t.Errorf("expected the list in use to answer throughout; received %d", code)
 		}
 	})
 }

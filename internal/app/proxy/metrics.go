@@ -22,6 +22,9 @@ const (
 	decisionAllowed decision = iota
 	decisionRejected
 	decisionMalformed
+	decisionTooLarge
+	decisionAmbiguous
+	decisionTooDeep
 	decisionCount
 )
 
@@ -30,6 +33,9 @@ var decisionLabels = [decisionCount]string{
 	decisionAllowed:   "allowed",
 	decisionRejected:  "rejected",
 	decisionMalformed: "malformed",
+	decisionTooLarge:  "too_large",
+	decisionAmbiguous: "ambiguous",
+	decisionTooDeep:   "too_deep",
 }
 
 func (d decision) String() string { return decisionLabels[d] }
@@ -153,6 +159,9 @@ func (c *proxyCollector) Collect(ch chan<- prometheus.Metric) {
 	count(made.allowed, decisionAllowed)
 	count(made.rejected, decisionRejected)
 	count(made.malformed, decisionMalformed)
+	count(made.tooLarge, decisionTooLarge)
+	count(made.ambiguous, decisionAmbiguous)
+	count(made.tooDeep, decisionTooDeep)
 	ch <- prometheus.MustNewConstMetric(descUpstreamErrors,
 		prometheus.CounterValue, float64(made.upstream))
 

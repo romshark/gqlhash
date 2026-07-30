@@ -67,7 +67,7 @@ func Run(
 		return 1
 	}
 	sum, errHash := gqlhash.AppendHash(nil, h,
-		gqlhash.Options{Ignore: cfg.Ignore}, input)
+		gqlhash.Options{Ignore: cfg.Ignore, DepthLimit: cfg.DepthLimit}, input)
 	if errHash.IsErr() {
 		// A hash never fails a write, so the error is a syntax error and carries
 		// a position. The format is the one editors and CI annotations parse:

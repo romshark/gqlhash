@@ -34,12 +34,25 @@ type bufferPool struct{ pool sync.Pool }
 func (b *bufferPool) Get() []byte  { return b.pool.Get().([]byte) }
 func (b *bufferPool) Put(p []byte) { b.pool.Put(p) } //nolint:staticcheck // the interface takes a slice
 
-// counters of what the proxy decided.
+// counters of what the proxy decided, one per cache line: packed,
+// two cores raising different counters bounce one line between them,
+// ~10.7ns against ~8.6ns per raise.
+// A flood of one decision contends whatever the layout.
 type counters struct {
-	allowed   atomic.Uint64
-	rejected  atomic.Uint64
-	malformed atomic.Uint64
-	upstream  atomic.Uint64
+	allowed   paddedCounter
+	rejected  paddedCounter
+	malformed paddedCounter
+	tooLarge  paddedCounter
+	ambiguous paddedCounter
+	tooDeep   paddedCounter
+	upstream  paddedCounter
+}
+
+// paddedCounter is a counter on a cache line of its own:
+// 56 bytes beside the 8 of the counter.
+type paddedCounter struct {
+	atomic.Uint64
+	_ [56]byte
 }
 
 // decisions is what a proxy did, read at one moment. It's a struct and not four
@@ -49,6 +62,9 @@ type decisions struct {
 	allowed   uint64
 	rejected  uint64
 	malformed uint64
+	tooLarge  uint64
+	ambiguous uint64
+	tooDeep   uint64
 	upstream  uint64
 }
 
@@ -58,6 +74,9 @@ func (c *counters) snapshot() decisions {
 		allowed:   c.allowed.Load(),
 		rejected:  c.rejected.Load(),
 		malformed: c.malformed.Load(),
+		tooLarge:  c.tooLarge.Load(),
+		ambiguous: c.ambiguous.Load(),
+		tooDeep:   c.tooDeep.Load(),
 		upstream:  c.upstream.Load(),
 	}
 }
@@ -70,12 +89,15 @@ type proxy struct {
 	log       zerolog.Logger
 	counters  counters
 
-	options        gqlhash.Options
-	maxBody        int64
-	allowBatch     bool
-	opaqueErrors   bool
-	logRequests    bool
-	trustForwarded bool
+	options gqlhash.Options
+	maxBody int64
+
+	// upstreamTimeout bounds a forward whole, see -upstream.timeout.
+	upstreamTimeout time.Duration
+	allowBatch      bool
+	opaqueErrors    bool
+	logRequests     bool
+	trustForwarded  bool
 
 	// debug says whether the logger keeps a debug event.
 	// The level is set once at startup, so it's read once instead of per event.
@@ -158,6 +180,9 @@ type proxyConfig struct {
 
 	// MaxBody is the largest request body to accept, in bytes.
 	maxBody int64
+
+	// upstreamTimeout is -upstream.timeout, which bounds a forward whole.
+	upstreamTimeout time.Duration
 }
 
 // newProxy returns a proxy forwarding to upstream.
@@ -173,7 +198,8 @@ func newProxy(
 		allowlist: allowlist,
 		log:       log,
 		options:   config.options, maxBody: config.maxBody,
-		allowBatch: config.allowBatch, opaqueErrors: config.opaqueErrors,
+		upstreamTimeout: config.upstreamTimeout,
+		allowBatch:      config.allowBatch, opaqueErrors: config.opaqueErrors,
 		trustForwarded: config.trustForwarded,
 		debug:          log.GetLevel() <= zerolog.DebugLevel,
 		newHash:        newHash,
@@ -212,6 +238,15 @@ func newProxy(
 		},
 		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			// The proxy's own deadline, which is a failure of the upstream
+			// rather than of the client waiting for it.
+			if errors.Is(context.Cause(r.Context()), errUpstreamTimeout) {
+				p.counters.upstream.Add(1)
+				p.log.Error().Err(err).Msg("forwarding upstream")
+				writeError(w, http.StatusGatewayTimeout,
+					"upstream unavailable", "UPSTREAM_UNAVAILABLE")
+				return
+			}
 			if r.Context().Err() != nil {
 				// The client hung up,
 				// so nothing failed upstream and there is nobody left to answer.
@@ -248,10 +283,24 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	allowed, err := p.check(st, r)
 	switch {
 	case errors.Is(err, errTooLarge):
-		p.counters.malformed.Add(1)
+		p.counters.tooLarge.Add(1)
 		p.reject(w, http.StatusRequestEntityTooLarge,
 			"request body too large", "REQUEST_TOO_LARGE")
-		p.metrics.Observe(decisionMalformed, start)
+		p.metrics.Observe(decisionTooLarge, start)
+		return
+	case errors.Is(err, errTooDeep):
+		p.counters.tooDeep.Add(1)
+		p.reject(w, http.StatusForbidden,
+			"operation not allowed", "OPERATION_NOT_ALLOWED")
+		p.metrics.Observe(decisionTooDeep, start)
+		return
+	case isAmbiguous(err):
+		p.counters.ambiguous.Add(1)
+		if p.debug {
+			p.log.Debug().Err(err).Msg("rejecting an ambiguous request")
+		}
+		p.reject(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+		p.metrics.Observe(decisionAmbiguous, start)
 		return
 	case err != nil:
 		p.counters.malformed.Add(1)
@@ -288,6 +337,18 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = io.NopCloser(bytes.NewReader(st.body))
 		r.ContentLength = int64(len(st.body))
 	}
+	// -upstream.timeout bounds the exchange, not the wait for its first byte:
+	// an API that answers headers and then stops is the case the flag exists
+	// for. The deadline is released once the answer is written.
+	if p.upstreamTimeout > 0 {
+		// WithTimeoutCause, so the error handler can tell this deadline from a
+		// client that went away: both cancel the request,
+		// and only one of them is a failure of the upstream.
+		ctx, cancel := context.WithTimeoutCause(
+			r.Context(), p.upstreamTimeout, errUpstreamTimeout)
+		defer cancel()
+		r = r.WithContext(ctx)
+	}
 	p.upstream.ServeHTTP(w, r)
 
 	// The duration includes the upstream answer,
@@ -312,49 +373,81 @@ func (st *state) release() {
 
 var errTooLarge = errors.New("request body too large")
 
+// errTooDeep is a document nesting past the depth limit,
+// which is a rejection with a reason of its own.
+var errTooDeep = errors.New("operation not allowed")
+
+// isAmbiguous reports whether err is a request naming its document more than once,
+// which is answered like a malformed one and counted apart from it.
+func isAmbiguous(err error) bool {
+	return errors.Is(err, errQueryCollision) ||
+		errors.Is(err, errDuplicateQuery) ||
+		errors.Is(err, errBodyOnGET) ||
+		errors.Is(err, errQueryBesideBody)
+}
+
+// errUpstreamTimeout is what cancels a forward that outlived -upstream.timeout,
+// as the cause of its context.
+var errUpstreamTimeout = errors.New("upstream timeout")
+
 // check reports whether every document of the request is on the allowlist.
 //
 // It allocates nothing: the body lands in the buffer of st, the document is a
 // subslice of that buffer, and the allowlist is looked up by that subslice.
 func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
 	if r.Method == http.MethodGet {
-		return p.decide(st, true, r.URL.RawQuery, false, nil)
+		// A length of -1 is a body of unknown length, which is a body.
+		return p.decide(st, Request{
+			IsGET: true, RawQuery: r.URL.RawQuery, HasBody: r.ContentLength != 0,
+		})
 	}
 	if err = p.readBody(st, r); err != nil {
 		return false, err
 	}
-	bodyIsDocument := isGraphQLContentType(r.Header.Get("Content-Type"))
-	return p.decide(st, false, "", bodyIsDocument, st.body)
+	return p.decide(st, Request{
+		RawQuery:       r.URL.RawQuery,
+		BodyIsDocument: isGraphQLContentType(r.Header.Get("Content-Type")),
+		Body:           st.body,
+	})
 }
 
 // decide is the whole decision and the only copy of it. It takes what a request
 // carries rather than a request, so that every underlay reaches the same
 // answer: one reads the body itself, another is handed the bytes it already has.
 //
-// body is read and not kept, so an underlay owning buffers of its own can pass
-// them. It allocates nothing: the document is a subslice of body and the
-// allowlist is looked up by that subslice.
-//
-// bodyIsDocument is what the content type said, decided by the caller so that
-// neither underlay has to convert the header it holds to reach this.
-func (p *proxy) decide(
-	st *state, isGET bool, rawQuery string, bodyIsDocument bool, body []byte,
-) (allowed bool, err error) {
+// req.Body is read and not kept, so an underlay owning buffers of its own can
+// pass them. It allocates nothing: the document is a subslice of that body and
+// the allowlist is looked up by that subslice.
+func (p *proxy) decide(st *state, req Request) (allowed bool, err error) {
 	var value []byte
 
-	if isGET {
-		value, st.scratch, err = extractQueryParam(st.scratch, rawQuery)
+	if req.IsGET {
+		// A GET carries its document in the query string, so a body on one is a
+		// second place it could be, and which of them an API reads is the API's
+		// business. It's the question a duplicate query member asks,
+		// and it's answered the same way: the request names the document once.
+		if req.HasBody {
+			return false, errBodyOnGET
+		}
+		value, st.scratch, err = extractQueryParam(st.scratch, req.RawQuery)
 		if err != nil {
 			return false, err
 		}
-		return p.allow(st, value), nil
+		return p.allow(st, value)
 	}
 
-	if bodyIsDocument {
-		return p.allow(st, body), nil
+	// The document is the body from here on, so a query parameter is a second
+	// place it could be: an API reading one for a POST would run what this never hashed.
+	// It's the question a GET carrying a body asks, answered the same way.
+	if hasQueryParam(req.RawQuery) {
+		return false, errQueryBesideBody
 	}
 
-	docs, err := extractJSON(st.spans[:0], body, p.allowBatch)
+	if req.BodyIsDocument {
+		return p.allow(st, req.Body)
+	}
+
+	docs, err := extractJSON(st.spans[:0], req.Body, p.allowBatch)
 	// The spans of st are kept whatever happened, so the room extractJSON grew
 	// for a batch is there for the next request. docs holds the same array and
 	// keeps its length, which is what the loop below reads.
@@ -363,12 +456,12 @@ func (p *proxy) decide(
 		return false, err
 	}
 	for _, s := range docs {
-		value, st.scratch, err = unescapeJSON(st.scratch, body[s.start:s.end])
+		value, st.scratch, err = unescapeJSON(st.scratch, req.Body[s.start:s.end])
 		if err != nil {
 			return false, err
 		}
-		if !p.allow(st, value) {
-			return false, nil
+		if allowed, err := p.allow(st, value); err != nil || !allowed {
+			return false, err
 		}
 	}
 	return true, nil
@@ -376,18 +469,24 @@ func (p *proxy) decide(
 
 // allow reports whether document is on the allowlist.
 // A document that doesn't parse isn't.
-func (p *proxy) allow(st *state, document []byte) bool {
+func (p *proxy) allow(st *state, document []byte) (allowed bool, err error) {
 	if p.allowlist.Len() == 0 {
-		return false
+		return false, nil
 	}
 
 	st.hash.Reset()
 	if e := st.parser.Parse(st.hash, p.options, document); e.IsErr() {
-		return false
+		// A document nesting past the limit is told apart from one that isn't
+		// on the list: a flood of them is an attack on what hashing costs,
+		// where a document nobody allowed is usually an allowlist out of date.
+		if errors.Is(e.Err, parser.ErrTooDeep) {
+			return false, errTooDeep
+		}
+		return false, nil
 	}
 	key := st.hash.Sum(st.sum[:0])
 	st.sum = key
-	return p.allowlist.Allowed(key)
+	return p.allowlist.Allowed(key), nil
 }
 
 func (p *proxy) readBody(st *state, r *http.Request) error {
@@ -438,8 +537,8 @@ func (p *proxy) reject(w http.ResponseWriter, code int, message, extension strin
 	writeError(w, code, message, extension)
 }
 
-// rejection is what a rejection says after -opaque-errors has had its say. It's
-// the one copy of that rule: an underlay answering a rejection asks here first,
+// rejection is what a rejection says after -opaque-errors has had its say.
+// It's the one copy of that rule: an underlay answering a rejection asks here first,
 // so none of them can leak a detail this is meant to withhold.
 func (p *proxy) rejection(
 	code int, message, extension string,

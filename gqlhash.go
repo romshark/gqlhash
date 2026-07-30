@@ -25,6 +25,21 @@ var (
 	ErrMalformedNumber      = parser.ErrMalformedNumber
 	ErrMalformedUTF8        = parser.ErrMalformedUTF8
 	ErrUnescapedControlChar = parser.ErrUnescapedControlChar
+
+	// ErrTooDeep is a document nesting deeper than [Options.DepthLimit] allows.
+	ErrTooDeep = parser.ErrTooDeep
+)
+
+// The defaults an [Options] with no value of its own takes, and the size a
+// [Hasher] starts at. They're here as well as in [parser] so that reasoning
+// about Options takes no second import.
+const (
+	// DefaultDepthLimit is the nesting an [Options] with no DepthLimit takes.
+	DefaultDepthLimit = parser.DefaultDepthLimit
+
+	// DefaultBufferSize is how many bytes of canonical form a fresh [Hasher]
+	// holds. It's a starting size and no limit, see [NewHasherWithBuffer].
+	DefaultBufferSize = parser.DefaultBufferSize
 )
 
 // Hash is what this package needs of a [hash.Hash], which every implementation
@@ -100,8 +115,20 @@ type Hasher[S string | []byte] struct {
 
 // NewHasher returns a [Hasher] writing into h and applying options.
 func NewHasher[S string | []byte](h Hash, options Options) *Hasher[S] {
+	return NewHasherWithBuffer[S](h, options, 0)
+}
+
+// NewHasherWithBuffer is [NewHasher] with the buffer the canonical form is
+// built in sized by the caller. 0 takes [DefaultBufferSize].
+//
+// The buffer grows to whatever a document needs, so this only decides what the
+// first documents cost: size it for the largest document a caller hashes and
+// nothing grows it again.
+func NewHasherWithBuffer[S string | []byte](
+	h Hash, options Options, bufferSize int,
+) *Hasher[S] {
 	return &Hasher[S]{
-		parser:  parser.NewParser[S](0),
+		parser:  parser.NewParser[S](bufferSize),
 		hash:    h,
 		options: options,
 		sums:    make([]byte, 0, h.Size()*2),

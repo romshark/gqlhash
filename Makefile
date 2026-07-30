@@ -9,10 +9,15 @@ COVERDIR := $(CURDIR)/covdata
 .PHONY: all
 all: lint cover
 
+# -shuffle=on runs the tests in a random order and prints the seed it used.
+# The acceptance suite shares a server between the tests that need no flags of their own,
+# so an order they depend on is a bug this is meant to find.
+SHUFFLE := -shuffle=on
+
 .PHONY: test
 test:
 	@echo "== test =="
-	go test ./...
+	go test $(SHUFFLE) ./...
 
 .PHONY: lint
 lint:
@@ -31,7 +36,7 @@ lint:
 .PHONY: acceptance
 acceptance:
 	@echo "== test: the acceptance suite =="
-	go test -count=1 ./internal/acceptance $(if $(PROXY),-proxy.bin $(PROXY),)
+	go test $(SHUFFLE) -count=1 ./internal/acceptance $(if $(PROXY),-proxy.bin $(PROXY),)
 
 .PHONY: cover
 cover: cover-unit cover-servers
@@ -40,7 +45,7 @@ cover: cover-unit cover-servers
 .PHONY: cover-unit
 cover-unit:
 	@echo "== test: everything, in process, with coverage =="
-	go test -covermode=count -coverprofile=unit.out ./...
+	go test $(SHUFFLE) -covermode=count -coverprofile=unit.out ./...
 	@echo "== coverage: in process =="
 	@go tool cover -func=unit.out | tail -n 1
 
@@ -51,7 +56,7 @@ cover-unit:
 cover-servers:
 	@echo "== test: the acceptance suite, with the servers instrumented =="
 	@mkdir -p $(COVERDIR)
-	GOCOVERDIR=$(COVERDIR) go test -count=1 ./internal/acceptance
+	GOCOVERDIR=$(COVERDIR) go test $(SHUFFLE) -count=1 ./internal/acceptance
 	@echo "== coverage: the servers the acceptance suite started =="
 	@go tool covdata percent -i=$(COVERDIR)
 # cover-profile turns the servers' counters into a profile,

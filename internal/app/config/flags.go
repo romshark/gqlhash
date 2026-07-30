@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/romshark/gqlhash/v2"
+	"github.com/romshark/gqlhash/v2/parser"
 )
 
 type Hasher struct {
@@ -23,6 +24,10 @@ type Hasher struct {
 	Format Format
 	Hash   HashFunction
 	Ignore gqlhash.Ignore
+
+	// DepthLimit is how deeply a document may nest before it's refused,
+	// see [gqlhash.Options].
+	DepthLimit int
 
 	// CmdPrintVersion says the command was asked for its version and nothing else,
 	// so the caller prints it and returns instead of hashing.
@@ -40,6 +45,10 @@ type Proxy struct {
 
 	// Ignore is what to leave out of the hash of a document.
 	Ignore gqlhash.Ignore
+
+	// DepthLimit is how deeply a document may nest before it's refused,
+	// see [gqlhash.Options].
+	DepthLimit int
 
 	// AllowBatch accepts a batch of documents, every one of which has to be allowed.
 	AllowBatch bool
@@ -170,6 +179,9 @@ func ParseHasher(
 				"too, so a parameterized query matches its literal form.")
 		fVersion = cli.Bool("version", false,
 			"Print the version to stdout and exit")
+		fDepthLimit = cli.Int("depth-limit", parser.DefaultDepthLimit,
+			"How deeply a document may nest before it's refused.\n"+
+				"Below 1 takes the default.")
 	)
 	if code, ok := parse(cli, args, stderr, ProxyCommand); !ok {
 		return cfg, code, false
@@ -193,6 +205,7 @@ func ParseHasher(
 		return cfg, unsupported(stderr, "ignore mode", *fIgnore,
 			SupportedIgnoreModes), false
 	}
+	cfg.DepthLimit = *fDepthLimit
 	return cfg, 0, true
 }
 
@@ -241,6 +254,10 @@ func ParseProxyFor(
 				"Only collision-resistant functions are accepted here.")
 		fIgnore = cli.String("ignore", "nothing",
 			"What to leave out of the hash ("+SupportedIgnoreModes+")")
+		fDepthLimit = cli.Int("depth-limit", parser.DefaultDepthLimit,
+			"How deeply a document may nest before it's refused.\n"+
+				"Nesting is what a document grows cheaply, so this bounds\n"+
+				"what one costs. Below 1 takes the default.")
 		fMaxBody = cli.Int64("server.max-body", 1<<20,
 			"Largest request body to accept, in bytes")
 		fAllowBatch = cli.Bool("allow-batch", false,
@@ -315,9 +332,10 @@ func ParseProxyFor(
 		cli.PrintDefaults()
 		_, _ = fmt.Fprintf(cli.Output(),
 			"\nEvery flag can be given through the environment instead, as %s\n"+
-				"followed by its name with the dashes as underscores, such as %s.\n"+
+				"followed by its name with the dashes and dots as underscores,\n"+
+				"such as %s=%s.\n"+
 				"A flag given on the command line wins over the environment.\n",
-			EnvPrefix, EnvName("max-body"))
+			EnvPrefix, EnvName("server.max-body"), "4096")
 	}
 	// The environment is read before parsing, so the command line wins.
 	if code, ok := applyEnv(cli, stderr); !ok {
@@ -395,6 +413,7 @@ func ParseProxyFor(
 		return cfg, unsupported(stderr, "ignore mode", *fIgnore,
 			SupportedIgnoreModes), false
 	}
+	cfg.DepthLimit = *fDepthLimit
 
 	for _, t := range []struct {
 		name  string
@@ -496,7 +515,12 @@ func applyEnv(cli *flag.FlagSet, stderr io.Writer) (exitCode int, ok bool) {
 		if !set {
 			return
 		}
-		if err := f.Value.Set(value); err != nil {
+		// Set on the set rather than on the value: the flag set records what
+		// was set that way, which is what isSet reads. Setting the value alone
+		// leaves the flag looking untouched, so a default derived from another
+		// flag overwrites what the environment asked for,
+		// and a rule that refuses a combination never runs.
+		if err := cli.Set(f.Name, value); err != nil {
 			_, _ = fmt.Fprintf(stderr, "%s=%q: %v\n", name, value, err)
 			exitCode, ok = 2, false
 		}

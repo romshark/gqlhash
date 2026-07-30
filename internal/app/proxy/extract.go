@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"unicode/utf8"
 	"unsafe"
 
@@ -29,6 +30,15 @@ var (
 
 	// errQueryCollision is a request object naming the query member twice.
 	errQueryCollision = errors.New(`naming collision on field "query"`)
+
+	// errBodyOnGET is a GET carrying a body beside the query parameter its
+	// document is read from.
+	errBodyOnGET = errors.New("ambiguous request: a GET carrying a body")
+
+	// errQueryBesideBody is a request whose document is its body and which
+	// names a query parameter as well.
+	errQueryBesideBody = errors.New(
+		"ambiguous request: a query parameter beside a body")
 )
 
 // span is the range of a document within the request body.
@@ -306,6 +316,29 @@ func extractQueryParam(scratch []byte, rawQuery string) (value, newScratch []byt
 		}
 	}
 	return scratch, scratch, nil
+}
+
+// hasQueryParam reports whether rawQuery names the query parameter at all,
+// which is what makes a request that reads its document elsewhere ambiguous.
+// It reads the pairs the way [extractQueryParam] does, ';' included.
+func hasQueryParam(rawQuery string) bool {
+	for i := 0; i < len(rawQuery); {
+		end := i
+		for end < len(rawQuery) && rawQuery[end] != '&' && rawQuery[end] != ';' {
+			end++
+		}
+		pair := rawQuery[i:end]
+		i = end + 1
+
+		key := pair
+		if before, _, ok := strings.Cut(pair, "="); ok {
+			key = before
+		}
+		if isQueryParam(key) {
+			return true
+		}
+	}
+	return false
 }
 
 // isQueryParam reports whether key names the query parameter, percent-decoded
