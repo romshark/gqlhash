@@ -149,6 +149,18 @@ func (c *Core) ReadError(tooLarge bool) (Verdict, Answer) {
 		"malformed request", "BAD_REQUEST")
 }
 
+// ExpectationFailed counts a request naming an expectation the proxy can't meet,
+// which RFC 9110 requires any recipient to refuse rather than forward.
+//
+// It answers a verdict and no [Answer]: the status is 417 and the body empty,
+// which is what net/http's own server writes for one, and matching it is the
+// point — an underlay whose server doesn't know the header refuses it here
+// instead, so a client sees the same answer whichever carried the request.
+func (c *Core) ExpectationFailed() Verdict {
+	c.p.counters.malformed.Add(1)
+	return VerdictMalformed
+}
+
 // Observe records how long a request took. start is when it arrived.
 func (c *Core) Observe(v Verdict, start time.Time) {
 	switch v {

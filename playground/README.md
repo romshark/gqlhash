@@ -174,4 +174,4 @@ Stop the stack and restart it with `-ignore=inputs` added to the proxy command i
 | [api](api) | the sample GraphQL API, a module of its own so its dependency stays out of gqlhash |
 | [Dockerfile](Dockerfile) | builds `gqlhash-proxy` from the working tree, not from a release |
 
-See the [Proxy section of the README](../README.md#usage-proxy) for what the proxy does and why.
+See [cmd/gqlhash-proxy/README.md](../cmd/gqlhash-proxy/README.md) for what the proxy does and why.

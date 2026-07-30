@@ -108,8 +108,25 @@ type proxy struct {
 	// either way and the hot path has nothing to decide.
 	metrics *metrics
 
-	newHash func() hash.Hash
-	states  sync.Pool
+	newHash   func() hash.Hash
+	states    sync.Pool
+	drainOnce sync.Once
+
+	// draining is closed when the shutdown starts. A drain waits for the
+	// requests in flight, and a subscription is in flight by definition —
+	// it has no natural end to wait for — so a proxy carrying one sat out the
+	// whole -server.shutdown-timeout and then exited 1, on every deploy.
+	// Streams watch this and end; everything else is waited for as before.
+	draining chan struct{}
+}
+
+// Draining is closed when the shutdown starts, for an underlay in another
+// package to end its streams on. See [proxy.draining].
+func (c *Core) Draining() <-chan struct{} { return c.p.draining }
+
+// StartDraining closes it, once however many times it's called.
+func (p *proxy) StartDraining() {
+	p.drainOnce.Do(func() { close(p.draining) })
 }
 
 // The buffers a pooled state starts with, sized for the request the proxy mostly
@@ -154,6 +171,11 @@ type state struct {
 	spans  []span
 	hash   hash.Hash
 	parser *parser.Parser[[]byte]
+
+	// writer relays the answer, releasing what bounds an exchange where the
+	// answer turns out to be an event stream.
+	// It's here so that forwarding costs no allocation of its own.
+	writer streamWriter
 }
 
 // proxyConfig configures a [proxy]. Its zero value leaves nothing out of the hash,
@@ -203,6 +225,7 @@ func newProxy(
 		trustForwarded: config.trustForwarded,
 		debug:          log.GetLevel() <= zerolog.DebugLevel,
 		newHash:        newHash,
+		draining:       make(chan struct{}),
 	}
 	// The metrics read the counters of this proxy, which is why they're built
 	// here rather than handed in: a caller would need the proxy to build them
@@ -232,12 +255,50 @@ func newProxy(
 			r.Out.URL.Scheme = upstream.Scheme
 			r.Out.URL.Host = upstream.Host
 			r.Out.URL.Path, r.Out.URL.RawPath = upstream.Path, upstream.RawPath
+			// The query string of the client, verbatim. ReverseProxy drops the
+			// parameters net/url can't parse before this runs, which for a
+			// `;`-separated one is all of them: an allowed GET reached the API
+			// carrying no document at all. Restoring it is safe because the
+			// reading rule already splits on `;` as well as `&`, so a document
+			// named twice either way is refused rather than forwarded.
+			r.Out.URL.RawQuery = r.In.URL.RawQuery
 			// An empty Host makes the request carry the host of the upstream URL.
 			r.Out.Host = ""
+			// A protocol upgrade stops here. ReverseProxy strips these with the
+			// other hop-by-hop headers and then puts them back for an upgrade,
+			// which is how one allowlisted document used to buy a tunnel:
+			// the API answered 101 and everything the client wrote afterwards
+			// reached it without passing the allowlist again. This runs after
+			// that, so what it drops stays dropped, and the answer's 101 then
+			// has nothing to match.
+			r.Out.Header.Del("Upgrade")
+			r.Out.Header.Del("Connection")
+			// The expectation was the proxy's to meet and it met it:
+			// the body has been read and hashed, and a 100 was sent if one was asked for.
+			// Forwarding it makes the API run the handshake again for a body
+			// already in flight, and ReverseProxy relays the answer's 1xx as
+			// well, so a client that asked for one continuation received two.
+			r.Out.Header.Del("Expect")
 			setForwarded(r, p.trustForwarded)
+		},
+		ModifyResponse: func(res *http.Response) error {
+			// Nothing offered an upgrade, so a 101 is an API answering a
+			// question nobody asked. Relaying it would splice the two
+			// connections together on the strength of that answer alone.
+			if res.StatusCode == http.StatusSwitchingProtocols {
+				return errUpstreamSwitchedProtocols
+			}
+			return nil
 		},
 		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			// Reached, so whatever [proxy.ServeHTTP] would have counted for
+			// itself is counted here instead. The two must not both do it:
+			// the deadline can fire between them, and then the cause ServeHTTP
+			// reads is set where this had already answered for another reason.
+			if sw, ok := w.(*streamWriter); ok {
+				sw.failed = true
+			}
 			// The proxy's own deadline, which is a failure of the upstream
 			// rather than of the client waiting for it.
 			if errors.Is(context.Cause(r.Context()), errUpstreamTimeout) {
@@ -336,24 +397,69 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		r.Body = io.NopCloser(bytes.NewReader(st.body))
 		r.ContentLength = int64(len(st.body))
+	} else {
+		// A GET's body was read only to see whether it had one, and one that
+		// had is refused before this. So there is nothing to send on,
+		// and the framing it was declared under goes with it:
+		// the API receives a GET carrying no body,
+		// as it does under the fasthttp underlay.
+		r.Body, r.ContentLength, r.TransferEncoding = http.NoBody, 0, nil
 	}
 	// -upstream.timeout bounds the exchange, not the wait for its first byte:
 	// an API that answers headers and then stops is the case the flag exists
 	// for. The deadline is released once the answer is written.
+	var deadline *time.Timer
+	var cancelForward context.CancelCauseFunc
 	if p.upstreamTimeout > 0 {
-		// WithTimeoutCause, so the error handler can tell this deadline from a
-		// client that went away: both cancel the request,
-		// and only one of them is a failure of the upstream.
-		ctx, cancel := context.WithTimeoutCause(
-			r.Context(), p.upstreamTimeout, errUpstreamTimeout)
-		defer cancel()
+		// A cause, so the error handler can tell this deadline from a client
+		// that went away: both cancel the request, and only one of them is a
+		// failure of the upstream.
+		//
+		// A timer rather than [context.WithTimeoutCause] because a deadline
+		// that can't be called off can't be released for an event stream,
+		// which [streamWriter] does once the answer names itself one.
+		ctx, cancel := context.WithCancelCause(r.Context())
+		defer cancel(nil)
+		cancelForward = cancel
+		deadline = time.AfterFunc(p.upstreamTimeout, func() {
+			cancel(errUpstreamTimeout)
+		})
+		defer deadline.Stop()
 		r = r.WithContext(ctx)
 	}
-	p.upstream.ServeHTTP(w, r)
-
-	// The duration includes the upstream answer,
-	// so a dashboard can tell the proxy apart from the API behind it.
-	p.metrics.Observe(decisionAllowed, start)
+	st.writer.reset(w, p, start, deadline,
+		AcceptsEventStream(r.Header.Get("Accept")), cancelForward)
+	// In a defer, because an answer this can't finish doesn't return through
+	// here: ReverseProxy abandons a copy that fails mid-body by panicking with
+	// [http.ErrAbortHandler], which net/http recovers. An upstream that sent its
+	// headers and then stopped took that path, so the request it belongs to was
+	// counted and never timed, and the deadline that ended it never counted.
+	defer func() {
+		if st.writer.stopDraining != nil {
+			st.writer.stopDraining()
+		}
+		// The deadline is counted here rather than in the error handler,
+		// which no longer runs once a status is on the wire — ReverseProxy can't take
+		// one back. The cause is set exactly once, so this counts once,
+		// and a client that hung up sets a different one and is no upstream failure.
+		// Only where the error handler never ran, which is what an answer
+		// already on the wire means: ReverseProxy can't take a status back,
+		// so it abandons the copy instead, and nothing else would count the
+		// deadline that ended it. A client that hung up sets another cause and
+		// is no upstream failure.
+		if !st.writer.failed &&
+			errors.Is(context.Cause(r.Context()), errUpstreamTimeout) {
+			p.counters.upstream.Add(1)
+		}
+		// A stream was timed when its headers were written,
+		// since its length is the client's business rather than the proxy's latency.
+		if !st.writer.streamed {
+			// The duration includes the upstream answer,
+			// so a dashboard can tell the proxy apart from the API behind it.
+			p.metrics.Observe(decisionAllowed, start)
+		}
+	}()
+	p.upstream.ServeHTTP(&st.writer, r)
 }
 
 // release drops what one oversized request grew, so the pool doesn't hold it for
@@ -369,6 +475,9 @@ func (st *state) release() {
 	if cap(st.spans) > maxRetainedSpans {
 		st.spans = make([]span, 0, defaultSpans)
 	}
+	// The connection of the request that just ended, which the pool has no
+	// business keeping alive until the state is taken again.
+	st.writer = streamWriter{}
 }
 
 var errTooLarge = errors.New("request body too large")
@@ -390,15 +499,32 @@ func isAmbiguous(err error) bool {
 // as the cause of its context.
 var errUpstreamTimeout = errors.New("upstream timeout")
 
+// errUpstreamSwitchedProtocols is an API answering 101 to a forward that
+// offered no upgrade, which reaches the client as an upstream failure rather
+// than as a tunnel.
+var errUpstreamSwitchedProtocols = errors.New(
+	"the upstream switched protocols; nothing offered an upgrade")
+
 // check reports whether every document of the request is on the allowlist.
 //
 // It allocates nothing: the body lands in the buffer of st, the document is a
 // subslice of that buffer, and the allowlist is looked up by that subslice.
 func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
 	if r.Method == http.MethodGet {
-		// A length of -1 is a body of unknown length, which is a body.
+		// A body is bytes, not a framing: `Content-Length: 0` and an empty
+		// chunked body both name no document, so neither is a second place one
+		// could be. A length of 0 is net/http for "no bytes under either framing",
+		// so only an unknown or non-zero length is read — and reading
+		// it is also what applies -server.max-body to a GET, which makes an
+		// oversized body too_large before it is anything else.
+		st.body = st.body[:0]
+		if r.ContentLength != 0 {
+			if err = p.readBody(st, r); err != nil {
+				return false, err
+			}
+		}
 		return p.decide(st, Request{
-			IsGET: true, RawQuery: r.URL.RawQuery, HasBody: r.ContentLength != 0,
+			IsGET: true, RawQuery: r.URL.RawQuery, HasBody: len(st.body) > 0,
 		})
 	}
 	if err = p.readBody(st, r); err != nil {
@@ -412,11 +538,11 @@ func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
 }
 
 // decide is the whole decision and the only copy of it. It takes what a request
-// carries rather than a request, so that every underlay reaches the same
-// answer: one reads the body itself, another is handed the bytes it already has.
+// carries rather than a request, so that every underlay reaches the same answer:
+// one reads the body itself, another is handed the bytes it already has.
 //
-// req.Body is read and not kept, so an underlay owning buffers of its own can
-// pass them. It allocates nothing: the document is a subslice of that body and
+// req.Body is read and not kept, so an underlay owning buffers of its own can pass them.
+// It allocates nothing: the document is a subslice of that body and
 // the allowlist is looked up by that subslice.
 func (p *proxy) decide(st *state, req Request) (allowed bool, err error) {
 	var value []byte
@@ -579,8 +705,8 @@ func writeErrorBody(w io.Writer, message, extension string) {
 	_, _ = io.WriteString(w, `"}}]}`)
 }
 
-// contentTypeJSON is the header value every error answer carries, shared so
-// that writing one doesn't allocate the slice that holds it.
+// contentTypeJSON is the header value every error answer carries,
+// shared so that writing one doesn't allocate the slice that holds it.
 var contentTypeJSON = []string{"application/json; charset=utf-8"}
 
 // jsonEscape is the escape for every byte a JSON string can't carry as it is.

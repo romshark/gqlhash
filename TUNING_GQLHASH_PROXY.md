@@ -1,9 +1,9 @@
 # Tuning gqlhash-proxy
 
-[gqlhash-proxy](README.md#usage-proxy) has two paths: a document on the allowlist is forwarded upstream, anything else is rejected without leaving the proxy.
+[gqlhash-proxy](cmd/gqlhash-proxy/README.md) has two paths: a document on the allowlist is forwarded upstream, anything else is rejected without leaving the proxy.
 
 - [PERFORMANCE.md](PERFORMANCE.md) — where the CPU goes, and why this is the list.
-- [GQLHASH_PROXY_FHTTP.md](GQLHASH_PROXY_FHTTP.md) — the fasthttp build, which moves more than any setting here.
+- [GQLHASH_PROXY_FHTTP.md](GQLHASH_PROXY_FHTTP.md) — the fasthttp build, which moves more than any setting here, and which is **experimental and not for production use**.
 
 ## Measured
 

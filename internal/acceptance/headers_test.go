@@ -113,6 +113,61 @@ func TestForwardedGETKeepsTheDocument(t *testing.T) {
 	})
 }
 
+// TestForwardedGETKeepsASemicolonQuery covers the separator that isn't `&`.
+//
+// The reading rule splits a query string on `;` as well as `&`, which is what
+// makes it safe: a document named twice either way is refused rather than
+// forwarded. The forwarding half used to defeat that — net/http's proxy drops
+// the parameters net/url can't parse, and for a `;`-separated query that is all
+// of them, so the API received an allowed GET carrying no document at all and
+// answered whatever it does for that.
+//
+// Neither half is any use without the other, so the query string reaches the
+// API exactly as the client wrote it.
+func TestForwardedGETKeepsASemicolonQuery(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
+
+		for _, tc := range []struct{ name, rawQuery string }{
+			{"a parameter after the document", "query=" +
+				url.QueryEscape(allowedText) + ";a=1"},
+			{"a parameter before it", "a=1;query=" +
+				url.QueryEscape(allowedText)},
+			{"both separators at once", "a=1;b=2&query=" +
+				url.QueryEscape(allowedText)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				before := e.api.count()
+				if code, answer := get(t, e.server, tc.rawQuery); code != http.StatusOK {
+					t.Fatalf("expected 200; received %d: %s", code, answer)
+				}
+				if e.api.count() != before+1 {
+					t.Fatalf("expected it forwarded; the API saw %d", e.api.count())
+				}
+				if got := e.api.last(t).rawQuery; got != tc.rawQuery {
+					t.Errorf("expected the query string forwarded whole;"+
+						"\n want %q\n have %q", tc.rawQuery, got)
+				}
+			})
+		}
+
+		// And the reading half it protects: `;` separates,
+		// so this names the document twice and is refused rather than forwarded.
+		twice := "query=" + url.QueryEscape(allowedText) +
+			";query=" + url.QueryEscape(rejectedText)
+		before := e.api.count()
+		code, answer := get(t, e.server, twice)
+		if code != http.StatusBadRequest {
+			t.Errorf("expected 400 for a document named twice; received %d: %s",
+				code, answer)
+		}
+		if e.api.count() != before {
+			t.Errorf("expected nothing forwarded; the API saw %d", e.api.count())
+		}
+	})
+}
+
 // TestQueryParamBesideBody covers a request whose document is its body and
 // which names a query parameter as well. The proxy hashes the body; an API that
 // reads the parameter for a POST would run what nobody hashed, and which of the
