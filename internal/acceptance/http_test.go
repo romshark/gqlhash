@@ -14,7 +14,8 @@ import (
 // would be a change made on purpose rather than a difference nobody noticed.
 func TestMethods(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 
 		// A body-carrying method reaches the API with the document it carried.
 		for _, method := range []string{
@@ -65,7 +66,8 @@ func TestMethods(t *testing.T) {
 // document, so every other type, and none at all, is read as a JSON request.
 func TestRequestContentTypes(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 
 		post := func(t *testing.T, contentType, body string) (int, string) {
 			t.Helper()
@@ -119,7 +121,8 @@ func TestRequestContentTypes(t *testing.T) {
 // down to the forms that carry none.
 func TestGETQueryString(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc})
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
 		encoded := url.QueryEscape(allowedText)
 
 		for _, tc := range []struct {
@@ -163,7 +166,8 @@ func TestLongDocument(t *testing.T) {
 		strings.Repeat("    alias: name\n", 512) + "  }\n}"
 
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{long})
+		e := shared(t, tgt)
+		e.allow(t, long)
 		body, err := jsonRequest(long)
 		if err != nil {
 			t.Fatal(err)
@@ -176,6 +180,47 @@ func TestLongDocument(t *testing.T) {
 		if code, answer := get(t, e.server, rawQuery); code != http.StatusOK {
 			t.Errorf("GET: expected 200 for a request line of %d bytes; received %d: %s",
 				len(rawQuery), code, answer)
+		}
+	})
+}
+
+// TestGETWithBody covers a GET carrying a body. Its document is the query parameter,
+// so a body is a second place one could be, and which of them an API reads is the API's
+// business: the request is refused rather than forwarded with a body nothing here read.
+func TestGETWithBody(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
+		rawQuery := "query=" + url.QueryEscape(allowedText)
+
+		for _, tc := range []struct{ name, body string }{
+			{"a document of its own", docRejected},
+			{"the allowed document", docAllowed},
+			{"anything at all", "x"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				req, err := http.NewRequest(http.MethodGet,
+					"http://"+e.address+"/graphql?"+rawQuery,
+					strings.NewReader(tc.body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				code, answer := send(t, req)
+				if code != http.StatusBadRequest {
+					t.Errorf("expected 400; received %d: %s", code, answer)
+				}
+				if !strings.Contains(answer, "ambiguous") {
+					t.Errorf("expected the reason; received %s", answer)
+				}
+			})
+		}
+
+		// The same request without the body is the one it was pretending to be.
+		if code, _ := get(t, e.server, rawQuery); code != http.StatusOK {
+			t.Errorf("expected the document itself allowed; received %d", code)
+		}
+		if n := e.api.count(); n != 1 {
+			t.Errorf("expected only that one forwarded; received %d", n)
 		}
 	})
 }

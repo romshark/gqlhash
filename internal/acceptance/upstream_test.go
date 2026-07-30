@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -93,24 +94,37 @@ func TestUpstreamTimeout(t *testing.T) {
 	})
 }
 
-// TestConcurrentRequests covers what -upstream.max-idle-conns-per-host does and
-// doesn't do: it sizes the pool of connections kept, so past it the surplus is
-// redialed rather than refused. Requests over the cap are served, not failed.
+// TestConcurrentRequests covers requests arriving past
+// -upstream.max-idle-conns-per-host: every one of them is answered,
+// and every one of them reaches the API as the client wrote it.
+//
+// The documents differ per request on purpose. Identical bodies can't catch the
+// worst defect this proxy can have — a body forwarded under another request's
+// connection — and only allowed documents reach the API at all, so they're all
+// allowed and all distinct.
 func TestConcurrentRequests(t *testing.T) {
 	const concurrent = 16
 
+	// concurrent documents, each allowed and each its own.
+	documents := make([]string, concurrent)
+	requests := make([]string, concurrent)
+	for i := range documents {
+		documents[i] = fmt.Sprintf("query GetUser%d {\n  user(id: %d) {\n    name\n  }\n}",
+			i, i)
+		requests[i] = fmt.Sprintf(`{"query":"query GetUser%d{user(id:%d){name}}"}`, i, i)
+	}
+
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc},
-			"-upstream.max-idle-conns-per-host", "2")
+		e := newEnv(t, tgt, documents, "-upstream.max-idle-conns-per-host", "2")
 
 		var mu sync.Mutex
 		codes := make(map[int]int, 2)
 		var wg sync.WaitGroup
-		for range concurrent {
+		for i := range concurrent {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				code := <-postAsync(e.address, docAllowed)
+				code := <-postAsync(e.address, requests[i])
 				mu.Lock()
 				codes[code]++
 				mu.Unlock()
@@ -119,8 +133,21 @@ func TestConcurrentRequests(t *testing.T) {
 		wg.Wait()
 
 		if codes[http.StatusOK] != concurrent {
-			t.Errorf("expected %d requests served over a pool of 2; received %v",
+			t.Fatalf("expected %d requests served over a pool of 2; received %v",
 				concurrent, codes)
+		}
+
+		// Every document arrived, and each arrived once: a body delivered under
+		// another request's connection would leave one twice and one missing.
+		seen := make(map[string]int, concurrent)
+		for _, r := range e.api.all() {
+			seen[r.body]++
+		}
+		for i, request := range requests {
+			if seen[request] != 1 {
+				t.Errorf("document %d: expected it forwarded once; received %d",
+					i, seen[request])
+			}
 		}
 	})
 }

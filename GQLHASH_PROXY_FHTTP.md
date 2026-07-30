@@ -77,7 +77,14 @@ fasthttp reads the request line and the headers into a buffer of a fixed size, o
 ### Added headers
 
 - fasthttp sets `User-Agent: fasthttp` when the request carried none.
-- net/http adds `Accept-Encoding: gzip` and decompresses transparently. fasthttp does not, so an upstream that would compress is not asked to.
+
+Neither command asks for an encoding of its own any more, and neither decodes an answer: what the client asks for is forwarded and what the API answers with arrives untouched.
+
+### Trailers and `HTTP_PROXY`
+
+fasthttp reads the whole answer before writing it, so trailers of the API arrive as headers and `Te: trailers` is dropped. `gqlhash-proxy` relays both. No GraphQL API sends trailers today; relaying them here means moving the forward onto response streaming, which is the buffered copy this command exists for.
+
+`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` are honored by `gqlhash-proxy` and ignored by the fasthttp client. Deploy this command where the API is reached directly.
 
 ### HTTP/2
 

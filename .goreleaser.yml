@@ -145,3 +145,13 @@ homebrew_casks:
       owner: romshark
       name: tools
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+
+  - name: gqlhash-proxy-fhttp
+    ids: [gqlhash-proxy-fhttp]
+    homepage: https://github.com/romshark/gqlhash
+    description: gqlhash-proxy served with fasthttp instead of net/http
+    license: MIT
+    repository:
+      owner: romshark
+      name: tools
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"

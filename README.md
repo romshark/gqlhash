@@ -17,7 +17,7 @@ It's shipped as:
 
 Generating a gqlhash is [faster](#performance) than parsing a document into an AST and comparing the ASTs.
 
-On a 24-core Xeon `gqlhash-proxy` turns away **~632,000** unknown documents a second at a median of **155 µs**, and forwards **~209,000** allowed ones. A rejection costs a third of a forward and never opens the upstream connection. The fasthttp build forwards ~392,000.
+On a 24-core Xeon `gqlhash-proxy` turns away **~630,000** unknown documents a second at a median of **155 µs**, and forwards **~209,000** allowed ones. A rejection costs a third of a forward and never opens the upstream connection. The fasthttp build forwards ~392,000.
 
 `gqlhash-proxy-fhttp` is another implementation based on [valyala/fasthttp](https://github.com/valyala/fasthttp), an alternative HTTP/1.1 only implementation.
 
@@ -25,8 +25,8 @@ Each command at its best, wrk at 200 connections, median of three runs:
 
 | | `gqlhash-proxy` | `gqlhash-proxy-fhttp` |
 | --- | --- | --- |
-| rejected req/s | **~632,000** | ~604,000 |
-| rejected, median / p99 | **155 µs** / 0.97 ms | 170 µs / **0.56 ms** |
+| rejected req/s | **~630,000** | ~603,000 |
+| rejected, median / p99 | **155 µs** / 0.98 ms | 170 µs / **0.57 ms** |
 | forwarded req/s | ~209,000 | **~392,000** |
 | forwarded, median / p99 | 0.96 ms / 4.51 ms | **392 µs** / **1.90 ms** |
 | CPU per rejection / forward | 22 / 65 µs | **19 / 28 µs** |
@@ -103,7 +103,7 @@ Both produce the same hex-encoded SHA1 hash `b09f92659125366c58ec90c771eba361e92
 
 ### Trusted documents
 
-The [gqlhash-proxy](#gqlhash-proxy) implements [trusted documents](https://benjie.dev/graphql/trusted-documents), also known as persisted queries or a query allowlist, keeps the hash of every document it accepts and rejects everything else. The client sends a document, the server hashes it and looks the hash up.
+The [gqlhash-proxy](#usage-proxy) implements [trusted documents](https://benjie.dev/graphql/trusted-documents), also known as persisted queries or a query allowlist, keeps the hash of every document it accepts and rejects everything else. The client sends a document, the server hashes it and looks the hash up.
 
 The hash ignores formatting, so a client that reformats, minifies or re-indents a document keeps the hash it was registered under. Without that, the allowlist has to store the document byte for byte and every layout change is a new entry.
 
@@ -129,6 +129,7 @@ With [`-ignore=inputs`](#ignoring-input-values) documents that differ only in th
 brew tap romshark/tools
 brew install gqlhash       # the hashing command
 brew install gqlhash-proxy # the allowlist-firewall proxy
+brew install gqlhash-proxy-fhttp # the same proxy served with fasthttp
 ```
 
 ### Compiled Binary
@@ -151,17 +152,10 @@ go install github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy-fhttp@latest
 
 This requires the latest version of [Go](https://go.dev).
 
-### gqlhash-proxy
-
-```sh
-brew tap romshark/tools
-brew install gqlhash-proxy
-```
-
 ## Usage: gqlhash
 
 > [!IMPORTANT]
-> The gqlhash CLI spawns a process per invocation. It's for scripts, CI pipelines and local use, not for a per-request path. Use the [gqlhash-proxy](#gqlhash-proxy) for filtering incoming requests. A Go server may use the package functions ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Compare), [AppendHash](https://pkg.go.dev/github.com/romshark/gqlhash/v2#AppendHash)).
+> The gqlhash CLI spawns a process per invocation. It's for scripts, CI pipelines and local use, not for a per-request path. Use the [gqlhash-proxy](#usage-proxy) for filtering incoming requests. A Go server may use the package functions ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Compare), [AppendHash](https://pkg.go.dev/github.com/romshark/gqlhash/v2#AppendHash)).
 
 gqlhash reads the document from stdin until EOF and prints its SHA1 hash as a hexadecimal string to stdout:
 
@@ -283,7 +277,7 @@ echo '{ object(x: 42) { id } }' | gqlhash -ignore=variables
 
 ## Usage: Proxy
 
-[gqlhash-proxy](#gqlhash-proxy) serves an allowlist of documents in front of a GraphQL API. A request whose document is on the list is forwarded, every other request is rejected with `403 Forbidden` and never reaches the API.
+[gqlhash-proxy](#usage-proxy) serves an allowlist of documents in front of a GraphQL API. A request whose document is on the list is forwarded, every other request is rejected with `403 Forbidden` and never reaches the API.
 
 ```sh
 gqlhash-proxy \
@@ -299,7 +293,7 @@ gqlhash-proxy \
 
 A `.graphqls` file in the same directory is read as the schema, and every document is then checked against it: one asking for a field the schema doesn't have is skipped like one that doesn't parse. Without such a file nothing is checked against a schema. Several `.graphqls` files are read as one schema, and a schema that doesn't parse is reported and leaves the documents unchecked rather than unserved.
 
-The proxy rejects ambiguous requests with `400 Bad Request`. Both keys in `{"query":"<allowed>","quer\u0079":"<anything>"}` unescape to `query`. The proxy can't tell which document would reach the API, so it hashes neither and refuses. Same for a GET naming `query` twice, percent-encoded or not.
+The proxy rejects ambiguous requests with `400 Bad Request`. Both keys in `{"query":"<allowed>","quer\u0079":"<anything>"}` unescape to `query`. The proxy can't tell which document would reach the API, so it hashes neither and refuses. Same for a GET naming `query` twice, percent-encoded or not. A `GET` carrying a body is the same case: its document is the query parameter, and a body is a second place one could be.
 
 Two files whose documents hash alike are both skipped: which one a request meant is unknowable, and allowing the wrong one is worse than allowing neither.
 
@@ -307,7 +301,7 @@ A document that doesn't parse is skipped with an error log, at startup and on re
 
 `-control.listen 127.0.0.1:9090` serves the control server on that address, which is separate from the port that serves traffic. It provides [Prometheus](https://prometheus.io/) metrics on `/metrics` and rereads the allowlist on `POST /reload`.
 
-`/status` answers what the proxy has decided so far: the size of the allowlist, when it was loaded, and the counters for allowed, rejected and malformed requests and upstream failures. Like the metrics it needs no token, and like them it isn't served on the traffic port — it's operational state, not something a client of the API should see.
+`/status` answers what the proxy has decided so far: the size of the allowlist, when it was loaded, and the counters for every decision and for upstream failures. Each refusal is counted apart: `rejected` for a document that isn't on the list, `malformed` for a request that carries none, `too_large` past `-server.max-body`, `ambiguous` for one naming its document twice, `too_deep` past the depth limit. Like the metrics it needs no token, and like them it isn't served on the traffic port — it's operational state, not something a client of the API should see.
 
 `GQLHASH_PROXY_CONTROL_TOKEN` requires `Authorization: Bearer <token>` on `/reload`, compared in constant time. Metrics are served without it. There is no flag for the token: a process argument is readable by anyone on the host through `ps` or `/proc/<pid>/cmdline`, the environment of a process isn't.
 
@@ -462,6 +456,14 @@ ok  	github.com/romshark/gqlhash/v2	68.329s
 
 ## Known Limitations
 
+### Descriptions are accepted where some parsers refuse them
+
+The specification allows a description on an operation, a fragment and a variable definition, and this parser takes them. `vektah/gqlparser`, which many Go servers use, refuses all three. A document carrying one hashes and is forwarded here, and the API behind it may answer a syntax error.
+
+### Numbers are hashed as written
+
+Formatting is left out of the hash and values are not: `1.0`, `1.00`, `1e2` and `100.0` each hash differently, where a reformatted document hashes the same. A client whose serializer rewrites a value writes a document the allowlist no longer holds, so pin what generates the documents rather than the numbers they carry. `-ignore=inputs` leaves values out entirely, which makes this moot at the cost of hashing by shape.
+
 ### Order of Operations, Selections and Arguments
 
 Everything is hashed in the order it appears, so moving anything around changes the hash:
@@ -511,6 +513,8 @@ make acceptance PROXY=./my-proxy   # any implementation of the same contract
 ```
 
 `./internal/acceptance` starts a real server process and drives it over HTTP, which is what lets a server written in another language be tested the same way. The contract is documented in `internal/acceptance/doc.go`.
+
+The tests that need no flags of their own share one server per binary and load the allowlist they need through the control plane, so `make` runs them with `-shuffle=on`: a test that depends on running after another fails, and the seed to reproduce it is printed.
 
 ### Coverage
 

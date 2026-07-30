@@ -57,6 +57,7 @@ func TestMain(m *testing.M) {
 	}
 
 	code := m.Run()
+	stopShared()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
@@ -136,6 +137,7 @@ type server struct {
 	exited  chan error
 	stopped bool // Set once its exit code has been read, so it's read once.
 	code    int
+	keep    bool // A shared server, which outlives the test that started it.
 }
 
 // running reports whether the process is still up.
@@ -182,8 +184,13 @@ func (s *server) wait(t *testing.T) int {
 }
 
 // stop interrupts the process and waits for it.
+//
+// The client's idle connections go first: a graceful shutdown waits for the
+// connections still open, and one this test process is holding open would make
+// a stop look slow for no reason of the server's.
 func (s *server) stop(t *testing.T) int {
 	t.Helper()
+	http.DefaultClient.CloseIdleConnections()
 	s.interrupt()
 	return s.wait(t)
 }
@@ -199,6 +206,42 @@ func exitCode(err error) int {
 		return exit.ExitCode()
 	}
 	return -1
+}
+
+// run executes tgt to completion and answers what it exited with and wrote.
+// Nothing waits for a listener and nothing is retried: a start that fails is the
+// subject here rather than an accident.
+func run(t *testing.T, tgt target, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	return runWithEnv(t, tgt, nil, args...)
+}
+
+// runWithEnv is [run] with variables added to the environment of the command.
+func runWithEnv(
+	t *testing.T, tgt target, env []string, args ...string,
+) (code int, stdout, stderr string) {
+	t.Helper()
+	var out, errOut strings.Builder
+	cmd := exec.Command(tgt.path, args...)
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+
+	done := make(chan error, 1)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting %s: %v", tgt.path, err)
+	}
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return exitCode(err), out.String(), errOut.String()
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+		t.Fatalf("%s didn't exit: %s", tgt.name, errOut.String())
+	}
+	return 0, "", ""
 }
 
 // serve starts tgt on ports of its own and returns it once it accepts
@@ -247,7 +290,7 @@ func start(t *testing.T, tgt target, args []string) (*server, *logs, error) {
 	// SIGINT, so a crash on the way out is a failure of the run. A test that
 	// stops the server itself has read the code already, and this leaves it be.
 	t.Cleanup(func() {
-		if !s.running() {
+		if s.keep || !s.running() {
 			return
 		}
 		if code := s.stop(t); code != 0 {
@@ -402,36 +445,70 @@ const (
 	controlTokenEnv = "GQLHASH_PROXY_CONTROL_TOKEN"
 )
 
-// spy is an upstream that records what reached it, headers included.
+// recorded is one request as the API received it,
+// which is what a test reads to see what the proxy forwarded.
+type recorded struct {
+	method   string
+	path     string
+	rawQuery string
+	host     string
+	body     string
+	header   http.Header
+}
+
+// spy is an upstream that records every request that reached it, whole.
+// Every one of them, rather than the last: a proxy that answers a request with
+// another's body is the worst defect this has, and only the whole list shows it.
 type spy struct {
 	mu       sync.Mutex
-	requests int
-	body     string
-	path     string
-	header   http.Header
+	requests []recorded
 }
 
 func (s *spy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	s.mu.Lock()
-	s.requests++
-	s.body, s.path = string(body), r.URL.Path
-	s.header = r.Header.Clone()
+	s.requests = append(s.requests, recorded{
+		method:   r.Method,
+		path:     r.URL.Path,
+		rawQuery: r.URL.RawQuery,
+		host:     r.Host,
+		body:     string(body),
+		header:   r.Header.Clone(),
+	})
 	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, upstreamAnswer)
 }
 
-func (s *spy) snapshot() (requests int, body, path string, header http.Header) {
+// reset forgets what it recorded, for the next test on a shared server.
+func (s *spy) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.requests, s.body, s.path, s.header
+	s.requests = nil
 }
 
 func (s *spy) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.requests
+	return len(s.requests)
+}
+
+// last is the request the API received most recently.
+func (s *spy) last(t *testing.T) recorded {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.requests) == 0 {
+		t.Fatal("the upstream saw no request")
+	}
+	return s.requests[len(s.requests)-1]
+}
+
+// all is every request the API received, in the order they arrived.
+func (s *spy) all() []recorded {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]recorded(nil), s.requests...)
 }
 
 // env is one test's world: an API, the allowlist in front of it and a proxy
@@ -440,12 +517,33 @@ type env struct {
 	*server
 	api *spy
 	dir string // The allowlist, for a test that changes what's on it.
+
+	// upstream is the API behind the proxy. A test's own is closed with the
+	// test; a shared one when the run ends.
+	upstream *httptest.Server
 }
 
-// newEnv starts an API and a proxy allowing documents, named a.graphql onwards.
+// newEnv starts an API and a proxy of a test's own, allowing documents, named
+// a.graphql onwards. A test that needs neither a flag nor the counters at zero
+// takes [shared] instead.
 func newEnv(t *testing.T, tgt target, documents []string, args ...string) *env {
 	t.Helper()
+	return newEnvFor(t, tgt, false, documents, args...)
+}
+
+func newEnvFor(
+	t *testing.T, tgt target, keep bool, documents []string, args ...string,
+) *env {
+	t.Helper()
 	dir := t.TempDir()
+	if keep {
+		// A shared server outlives the test that started it,
+		// and so does the directory it reads. stopShared takes both down.
+		var err error
+		if dir, err = os.MkdirTemp("", "gqlhash-allowlist"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for i, d := range documents {
 		writeDoc(t, dir, string(rune('a'+i))+".graphql", d)
 	}
@@ -453,12 +551,78 @@ func newEnv(t *testing.T, tgt target, documents []string, args ...string) *env {
 	mux := http.NewServeMux()
 	mux.Handle("/graphql", api)
 	upstream := httptest.NewServer(mux)
-	t.Cleanup(upstream.Close)
+	if !keep {
+		t.Cleanup(upstream.Close)
+	}
 
 	s := serve(t, tgt, append([]string{
 		"-upstream.url", upstream.URL + "/graphql", "-allowlist", dir,
 	}, args...)...)
-	return &env{server: s, api: api, dir: dir}
+	s.keep = keep
+	return &env{server: s, api: api, dir: dir, upstream: upstream}
+}
+
+// shared is the server a test runs against where it needs no flags of its own:
+// one per target, started when the first test asks for it and stopped when the
+// run ends. The tests here are serial, so the one server is each test's in turn.
+//
+// A test that needs its own documents publishes them with [env.allow] rather
+// than starting a server for them. One that needs a flag, an upstream of its own,
+// or the counters of the proxy at zero starts its own with [newEnv].
+func shared(t *testing.T, tgt target) *env {
+	t.Helper()
+	if e, ok := sharedEnvs[tgt.name]; ok {
+		return e
+	}
+	e := newEnvFor(t, tgt, true, nil)
+	sharedEnvs[tgt.name] = e
+	return e
+}
+
+// sharedEnvs is one env per target. The tests are serial, so no lock guards it.
+var sharedEnvs = map[string]*env{}
+
+// stopShared stops what [shared] started. TestMain calls it: a cleanup would
+// belong to whichever test asked for it first.
+func stopShared() {
+	http.DefaultClient.CloseIdleConnections()
+	for _, e := range sharedEnvs {
+		e.interrupt()
+		<-e.exited
+		e.upstream.Close()
+		_ = os.RemoveAll(e.dir)
+	}
+}
+
+// allow makes documents the allowlist of e and publishes them through the
+// control server, which is how a test gets the documents it needs on a server it shares.
+// It answers with the state a test starts from: these documents allowed,
+// and nothing forwarded yet.
+func (e *env) allow(t *testing.T, documents ...string) {
+	t.Helper()
+	entries, err := os.ReadDir(e.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		// RemoveAll: a test before this one may have left directories behind.
+		if err := os.RemoveAll(filepath.Join(e.dir, entry.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, d := range documents {
+		writeDoc(t, e.dir, string(rune('a'+i))+".graphql", d)
+	}
+
+	code, body := control(t, e.server, http.MethodPost, "/reload", "")
+	if code != http.StatusOK {
+		t.Fatalf("publishing the allowlist: %d: %s", code, body)
+	}
+	if answer := reloadAnswer(t, body); answer.Documents.Total != len(documents) {
+		t.Fatalf("expected %d documents published; received %s",
+			len(documents), body)
+	}
+	e.api.reset()
 }
 
 // writeDoc writes a document into an allowlist directory.
@@ -476,6 +640,30 @@ func jsonRequest(document string) (string, error) {
 		Query string `json:"query"`
 	}{Query: document})
 	return string(body), err
+}
+
+// newAPI starts an upstream that answers like the one every test has,
+// for a test that starts a server of its own rather than taking [shared].
+func newAPI(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.Handle("/graphql", new(spy))
+	upstream := httptest.NewServer(mux)
+	t.Cleanup(upstream.Close)
+	return upstream
+}
+
+// writeDocAt writes a document at a path inside an allowlist directory,
+// creating the directories it names.
+func writeDocAt(t *testing.T, dir, name, content string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // control sends a request to the control server,

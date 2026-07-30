@@ -88,6 +88,48 @@ func TestGracefulShutdown(t *testing.T) {
 	})
 }
 
+// TestDrainStopsAccepting covers the moment a shutdown begins: both listeners
+// stop taking connections, so a client arriving during the drain is turned away
+// rather than served by a process on its way out. A drain that only waits,
+// with its accept loop still running, keeps taking work while it tries to finish.
+func TestDrainStopsAccepting(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		upstream, entered, release := blockingUpstream(t, true)
+		letGo := sync.OnceFunc(func() { close(release) })
+		defer letGo()
+		dir := t.TempDir()
+		writeDoc(t, dir, "a.graphql", allowedDoc)
+		s := serve(t, tgt, "-upstream.url", upstream, "-allowlist", dir,
+			"-server.shutdown-timeout", "10s")
+
+		// A request in flight, so the drain has something to wait for.
+		answered := postAsync(s.address, docAllowed)
+		<-entered
+		s.interrupt()
+
+		// Both addresses stop taking connections, and promptly.
+		for _, address := range []string{s.address, s.control} {
+			deadline := time.Now().Add(3 * time.Second)
+			for accepting(address) {
+				if time.Now().After(deadline) {
+					t.Errorf("expected %s to stop accepting during the drain", address)
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+
+		// What was in flight is still finished.
+		letGo()
+		if code := <-answered; code != http.StatusOK {
+			t.Errorf("expected the request in flight answered; received %d", code)
+		}
+		if code := s.wait(t); code != 0 {
+			t.Errorf("expected a clean stop; received %d: %s", code, s.log)
+		}
+	})
+}
+
 // TestShutdownTimeout asserts that the wait is bounded and reported:
 // past -server.shutdown-timeout whatever is still running is abandoned,
 // and the command says so by the code it exits with.
@@ -101,13 +143,25 @@ func TestShutdownTimeout(t *testing.T) {
 		s := serve(t, tgt, "-upstream.url", upstream, "-allowlist", dir,
 			"-server.shutdown-timeout", "100ms")
 
-		_ = postAsync(s.address, docAllowed)
+		answered := postAsync(s.address, docAllowed)
 		<-entered
+		start := time.Now()
 		s.interrupt()
 
 		if code := s.wait(t); code != 1 {
 			t.Errorf("expected code 1 for an exceeded timeout; received %d: %s",
 				code, s.log)
+		}
+		// The configured timeout is what bounded the wait: 100ms was asked for,
+		// and a wait of its own would be seconds.
+		if took := time.Since(start); took > 2*time.Second {
+			t.Errorf("expected the configured timeout to bound the drain; took %s",
+				took)
+		}
+		// The abandoned client is answered by nothing.
+		// A status synthesized here would be an answer the API never gave.
+		if code := <-answered; code == http.StatusOK {
+			t.Error("expected the abandoned request not to be answered with 200")
 		}
 	})
 }

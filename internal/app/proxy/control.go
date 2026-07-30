@@ -40,9 +40,10 @@ func (c *control) status(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_, _ = fmt.Fprintf(w,
 		`{"documents":%d,"loaded_at":%q,"allowed":%d,"rejected":%d,`+
-			`"malformed":%d,"upstream_errors":%d}`+"\n",
+			`"malformed":%d,"too_large":%d,"ambiguous":%d,"too_deep":%d,`+
+			`"upstream_errors":%d}`+"\n",
 		documents, loadedAt.Format(time.RFC3339), d.allowed, d.rejected,
-		d.malformed, d.upstream)
+		d.malformed, d.tooLarge, d.ambiguous, d.tooDeep, d.upstream)
 }
 
 // reload rereads the allowlist and answers with what it holds afterwards.
@@ -117,10 +118,15 @@ func (c *control) authorized(r *http.Request) bool {
 	if c.token == "" {
 		return true
 	}
-	given, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok {
+	// The scheme is matched without case, as RFC 7235 defines it.
+	// What follows it is the token, which is matched exactly.
+	authorization := r.Header.Get("Authorization")
+	const scheme = "bearer "
+	if len(authorization) < len(scheme) ||
+		!strings.EqualFold(authorization[:len(scheme)], scheme) {
 		return false
 	}
+	given := authorization[len(scheme):]
 	// A constant-time compare, so a wrong token says nothing about the right one.
 	return subtle.ConstantTimeCompare([]byte(given), []byte(c.token)) == 1
 }

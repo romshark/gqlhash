@@ -116,7 +116,7 @@ type components struct {
 
 // build assembles the components and loads the allowlist.
 func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components, error) {
-	options := gqlhash.Options{Ignore: cfg.Ignore}
+	options := gqlhash.Options{Ignore: cfg.Ignore, DepthLimit: cfg.DepthLimit}
 	// The function is checked once here rather than per request: a proxy that
 	// can't hash serves nothing, so it's a start failure and not a nil that
 	// turns up at the first request.
@@ -145,14 +145,21 @@ func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: cfg.Upstream.Timeout,
 		ForceAttemptHTTP2:     cfg.Upstream.HTTP2,
+		// The proxy asks for no encoding of its own. Without this net/http adds
+		// Accept-Encoding: gzip to a request that carried none and gunzips the
+		// answer, so an API compresses what nobody asked for and the client
+		// reads an answer in another envelope than the API sent.
+		// What the client asks for is forwarded, and what the API answers with arrives.
+		DisableCompression: true,
 	}
 	p := newProxy(list, cfg.Upstream.URL, newHash, proxyConfig{
-		options:        options,
-		allowBatch:     cfg.AllowBatch,
-		opaqueErrors:   cfg.OpaqueErrors,
-		logRequests:    cfg.Log.Requests,
-		trustForwarded: cfg.TrustForwarded,
-		maxBody:        cfg.Server.MaxBody,
+		options:         options,
+		upstreamTimeout: cfg.Upstream.Timeout,
+		allowBatch:      cfg.AllowBatch,
+		opaqueErrors:    cfg.OpaqueErrors,
+		logRequests:     cfg.Log.Requests,
+		trustForwarded:  cfg.TrustForwarded,
+		maxBody:         cfg.Server.MaxBody,
 	}, transport, log)
 
 	// The metrics and the control endpoints share an address of their own, so
@@ -181,9 +188,9 @@ func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components
 		if cfg.Upstream.MaxConnLifetime > 0 {
 			// http.Transport has no lifetime of its own, and a connection can't
 			// be closed from under a request that's using it. Closing the idle
-			// ones on an interval is the safe form of the same thing: what's in
-			// flight is left alone, and what isn't gets dialled again, which
-			// resolves the name afresh.
+			// ones on an interval is the safe form of the same thing:
+			// what's in flight is left alone, and what isn't gets dialled again,
+			// which resolves the name afresh.
 			recycle = transport.CloseIdleConnections
 		}
 		mux := http.NewServeMux()
@@ -209,8 +216,8 @@ func (c *components) serve(
 	ctx context.Context, cfg config.Proxy, log zerolog.Logger,
 ) (exitCode int) {
 	// The listener is opened before serving, so a bind failure is reported as
-	// one and the address that's logged is the one in use. With -server.listen :0 that
-	// address is the only way to learn the port.
+	// one and the address that's logged is the one in use.
+	// With -server.listen :0 that address is the only way to learn the port.
 	listener, err := net.Listen("tcp", cfg.Server.Listen)
 	if err != nil {
 		log.Error().Err(err).Str("listen", cfg.Server.Listen).Msg("listening")
@@ -234,7 +241,7 @@ func (c *components) serveOn(
 	go c.recycleConns(ctx)
 
 	// controlAddress is the one in use, which is the only way to learn the port
-	// behind an address ending in :0. It stays empty where the control server is off.
+	// behind an address ending in :0.
 	controlListener, err := net.Listen("tcp", c.control.Addr)
 	if err != nil {
 		log.Error().Err(err).Str("address", c.control.Addr).
@@ -260,6 +267,7 @@ func (c *components) serveOn(
 		Int("documents", list.Len()).
 		Str("hash", config.HashName(cfg.HashFunc)).
 		Str("ignore", config.IgnoreName(cfg.Ignore)).
+		Int("depth_limit", cfg.DepthLimit).
 		Bool("trust_forwarded", cfg.TrustForwarded).
 		// The environment can set any of these, so the effective values are
 		// logged where a deployment can see them.
@@ -269,8 +277,8 @@ func (c *components) serveOn(
 		Str("control", controlAddress)
 	listening.Msg("listening")
 
-	// Both servers are shut down on every way out of here, so a failure of one
-	// doesn't leave the other holding a listener.
+	// Both servers are shut down on every way out of here,
+	// so a failure of one doesn't leave the other holding a listener.
 	var failed bool
 	select {
 	case err := <-errServe:
@@ -305,8 +313,8 @@ func (c *components) serveOn(
 // recycleConns retires idle upstream connections every
 // -upstream.max-conn-lifetime, and returns at once where that's off.
 //
-// A pool that never turns over pins itself to the backends it first reached: a
-// name standing for several of them is balanced per connection, so one added
+// A pool that never turns over pins itself to the backends it first reached:
+// a name standing for several of them is balanced per connection, so one added
 // later takes no traffic until something lets go. This is that something.
 func (c *components) recycleConns(ctx context.Context) {
 	if c.recycle == nil || c.recycleEvery <= 0 {

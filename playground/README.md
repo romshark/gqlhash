@@ -117,7 +117,7 @@ curl -fsS -X POST localhost:9090/reload
 }
 ```
 
-The log says `allowlist loaded added=1` and the document is allowed. Delete the file, reload again, and it stops being allowed. A file that doesn't parse is skipped with `skipping a document that doesn't parse` and the rest keeps working.
+The log says `allowlist loaded added=1` and the document is allowed. Delete the file, reload again, and it stops being allowed. A file that doesn't parse is skipped with `skipping a document` and the rest keeps working.
 
 ### A query the schema doesn't have
 
@@ -174,4 +174,4 @@ Stop the stack and restart it with `-ignore=inputs` added to the proxy command i
 | [api](api) | the sample GraphQL API, a module of its own so its dependency stays out of gqlhash |
 | [Dockerfile](Dockerfile) | builds `gqlhash-proxy` from the working tree, not from a release |
 
-See the [Proxy section of the README](../README.md#proxy) for what the proxy does and why.
+See the [Proxy section of the README](../README.md#usage-proxy) for what the proxy does and why.

@@ -28,7 +28,9 @@ type Request struct {
 	// IsGET selects the query string over the body as the source of the document.
 	IsGET bool
 
-	// RawQuery is the query string, unparsed. Read only when IsGET.
+	// RawQuery is the query string, unparsed. A GET reads its document from it;
+	// every other method is refused for naming a query parameter at all,
+	// so an underlay fills this whatever the method.
 	RawQuery string
 
 	// BodyIsDocument is what the content type said: the body is the document
@@ -39,6 +41,10 @@ type Request struct {
 	// Body is the whole request body, already read. It's read and not kept, so
 	// an underlay owning the bytes can pass its own.
 	Body []byte
+
+	// HasBody is whether a body came with the request at all,
+	// which only a GET is asked about: one carrying a body names its document twice.
+	HasBody bool
 }
 
 // Verdict is what the proxy decided.
@@ -51,10 +57,20 @@ const (
 	VerdictRejected
 	// VerdictMalformed answers alone: the request carried no document to look up.
 	VerdictMalformed
+	// VerdictTooLarge answers alone: the request is past -server.max-body,
+	// so nothing was read of it. It's a verdict of its own because it says
+	// something else than a malformed request does, see decisionTooLarge.
+	VerdictTooLarge
+	// VerdictAmbiguous answers alone:
+	// the request names its document more than once, see decisionAmbiguous.
+	VerdictAmbiguous
+	// VerdictTooDeep answers alone: the document nests past the depth limit,
+	// see decisionTooDeep.
+	VerdictTooDeep
 )
 
-// Answer is what to write when a request isn't forwarded. It has already been
-// through -opaque-errors, so an underlay writes it as it is.
+// Answer is what to write when a request isn't forwarded.
+// It has already been through -opaque-errors, so an underlay writes it as it is.
 type Answer struct {
 	Code               int
 	Message, Extension string
@@ -74,17 +90,28 @@ func (c *Core) Decide(req Request) (Verdict, Answer) {
 	}()
 
 	if !req.IsGET && int64(len(req.Body)) > p.maxBody {
-		p.counters.malformed.Add(1)
-		return VerdictMalformed, c.answer(http.StatusRequestEntityTooLarge,
+		p.counters.tooLarge.Add(1)
+		return VerdictTooLarge, c.answer(http.StatusRequestEntityTooLarge,
 			"request body too large", "REQUEST_TOO_LARGE")
 	}
 
-	allowed, err := p.decide(st, req.IsGET, req.RawQuery, req.BodyIsDocument, req.Body)
+	allowed, err := p.decide(st, req)
 	switch {
 	case errors.Is(err, errTooLarge):
-		p.counters.malformed.Add(1)
-		return VerdictMalformed, c.answer(http.StatusRequestEntityTooLarge,
+		p.counters.tooLarge.Add(1)
+		return VerdictTooLarge, c.answer(http.StatusRequestEntityTooLarge,
 			"request body too large", "REQUEST_TOO_LARGE")
+	case errors.Is(err, errTooDeep):
+		p.counters.tooDeep.Add(1)
+		return VerdictTooDeep, c.answer(http.StatusForbidden,
+			"operation not allowed", "OPERATION_NOT_ALLOWED")
+	case isAmbiguous(err):
+		p.counters.ambiguous.Add(1)
+		if p.debug {
+			p.log.Debug().Err(err).Msg("rejecting an ambiguous request")
+		}
+		return VerdictAmbiguous, c.answer(http.StatusBadRequest,
+			err.Error(), "BAD_REQUEST")
 	case err != nil:
 		p.counters.malformed.Add(1)
 		if p.debug {
@@ -108,15 +135,18 @@ func (c *Core) answer(code int, message, extension string) Answer {
 	return Answer{Code: code, Message: message, Extension: extension}
 }
 
-// ReadError is the answer for a request an underlay couldn't read at all. It
-// counts as malformed, the same as a body the decision couldn't parse.
-func (c *Core) ReadError(tooLarge bool) Answer {
-	c.p.counters.malformed.Add(1)
+// ReadError is the answer for a request an underlay couldn't read at all,
+// and the verdict to time it as: one refused for its size counts as that,
+// the rest as malformed, the same as a body the decision couldn't parse.
+func (c *Core) ReadError(tooLarge bool) (Verdict, Answer) {
 	if tooLarge {
-		return c.answer(http.StatusRequestEntityTooLarge,
+		c.p.counters.tooLarge.Add(1)
+		return VerdictTooLarge, c.answer(http.StatusRequestEntityTooLarge,
 			"request body too large", "REQUEST_TOO_LARGE")
 	}
-	return c.answer(http.StatusBadRequest, "malformed request", "BAD_REQUEST")
+	c.p.counters.malformed.Add(1)
+	return VerdictMalformed, c.answer(http.StatusBadRequest,
+		"malformed request", "BAD_REQUEST")
 }
 
 // Observe records how long a request took. start is when it arrived.
@@ -126,6 +156,12 @@ func (c *Core) Observe(v Verdict, start time.Time) {
 		c.p.metrics.Observe(decisionAllowed, start)
 	case VerdictRejected:
 		c.p.metrics.Observe(decisionRejected, start)
+	case VerdictTooLarge:
+		c.p.metrics.Observe(decisionTooLarge, start)
+	case VerdictAmbiguous:
+		c.p.metrics.Observe(decisionAmbiguous, start)
+	case VerdictTooDeep:
+		c.p.metrics.Observe(decisionTooDeep, start)
 	default:
 		c.p.metrics.Observe(decisionMalformed, start)
 	}
