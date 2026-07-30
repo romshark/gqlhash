@@ -245,3 +245,265 @@ func TestAllowlistStartupMatchesReload(t *testing.T) {
 		}
 	})
 }
+
+// TestAllowlistRootShapes covers what -allowlist may name.
+//
+// The symlinked root is the one that matters: a deploy swaps an allowlist
+// atomically by pointing a link at a new directory, and a walk that lstats its
+// root sees the link rather than the directory, loads nothing and rejects every
+// request. It fails closed, which is the safe direction, but it fails — and an
+// implementation that listed the directory instead would serve v1 and then v2
+// where this served neither, which is the unsafe direction,
+// and pass a suite that never looked.
+func TestAllowlistRootShapes(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		base := t.TempDir()
+		v1, v2 := filepath.Join(base, "v1"), filepath.Join(base, "v2")
+		writeDocAt(t, v1, "a.graphql", allowedDoc)
+		writeDocAt(t, v2, "a.graphql", rejectedText)
+		current := filepath.Join(base, "current")
+		if err := os.Symlink(v1, current); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+
+		api := newAPI(t)
+		s := serve(t, tgt, "-upstream.url", api.URL+"/graphql",
+			"-allowlist", current)
+
+		if code, answer := post(t, s, docAllowed); code != http.StatusOK {
+			t.Fatalf("expected the linked directory served; received %d: %s",
+				code, answer)
+		}
+
+		// The atomic swap a deploy does: a new link moved over the old one.
+		// The proxy is told to reload, and what it serves is what the link now points at.
+		tmp := filepath.Join(base, "tmp")
+		if err := os.Symlink(v2, tmp); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, current); err != nil {
+			t.Fatal(err)
+		}
+		code, body := control(t, s, http.MethodPost, "/reload", "")
+		if code != http.StatusOK {
+			t.Fatalf("reload: %d: %s", code, body)
+		}
+		if answer := reloadAnswer(t, body); answer.Documents.Total != 1 {
+			t.Fatalf("expected the new directory loaded; received %s", body)
+		}
+		if code, _ := post(t, s, docAllowed); code != http.StatusForbidden {
+			t.Errorf("expected the old document refused after the swap; received %d",
+				code)
+		}
+		if code, _ := post(t, s, docRejected); code != http.StatusOK {
+			t.Errorf("expected the new document served after the swap; received %d",
+				code)
+		}
+	})
+}
+
+// TestAllowlistRootIsAFile covers -allowlist naming one document rather than a
+// directory of them. It loads that document: an implementation that required a
+// directory would refuse what this accepts,
+// and a one-document allowlist is a reasonable thing to deploy.
+func TestAllowlistRootIsAFile(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		dir := t.TempDir()
+		writeDoc(t, dir, "a.graphql", allowedDoc)
+		api := newAPI(t)
+		s := serve(t, tgt, "-upstream.url", api.URL+"/graphql",
+			"-allowlist", filepath.Join(dir, "a.graphql"))
+
+		if code, answer := post(t, s, docAllowed); code != http.StatusOK {
+			t.Errorf("expected the named document served; received %d: %s",
+				code, answer)
+		}
+		if code, _ := post(t, s, docRejected); code != http.StatusForbidden {
+			t.Errorf("expected everything else refused; received %d", code)
+		}
+	})
+}
+
+// TestAllowlistFragmentPerFile covers the rule that one file is one document.
+//
+// A fragment in one file and the query using it in another are two documents,
+// not one source set: the fragment is never used and the query's spread is
+// unknown, so with a schema present both are skipped and the request is
+// refused. Pooling the directory — a plausible reading of "a directory of documents" —
+// would serve it, and would change the hash of every document that uses a fragment.
+func TestAllowlistFragmentPerFile(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		dir := t.TempDir()
+		writeDoc(t, dir, "fragment.graphql", "fragment F on User { name }")
+		writeDoc(t, dir, "query.graphql",
+			"query GetUser { user(id: 1) { ...F } }")
+		writeDoc(t, dir, "schema.graphqls",
+			"type Query { user(id: Int!): User }\ntype User { name: String }")
+
+		api := newAPI(t)
+		s := serve(t, tgt, "-upstream.url", api.URL+"/graphql", "-allowlist", dir)
+
+		code, body := control(t, s, http.MethodPost, "/reload", "")
+		if code != http.StatusOK {
+			t.Fatalf("reload: %d: %s", code, body)
+		}
+		answer := reloadAnswer(t, body)
+		if answer.Documents.Total != 0 {
+			t.Errorf("expected neither loaded; received %s", body)
+		}
+		if answer.Skipped.Total != 2 {
+			t.Errorf("expected both skipped; received %s", body)
+		}
+
+		// And the request that would have needed them pooled is refused.
+		split, err := jsonRequest("query GetUser { user(id: 1) { ...F } }\n" +
+			"fragment F on User { name }")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code, _ := post(t, s, split); code != http.StatusForbidden {
+			t.Errorf("expected it refused; received %d", code)
+		}
+	})
+}
+
+// TestAllowlistSchemaSeveralFiles covers the generated layout, where a schema
+// is split across files. They're read as one schema: loading each on its own
+// leaves both invalid, which sets the schema error and — per the ruled
+// fail-open behaviour — serves every document unchecked. That's the schema
+// check silently disabling itself for the most ordinary layout there is.
+func TestAllowlistSchemaSeveralFiles(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		dir := t.TempDir()
+		// Neither file is a valid schema alone: one names a type the other
+		// defines.
+		writeDoc(t, dir, "q.graphqls", "type Query { user(id: Int!): User }")
+		writeDoc(t, dir, "u.graphqls", "type User { name: String }")
+		writeDoc(t, dir, "a.graphql", allowedDoc)
+		// A document the schema refuses, which is only refused if the schema
+		// parsed at all.
+		writeDoc(t, dir, "b.graphql", "query B { user(id: 1) { nosuchfield } }")
+
+		api := newAPI(t)
+		s := serve(t, tgt, "-upstream.url", api.URL+"/graphql", "-allowlist", dir)
+
+		code, body := control(t, s, http.MethodPost, "/reload", "")
+		if code != http.StatusOK {
+			t.Fatalf("reload: %d: %s", code, body)
+		}
+		answer := reloadAnswer(t, body)
+		if answer.Documents.Total != 1 {
+			t.Errorf("expected only the valid document loaded; received %s", body)
+		}
+		if answer.Skipped.Total != 1 {
+			t.Errorf("expected the one the schema refuses skipped; received %s",
+				body)
+		}
+		if code, _ := post(t, s, docAllowed); code != http.StatusOK {
+			t.Errorf("expected the valid document served; received %d", code)
+		}
+	})
+}
+
+// TestAllowlistEmptySchemaFile covers a .graphqls holding nothing.
+//
+// It's a schema that defines no type, not the absence of a schema: every
+// document asks for something it doesn't have, so every document is skipped and
+// every request refused. Treating a blank file as "no schema here" would be
+// fail-open where this is fail-closed, and a generator writing an empty file is
+// exactly the accident that wants catching.
+func TestAllowlistEmptySchemaFile(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		dir := t.TempDir()
+		writeDoc(t, dir, "schema.graphqls", "")
+		writeDoc(t, dir, "a.graphql", allowedDoc)
+
+		api := newAPI(t)
+		s := serve(t, tgt, "-upstream.url", api.URL+"/graphql", "-allowlist", dir)
+
+		code, body := control(t, s, http.MethodPost, "/reload", "")
+		if code != http.StatusOK {
+			t.Fatalf("reload: %d: %s", code, body)
+		}
+		if answer := reloadAnswer(t, body); answer.Documents.Total != 0 ||
+			answer.Skipped.Total != 1 {
+			t.Errorf("expected the document skipped against an empty schema;"+
+				" received %s", body)
+		}
+		if code, _ := post(t, s, docAllowed); code != http.StatusForbidden {
+			t.Errorf("expected every request refused; received %d", code)
+		}
+	})
+}
+
+// TestAllowlistDocumentByteNoise covers what a generator or an editor leaves in
+// a file: a UTF-8 BOM, and CRLF line endings. Both load, and both match the
+// plain-LF document a client sends — the hash is over the canonical form,
+// so what differs here is what a reader has to get past to reach it.
+func TestAllowlistDocumentByteNoise(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		e := shared(t, tgt)
+
+		// The BOM is written as an escape: a literal one in a Go source file
+		// is a byte order mark in the source file, which the compiler refuses.
+		const bom = "\ufeff"
+
+		for _, tc := range []struct{ name, content string }{
+			{"a UTF-8 BOM", bom + allowedDoc},
+			{"CRLF line endings", strings.ReplaceAll(allowedDoc, "\n", "\r\n")},
+			{"a BOM and CRLF", bom +
+				strings.ReplaceAll(allowedDoc, "\n", "\r\n")},
+			{"a trailing newline", allowedDoc + "\n"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				e.allow(t, tc.content)
+				if code, answer := post(t, e.server, docAllowed); code !=
+					http.StatusOK {
+					t.Errorf("expected the plain document to match; received %d: %s",
+						code, answer)
+				}
+			})
+		}
+	})
+}
+
+// TestAllowlistSymlinkedSubdirectory covers a symlink to a directory *inside*
+// the allowlist, as against the symlinked root TestAllowlistRootShapes covers.
+//
+// The root is resolved because an operator named it; a link found while walking
+// is not followed, because following those invites a loop and nothing needs
+// them. A generator that emits one gets no error and no documents from it,
+// so the rule is worth stating rather than leaving to whichever walk an
+// implementation reaches for.
+func TestAllowlistSymlinkedSubdirectory(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		dir := t.TempDir()
+		writeDoc(t, dir, "a.graphql", allowedDoc)
+
+		// A directory of documents outside the allowlist, linked into it.
+		outside := t.TempDir()
+		writeDoc(t, outside, "b.graphql", rejectedText)
+		if err := os.Symlink(outside, filepath.Join(dir, "linked")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+
+		api := newAPI(t)
+		s := serve(t, tgt, "-upstream.url", api.URL+"/graphql", "-allowlist", dir)
+
+		code, body := control(t, s, http.MethodPost, "/reload", "")
+		if code != http.StatusOK {
+			t.Fatalf("reload: %d: %s", code, body)
+		}
+		answer := reloadAnswer(t, body)
+		if answer.Documents.Total != 1 {
+			t.Errorf("expected only the document beside the link; received %s", body)
+		}
+		if answer.Skipped.Total != 0 {
+			t.Errorf("expected an unwalked link to be no skip; received %s", body)
+		}
+		// The document behind the link is not on the list.
+		if code, _ := post(t, s, docRejected); code != http.StatusForbidden {
+			t.Errorf("expected the linked document refused; received %d", code)
+		}
+	})
+}

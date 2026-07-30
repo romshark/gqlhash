@@ -22,7 +22,8 @@ import (
 // It runs on a server of its own: what's asserted is the count,
 // which every request before it would move.
 func TestDecisionsAreCounted(t *testing.T) {
-	// The depth limit both commands are built with, and a document past it.
+	// The default of -depth-limit, which this run doesn't set,
+	// and a document past it.
 	const limit = 128
 	tooDeep := "{" + strings.Repeat("f{", limit) + "f" + strings.Repeat("}", limit+1)
 

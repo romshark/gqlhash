@@ -1,5 +1,12 @@
 # gqlhash-proxy-fhttp
 
+> [!WARNING]
+> **`gqlhash-proxy-fhttp` is experimental and is not for production use.**
+> Run `gqlhash-proxy` in front of anything that matters.
+>
+> `gqlhash-proxy-fhttp` exists only as a pure performance experiment and isn't
+> recommended to be used for production.
+
 Two commands, same flags, same decision, different HTTP implementation:
 
 | | |
@@ -49,7 +56,7 @@ In fasthttp v1.73.0, `RequestCtx.Done()` closes only on server shutdown, never o
 - net/http cancels the upstream request when the client goes away. fasthttp cannot, so a client that connects, sends and hangs up still costs the upstream a full round trip. In front of an API, that is an amplification path.
 - The "client left before the answer" branch has no equivalent. Abandoned requests count as upstream errors.
 
-This is the disconnect signal specifically, not request-level control in general: fasthttp has `DoTimeout` and `DoDeadline`, and the forward is issued through `DoTimeout` under `-upstream.timeout`, as it is under net/http. A forward that outlives its budget is cut off either way. What cannot be cut off early is one whose client has already left.
+This is the disconnect signal specifically, not request-level control in general: fasthttp has `DoTimeout` and `DoDeadline`, and the forward is issued through `DoTimeout` under `-upstream.timeout`, as it is under net/http. A forward that outlives its budget is cut off either way — except an event stream, which has no budget to outlive under either command, see *Event streams* below. What cannot be cut off early is one whose client has already left.
 
 ### Framing is normalized
 
@@ -84,6 +91,12 @@ Neither command asks for an encoding of its own any more, and neither decodes an
 
 fasthttp reads the whole answer before writing it, so trailers of the API arrive as headers and `Te: trailers` is dropped. `gqlhash-proxy` relays both. No GraphQL API sends trailers today; relaying them here means moving the forward onto response streaming, which is the buffered copy this command exists for.
 
+**A trailer on the request is the same difference pointing at your API, and it is the sharpest reason not to deploy this build.** A client sending `Transfer-Encoding: chunked` with `X-Hop` after the last chunk gets it delivered to the API as an ordinary header. `gqlhash-proxy` keeps it a trailer, which Go puts in `Request.Trailer` and never in `Request.Header`, so nothing reading headers can be fooled.
+
+It cannot be closed here: `parseTrailer` appends every trailer field to the ordinary header set before the handler runs, declared in `Trailer:` or not, so afterwards nothing can tell one from a header sent in the head. Stripping the declared names closes only the case an attacker would not use. The one sound fix is refusing chunked request bodies outright, on both commands, which costs every client that streams a POST body — including on the command that was never affected.
+
+So: never run this build in front of an API that trusts a header its ingress is supposed to set (`X-Auth-Request-User`, `X-Forwarded-*` beyond what the proxy itself writes, anything an oauth2 sidecar injects). `TestRequestTrailerDoesNotChangeTheDecision` pins the part both commands keep.
+
 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` are honored by `gqlhash-proxy` and ignored by the fasthttp client. Deploy this command where the API is reached directly.
 
 ### HTTP/2
@@ -101,11 +114,27 @@ Unset, the flag defaults to true and is forced off, so the startup log reports w
 
 ### Protocol upgrades
 
-Not forwarded, under either command: the proxy reads and hashes every request body.
+Not forwarded, under either command. `Upgrade` and the `Connection` token naming it are dropped with the other hop-by-hop headers on the way out, so the API never learns an upgrade was offered and the request is decided like any other. An upstream that answers `101` anyway is a `502` and an `upstream_errors_total`: nothing offered an upgrade, so relaying it would hand the client a channel to the API on the strength of that answer alone — one hashed document buying an unhashed tunnel.
+
+`gqlhash-proxy-fhttp` had `Upgrade` in its hop-by-hop list from the start, so no offer ever left it; what it did do was relay an unasked-for `101`, which is the same rule from the other side.
 
 ### Buffered bodies
 
 fasthttp reads the whole body before the handler runs, so `-server.max-body` is a memory bound rather than a limit applied to a stream. The proxy buffers every body to hash it under either command, so the bound is the same size either way. Bodies past it are refused before the handler; `ErrorHandler` answers with the same 413 and error envelope `gqlhash-proxy` gives.
+
+### An informational answer from the API
+
+`gqlhash-proxy` relays a `1xx` — a `103 Early Hints`, say — and goes on to read the answer behind it. The fasthttp client reads the `1xx` **as** the answer and stops, so the client is left with a hint and no final answer, and a stream behind one is never seen as a stream.
+
+The client cannot be made to read past it from here: the connection belongs to it. No GraphQL API sends early hints today, and `TestStreamAfterAnEarlyHint` pins what both keep — a hint is never served as a complete answer.
+
+### Event streams
+
+An answer that is `text/event-stream` is the one this command does not buffer, so GraphQL over SSE works under both. It costs a second `HostClient` with `StreamResponseBody` and a connection pool of its own, which only a request naming `text/event-stream` in `Accept` draws from; everything else takes the buffered path unchanged.
+
+Two things follow from fasthttp having no per-request deadline that stops at the headers. The streaming client carries no read deadline at all, because fasthttp computes one before reading the headers and it covers the body too — so the wait for the headers is bounded by a timer in `server.within` instead, and a forward that outlives it is *abandoned* rather than cancelled: nothing interrupts a fasthttp client mid-request, so the 504 is answered without it and its request and answer are released when the goroutine ends. And `-server.write-timeout` is replaced per request through the `HeaderReceived` hook, which takes a positive duration only, so "not bounded" is spelled as a bound no process outlives.
+
+The rule both commands keep: an answer whose `Content-Type` is `text/event-stream` is relayed as it arrives, and the deadlines that bound an exchange don't apply to it — `-upstream.timeout` still bounds the wait for the answer's headers, but not the stream, and `-server.write-timeout` doesn't reach it at all. What the client asks for decides how the forward is carried, since an underlay must choose before there is an answer to look at; what the API answers decides how it's relayed, so a client that asks for a stream and receives JSON gets an ordinary, bounded exchange. A stream is timed to its headers rather than to its end, so an hour-long subscription isn't an hour of proxy latency in `request_duration_seconds`.
 
 ## HTTP/1.1 conformance
 

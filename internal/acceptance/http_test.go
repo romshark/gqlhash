@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -62,8 +63,8 @@ func TestMethods(t *testing.T) {
 }
 
 // TestRequestContentTypes covers what the content type decides, which is where
-// the document is and nothing else: only application/graphql makes the body the
-// document, so every other type, and none at all, is read as a JSON request.
+// the document is and nothing else: only application/graphql makes the body the document,
+// so every other type, and none at all, is read as a JSON request.
 func TestRequestContentTypes(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := shared(t, tgt)
@@ -221,6 +222,119 @@ func TestGETWithBody(t *testing.T) {
 		}
 		if n := e.api.count(); n != 1 {
 			t.Errorf("expected only that one forwarded; received %d", n)
+		}
+	})
+}
+
+// TestGETBodyIsBytesNotFraming covers what "carrying a body" means when the
+// body is empty or its length isn't declared.
+//
+// A body is bytes. An empty one names no document, so it's no second place one
+// could be and the request is decided on its query string; bytes are,
+// whatever framing declared them. The two shapes here can't be reached through
+// [http.Request], which always declares a length, so they're written raw — and
+// they're where the two commands used to disagree,
+// one reading a framing and the other the bytes.
+func TestGETBodyIsBytesNotFraming(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
+		allowed := "query=" + url.QueryEscape(allowedText)
+
+		for _, tc := range []struct {
+			name    string
+			request string
+			status  string
+		}{
+			{
+				// No bytes under a length of zero.
+				name: "a declared length of zero",
+				request: "GET /graphql?" + allowed + " HTTP/1.1\r\nHost: x\r\n" +
+					"Content-Length: 0\r\n\r\n",
+				status: "HTTP/1.1 200",
+			},
+			{
+				// No bytes under a chunked framing either, which is the shape
+				// net/http counted as a body because its length is unknown.
+				name: "an empty chunked body",
+				request: "GET /graphql?" + allowed + " HTTP/1.1\r\nHost: x\r\n" +
+					"Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+				status: "HTTP/1.1 200",
+			},
+			{
+				// Bytes, so the document is named twice.
+				name: "a chunked body carrying bytes",
+				request: "GET /graphql?" + allowed + " HTTP/1.1\r\nHost: x\r\n" +
+					"Transfer-Encoding: chunked\r\n\r\n2\r\nhi\r\n0\r\n\r\n",
+				status: "HTTP/1.1 400",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				if got := raw(t, e.address, tc.request); !strings.HasPrefix(
+					got, tc.status) {
+					t.Errorf("expected %s; received %q", tc.status, got)
+				}
+			})
+		}
+	})
+}
+
+// TestGETBodyOverMaxBody covers a GET whose body is past -server.max-body.
+//
+// The size bound is checked first, whatever the method, because it's what
+// bounds the work: the proxy never reads a megabyte to conclude that a request
+// was also ambiguous. So it's `too_large` and not `ambiguous`,
+// which matters because `ambiguous` is the series worth an alert —
+// a probe must raise the same one on both commands or it raises it on neither.
+func TestGETBodyOverMaxBody(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		e := newEnv(t, tgt, []string{allowedDoc}, "-server.max-body", "128")
+		allowed := "query=" + url.QueryEscape(allowedText)
+		body := strings.Repeat("x", 2000)
+
+		got := raw(t, e.address, fmt.Sprintf(
+			"GET /graphql?%s HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n%s",
+			allowed, len(body), body))
+		if !strings.HasPrefix(got, "HTTP/1.1 413") {
+			t.Errorf("expected 413; received %q: %s", got, e.log)
+		}
+
+		_, exposition := control(t, e.server, http.MethodGet, "/metrics", "")
+		if v := metricValue(t, exposition,
+			`gqlhash_proxy_requests_total{decision="too_large"}`); v != 1 {
+			t.Errorf("expected it counted too_large; received %v", v)
+		}
+		if v := metricValue(t, exposition,
+			`gqlhash_proxy_requests_total{decision="ambiguous"}`); v != 0 {
+			t.Errorf("expected nothing counted ambiguous; received %v", v)
+		}
+		if n := e.api.count(); n != 0 {
+			t.Errorf("expected nothing forwarded; the API saw %d", n)
+		}
+	})
+}
+
+// TestMaxBodyDoesNotBoundAGETQueryString covers the other half of that flag:
+// it bounds bodies, and a GET carries its document in the request line,
+// which -server.max-body has never bounded. What bounds that is the header limit of
+// the underlay, which differs between the two on purpose.
+func TestMaxBodyDoesNotBoundAGETQueryString(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		// A document far past the limit set below, so an implementation
+		// applying -server.max-body to the query string would refuse it.
+		long := "query GetUser {\n  user(id: 1) {\n    name\n" +
+			strings.Repeat("    alias: name\n", 50) + "  }\n}"
+		e := newEnv(t, tgt, []string{long}, "-server.max-body", "128")
+
+		if len(long) < 512 {
+			t.Fatalf("expected a document past the limit; it is %d bytes", len(long))
+		}
+		code, answer := get(t, e.server, "query="+url.QueryEscape(long))
+		if code != http.StatusOK {
+			t.Errorf("expected it served; received %d: %s", code, answer)
+		}
+		if n := e.api.count(); n != 1 {
+			t.Errorf("expected it forwarded; the API saw %d", n)
 		}
 	})
 }

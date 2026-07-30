@@ -185,9 +185,11 @@ func (s *server) wait(t *testing.T) int {
 
 // stop interrupts the process and waits for it.
 //
-// The client's idle connections go first: a graceful shutdown waits for the
-// connections still open, and one this test process is holding open would make
-// a stop look slow for no reason of the server's.
+// The client's idle connections go first, so that a stop isn't racing this
+// process's own connection pool: a pooled connection is one the client may
+// still write a request onto, and a request that arrives during the drain is
+// one the server is entitled to wait for. An idle connection by itself doesn't
+// delay anything — see TestIdleConnectionDoesNotDelayTheDrain.
 func (s *server) stop(t *testing.T) int {
 	t.Helper()
 	http.DefaultClient.CloseIdleConnections()
@@ -209,8 +211,8 @@ func exitCode(err error) int {
 }
 
 // run executes tgt to completion and answers what it exited with and wrote.
-// Nothing waits for a listener and nothing is retried: a start that fails is the
-// subject here rather than an accident.
+// Nothing waits for a listener and nothing is retried:
+// a start that fails is the subject here rather than an accident.
 func run(t *testing.T, tgt target, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	return runWithEnv(t, tgt, nil, args...)

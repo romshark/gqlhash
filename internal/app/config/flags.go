@@ -388,6 +388,16 @@ func ParseProxyFor(
 		_, _ = fmt.Fprintf(stderr, "-upstream.url %q is no absolute URL\n", *fUpstream)
 		return cfg, 2, false
 	}
+	// The scheme is one of the two a forward goes over. Anything else used to be
+	// accepted and then read as one of them anyway, differently by each underlay:
+	// an ftp:// upstream reached one as a failure and the other as a plain HTTP
+	// request that happened to work.
+	if upstream.Scheme != "http" && upstream.Scheme != "https" {
+		_, _ = fmt.Fprintf(stderr,
+			"-upstream.url %q must name http or https, not %q\n",
+			*fUpstream, upstream.Scheme)
+		return cfg, 2, false
+	}
 	cfg.Upstream.URL = upstream
 
 	// The token has no flag: a process argument is readable by anyone on the host,
@@ -466,8 +476,8 @@ func ParseProxyFor(
 				filepath.Base(name))
 			return cfg, 2, false
 		}
-		// Unset, the default of the flag is true and no h2 is on offer, so what
-		// the run logs stays what the run does.
+		// Unset, the default of the flag is true and no h2 is on offer,
+		// so what the run logs stays what the run does.
 		cfg.Upstream.HTTP2 = false
 	}
 
@@ -482,8 +492,8 @@ func ParseProxyFor(
 			"-upstream.max-idle-conns-per-host must be 1 or more")
 		return cfg, 2, false
 	}
-	// A total below the per-host limit caps it, which reads as the per-host
-	// value having no effect.
+	// A total below the per-host limit caps it,
+	// which reads as the per-host value having no effect.
 	if cfg.Upstream.MaxIdleConns < 0 || (cfg.Upstream.MaxIdleConns > 0 &&
 		cfg.Upstream.MaxIdleConns < cfg.Upstream.MaxIdleConnsPerHost) {
 		_, _ = fmt.Fprintf(stderr, "-upstream.max-idle-conns must be 0 or at "+

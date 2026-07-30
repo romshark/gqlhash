@@ -371,7 +371,8 @@ func TestDepthLimit(t *testing.T) {
 	nested := func(depth int) string {
 		return "{" + strings.Repeat("f{", depth-1) + "f" + strings.Repeat("}", depth)
 	}
-	// The limit both commands are built with. Neither exposes a flag for it.
+	// The default of -depth-limit, which is what a run that doesn't set the
+	// flag applies. TestDepthLimitFlag covers setting it.
 	const limit = 128
 
 	each(t, func(t *testing.T, tgt target) {

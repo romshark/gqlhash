@@ -98,6 +98,22 @@ func TestCLIRejectsArguments(t *testing.T) {
 				with("-upstream.max-idle-conns", "1",
 					"-upstream.max-idle-conns-per-host", "64"),
 				"-upstream.max-idle-conns must be 0 or at least"},
+			{"a read timeout under the header one",
+				with("-server.read-timeout", "1s",
+					"-server.read-header-timeout", "10s"),
+				"must be at least -server.read-header-timeout"},
+
+			// A duration below zero, on each of the four that take one.
+			// Zero leaves a timeout off; a negative one is a value nobody meant,
+			// and accepting it would leave the timeout off just the same.
+			{"a negative read timeout",
+				with("-server.read-timeout", "-1s"), "must be 0 or more"},
+			{"a negative read header timeout",
+				with("-server.read-header-timeout", "-1s"), "must be 0 or more"},
+			{"a negative write timeout",
+				with("-server.write-timeout", "-1s"), "must be 0 or more"},
+			{"a negative idle timeout",
+				with("-server.idle-timeout", "-1s"), "must be 0 or more"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				code, stdout, stderr := run(t, tgt, tc.args...)

@@ -1,7 +1,9 @@
 package acceptance
 
 import (
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,8 +51,11 @@ func postAsync(address, body string) <-chan int {
 		}
 		defer func() { _ = res.Body.Close() }()
 		_, _ = io.Copy(io.Discard, res.Body)
-		// The socket goes with the answer: a connection left idle here is one
-		// a shutdown waits for, which would make a stop look slow.
+		// The socket goes with the answer, so a test that stops the server next
+		// isn't racing its own connection pool. An idle connection wouldn't
+		// delay the drain — TestIdleConnectionDoesNotDelayTheDrain pins that —
+		// but a pooled one this process may still write to is a request in
+		// flight as far as the proxy knows.
 		defer client.CloseIdleConnections()
 		answered <- res.StatusCode
 	}()
@@ -152,10 +157,11 @@ func TestShutdownTimeout(t *testing.T) {
 			t.Errorf("expected code 1 for an exceeded timeout; received %d: %s",
 				code, s.log)
 		}
-		// The configured timeout is what bounded the wait: 100ms was asked for,
-		// and a wait of its own would be seconds.
-		if took := time.Since(start); took > 2*time.Second {
-			t.Errorf("expected the configured timeout to bound the drain; took %s",
+		// The configured timeout is what bounded the wait. 2s would have let
+		// any hardwired sub-2s drain pass, which is most of them; 100ms was asked for,
+		// so the bound has to be near it to mean anything.
+		if took := time.Since(start); took > 700*time.Millisecond {
+			t.Errorf("expected the configured 100ms to bound the drain; took %s",
 				took)
 		}
 		// The abandoned client is answered by nothing.
@@ -213,9 +219,9 @@ func TestSecondSignalStopsAtOnce(t *testing.T) {
 		_ = postAsync(s.address, docAllowed)
 		<-entered
 		s.interrupt()
-		// The drain restores the default handling of the signal, which the
-		// second one below needs: sent in the same instant it would still reach
-		// the handler that started the drain and do nothing.
+		// The drain restores the default handling of the signal,
+		// which the second one below needs: sent in the same instant it would
+		// still reach the handler that started the drain and do nothing.
 		time.Sleep(250 * time.Millisecond)
 		if !s.running() {
 			t.Fatal("the proxy stopped before the drain began")
@@ -230,6 +236,158 @@ func TestSecondSignalStopsAtOnce(t *testing.T) {
 		// Killed by the default handling, which is no clean stop.
 		if code == 0 {
 			t.Errorf("expected it not to report a clean stop; received %d", code)
+		}
+	})
+}
+
+// TestShutdownTimeoutIsHonored covers the configured value being the one that
+// bounds the drain, rather than some fixed wait that happens to be shorter.
+//
+// Two runs of the same request, one with a short timeout and one with a long one:
+// the short one gives up and the long one waits. An implementation with a
+// hardwired drain passes either test alone and neither of them together.
+func TestShutdownTimeoutIsHonored(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		// The upstream is held for about a second, so a 200ms drain has to
+		// abandon the request and a 5s drain has to outlast it.
+		for _, tc := range []struct {
+			name    string
+			timeout string
+			code    int
+			atLeast time.Duration
+			atMost  time.Duration
+		}{
+			{"a drain shorter than the request", "200ms", 1, 0, 2 * time.Second},
+			{"a drain longer than it", "5s", 0, 500 * time.Millisecond,
+				4 * time.Second},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				entered := make(chan struct{})
+				var once sync.Once
+				upstream := httptest.NewServer(http.HandlerFunc(
+					func(w http.ResponseWriter, _ *http.Request) {
+						once.Do(func() { close(entered) })
+						time.Sleep(time.Second)
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = io.WriteString(w, upstreamAnswer)
+					}))
+				defer upstream.Close()
+
+				dir := t.TempDir()
+				writeDoc(t, dir, "a.graphql", allowedDoc)
+				s := serve(t, tgt, "-upstream.url", upstream.URL+"/graphql",
+					"-allowlist", dir, "-server.shutdown-timeout", tc.timeout)
+
+				answered := postAsync(s.address, docAllowed)
+				<-entered
+				start := time.Now()
+				s.interrupt()
+				code := s.wait(t)
+				took := time.Since(start)
+
+				if code != tc.code {
+					t.Errorf("expected exit %d; received %d: %s",
+						tc.code, code, s.log)
+				}
+				if took < tc.atLeast {
+					t.Errorf("expected it to wait at least %s; took %s",
+						tc.atLeast, took)
+				}
+				if took > tc.atMost {
+					t.Errorf("expected it bounded by %s; took %s",
+						tc.atMost, took)
+				}
+				// A drain that outlasted the request answered it.
+				if got := <-answered; tc.code == 0 && got != http.StatusOK {
+					t.Errorf("expected the request in flight answered;"+
+						" received %d", got)
+				}
+			})
+		}
+	})
+}
+
+// TestShutdownTimeoutZeroAbandonsAtOnce covers the value every sibling duration
+// flag reads as "no bound".
+//
+// Here it means the opposite: nothing is waited for, so a request in flight is
+// abandoned the moment the signal arrives and the command exits 1. That's worth
+// pinning precisely because the help text of every other duration invites the
+// other reading, and an implementation that took 0 for "wait forever" would
+// hang on every deploy instead of dropping one request.
+func TestShutdownTimeoutZeroAbandonsAtOnce(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		upstream, entered, release := blockingUpstream(t, false)
+		defer close(release)
+
+		dir := t.TempDir()
+		writeDoc(t, dir, "a.graphql", allowedDoc)
+		s := serve(t, tgt, "-upstream.url", upstream, "-allowlist", dir,
+			"-server.shutdown-timeout", "0")
+
+		answered := postAsync(s.address, docAllowed)
+		<-entered
+		start := time.Now()
+		s.interrupt()
+
+		if code := s.wait(t); code != 1 {
+			t.Errorf("expected exit 1 for a request abandoned; received %d: %s",
+				code, s.log)
+		}
+		if took := time.Since(start); took > time.Second {
+			t.Errorf("expected it to give up at once; took %s", took)
+		}
+		if code := <-answered; code == http.StatusOK {
+			t.Error("expected the abandoned request not to be answered with 200")
+		}
+	})
+}
+
+// TestIdleConnectionDoesNotDelayTheDrain covers a keep-alive connection that is
+// open and carrying nothing when the signal arrives.
+//
+// A shutdown waits for the requests in flight, and an idle connection is not
+// one. An implementation that waited for every open connection would sit out
+// the whole -server.shutdown-timeout on every deploy and then exit 1,
+// which reads as a proxy that can't be stopped cleanly.
+func TestIdleConnectionDoesNotDelayTheDrain(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		api := newAPI(t)
+		dir := t.TempDir()
+		writeDoc(t, dir, "a.graphql", allowedDoc)
+		s := serve(t, tgt, "-upstream.url", api.URL+"/graphql", "-allowlist", dir,
+			"-server.shutdown-timeout", "10s")
+
+		// A connection that has served a request and is now idle,
+		// held open by this test for the whole shutdown.
+		conn, err := net.DialTimeout("tcp", s.address, 3*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close() }()
+		if err := conn.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fmt.Fprintf(conn,
+			"POST /graphql HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"+
+				"Content-Length: %d\r\n\r\n%s", len(docAllowed), docAllowed,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if status, _ := readAnswer(t, conn); !strings.HasPrefix(status, "HTTP/1.1 200") {
+			t.Fatalf("expected the request served; received %q", status)
+		}
+
+		start := time.Now()
+		s.interrupt()
+		if code := s.wait(t); code != 0 {
+			t.Errorf("expected a clean stop; received %d: %s", code, s.log)
+		}
+		// Well inside the 10s drain it was given: an implementation waiting for
+		// the connection would have taken all of it.
+		if took := time.Since(start); took > 3*time.Second {
+			t.Errorf("expected the idle connection not to delay the drain;"+
+				" the stop took %s", took)
 		}
 	})
 }

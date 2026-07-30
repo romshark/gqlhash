@@ -1,5 +1,12 @@
 # gqlhash-proxy performance
 
+> [!WARNING]
+> **`gqlhash-proxy-fhttp` is experimental and is not for production use.**
+> Run `gqlhash-proxy` in front of anything that matters.
+>
+> `gqlhash-proxy-fhttp` exists only as a pure performance experiment and isn't
+> recommended to be used for production.
+
 Where the CPU goes, measured on the running proxy rather than in a benchmark. Settings that move it: [TUNING_GQLHASH_PROXY.md](TUNING_GQLHASH_PROXY.md).
 
 ## Reproducing

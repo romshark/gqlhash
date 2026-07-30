@@ -204,14 +204,44 @@ func (a *Allowlist) Reload(dir string) (Result, error) {
 }
 
 // scanDir returns the documents and the schema files under dir, sorted.
+//
+// The root is resolved through symlinks first. -allowlist commonly names one:
+// a deploy swaps an allowlist atomically by pointing a link at the new
+// directory (ln -s v2 tmp; mv -T tmp current), and [filepath.WalkDir] lstats
+// its root, so it would see the link rather than the directory it names and
+// walk nothing at all. That's an allowlist holding no document, which rejects
+// every request — a total outage, arrived at silently, on the one deployment
+// shape this is most likely to be run in.
+//
+// What's reported is still the path as it was given. Only the root is resolved,
+// so a swap doesn't rewrite every entry of documents.files,
+// and a symlinked directory *inside* the allowlist is left unwalked as before:
+// following those invites a loop, and nothing needs them.
 func scanDir(dir string) (docs, schemas []string, err error) {
-	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	root := dir
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		root = resolved
+	}
+	// given maps a path under the resolved root back to the argument,
+	// so that what a caller reads is the allowlist it named.
+	given := func(path string) string {
+		if root == dir {
+			return path
+		}
+		rest, ok := strings.CutPrefix(path, root)
+		if !ok {
+			return path
+		}
+		return filepath.Join(dir, rest)
+	}
+
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		name := d.Name()
 		if strings.HasPrefix(name, ".") {
-			if d.IsDir() && path != dir {
+			if d.IsDir() && path != root {
 				return fs.SkipDir
 			}
 			return nil
@@ -221,9 +251,9 @@ func scanDir(dir string) (docs, schemas []string, err error) {
 		}
 		switch {
 		case strings.HasSuffix(name, schemaExt):
-			schemas = append(schemas, path)
+			schemas = append(schemas, given(path))
 		case isDocument(name):
-			docs = append(docs, path)
+			docs = append(docs, given(path))
 		}
 		return nil
 	})

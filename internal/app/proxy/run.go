@@ -292,6 +292,13 @@ func (c *components) serveOn(
 		log.Info().Msg("shutting down")
 	}
 
+	// The streams end before the drain begins to wait. A drain waits for what
+	// is in flight, and a subscription is in flight until its client leaves —
+	// so a proxy carrying one sat out the whole -server.shutdown-timeout and
+	// then reported failure, on every deploy.
+	// An exchange is something to finish; a subscription is something to end.
+	c.proxy.StartDraining()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 	if err := c.control.Shutdown(shutdownCtx); err != nil {
