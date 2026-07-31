@@ -11,6 +11,11 @@
 //
 // Running the generator on the machine it measures understates the proxy however
 // cheap it is; a number worth publishing needs a second machine.
+// Where there isn't one, every run ends with what the proxy,
+// the generator and the upstream each held against the machine underneath.
+// Read a run as the proxy's number only while that balance leaves the machine something:
+// past it they take cores from each other,
+// and -threads too low understates the proxy by as much as the crowding does.
 //
 // The proxy is started with its upstream pool sized to -connections, which isn't
 // the default. See TUNING_GQLHASH_PROXY.md.
@@ -66,15 +71,26 @@ var (
 	upstreamAnswer = fixture("upstream-answer.json")
 )
 
-// wrkThreads is what wrk is asked for. It refuses to run with fewer connections
-// than threads, so the count follows the connections where those are fewer.
-const wrkThreads = 4
+// defaultWrkThreads is what wrk is asked for unless -threads says otherwise.
+//
+// A third of the machine, measured rather than picked: on 24 hardware threads
+// the rejected path rises from ~316,000/s at two wrk threads to ~722,000/s at
+// eight and goes no further, and the fasthttp build from ~1,261,000/s at eight
+// to ~1,358,000/s at ten. Below that the generator is the measurement,
+// above it the two only take cores from each other. Derived from the machine because the
+// count that saturates one won't saturate the next.
+//
+// The forwarded path doesn't move with this at all — the upstream costs more
+// than the generator there, and no thread count buys that back.
+func defaultWrkThreads() int { return max(4, runtime.NumCPU()/3) }
 
 // maxConnections is well past anything a run needs and keeps the derived pool
 // sizes far from overflowing.
 const maxConnections = 1 << 16
 
-func threadsFor(connections int) int { return min(wrkThreads, connections) }
+// threadsFor is what wrk is asked for. It refuses to run with fewer connections
+// than threads, so the count follows the connections where those are fewer.
+func threadsFor(threads, connections int) int { return min(threads, connections) }
 
 // wrkDuration renders d as wrk's parser takes it: an integer and a unit.
 // Go's syntax is the wider of the two — 500ms, 1.5s and 1m30s all parse and none is
@@ -91,10 +107,14 @@ func wrkDuration(d time.Duration) (string, error) {
 }
 
 // checkConnections reports whether wrk will take this many.
-func checkConnections(connections int) error {
-	if connections < wrkThreads {
-		return fmt.Errorf("-connections must be %d or more, received %d",
-			wrkThreads, connections)
+func checkConnections(threads, connections int) error {
+	if threads < 1 {
+		return fmt.Errorf("-threads must be 1 or more, received %d", threads)
+	}
+	if connections < threads {
+		return fmt.Errorf(
+			"-connections must be at least -threads (%d), received %d",
+			threads, connections)
 	}
 	if connections > maxConnections {
 		return fmt.Errorf("-connections must be %d or fewer, received %d",
@@ -108,10 +128,14 @@ func main() {
 		"How long each path is driven, as a whole number of seconds.\n"+
 			"wrk takes no finer unit than that.")
 	connections := flag.Int("connections", 200,
-		"Connections held open, at least "+strconv.Itoa(wrkThreads)+".\n"+
+		"Connections held open, at least -threads.\n"+
 			"Too few measure the connections rather than the proxy: a forward\n"+
 			"takes about a millisecond, so what a run can reach is bounded by\n"+
 			"how many are open. Too many measure the queue in front of it.")
+	threads := flag.Int("threads", defaultWrkThreads(),
+		"Threads wrk drives with, never more than -connections.\n"+
+			"Too few and the generator is the measurement; too many and it\n"+
+			"takes the cores the proxy needs. A run prints what each held.")
 	command := flag.String("command", "gqlhash-proxy",
 		"Which binary under cmd/ to measure. gqlhash-proxy-fhttp is the same\n"+
 			"proxy on fasthttp, see GQLHASH_PROXY_FHTTP.md.")
@@ -123,14 +147,14 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*duration, *connections, *command); err != nil {
+	if err := run(*duration, *threads, *connections, *command); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(duration time.Duration, connections int, command string) error {
-	if err := checkConnections(connections); err != nil {
+func run(duration time.Duration, threads, connections int, command string) error {
+	if err := checkConnections(threads, connections); err != nil {
 		return err
 	}
 	window, err := wrkDuration(duration)
@@ -198,15 +222,19 @@ func run(duration time.Duration, connections int, command string) error {
 		{"rejected, answered by the proxy",
 			filepath.Join(work, "rejected.json"), decisionRejected},
 	} {
-		fmt.Printf("\n=== %s through wrk for %s, %d connections\n",
-			c.label, window, connections)
+		fmt.Printf("\n=== %s through wrk for %s, %d connections, %d wrk threads\n",
+			c.label, window, connections, threadsFor(threads, connections))
 
 		before, err := readDecisions(proxy.control)
 		if err != nil {
 			return err
 		}
 		m := startMeter(proxy.pid())
-		driveErr := drive(target, c.body, window, connections, work)
+		// The harness serves the upstream in this process,
+		// so its own CPU is what the API behind the proxy costs.
+		harness0, harness0OK := processCPU(os.Getpid())
+		generator, driveErr := drive(target, c.body, window, threads, connections, work)
+		harness1, harness1OK := processCPU(os.Getpid())
 		// Finished either way: an abandoned meter leaks its goroutine,
 		// and what it collected before the failure is worth printing.
 		spent := m.finish()
@@ -220,6 +248,17 @@ func run(duration time.Duration, connections int, command string) error {
 		// Divide the cores by the req/s above for the CPU one request costs,
 		// the figure that ports across machines.
 		fmt.Printf("proxy: %s\n", spent)
+
+		// Everything above runs on the one machine, so the proxy is only being
+		// measured while the three of them fit on it. Where they don't,
+		// the number is what the machine had left rather than what the proxy can do.
+		upstream := report{elapsed: spent.elapsed, cpuUnknown: true}
+		if harness0OK && harness1OK {
+			upstream.cpu = time.Duration((harness1 - harness0) * float64(time.Second))
+			upstream.cpuUnknown = false
+		}
+		fmt.Printf("generator: %s\nupstream: %s\n%s\n",
+			cpuLine(generator), cpuLine(upstream), balance(spent, generator, upstream))
 
 		after, err := readDecisions(proxy.control)
 		if err != nil {
@@ -544,29 +583,41 @@ func post(target, body string) (int, error) {
 	return res.StatusCode, nil
 }
 
-// drive runs wrk against target and lets it write to the terminal.
+// drive runs wrk against target, lets it write to the terminal, and reports what
+// the generator itself held. Every core wrk takes is one the proxy doesn't get,
+// so a run that doesn't count them can't tell a saturated proxy from a crowded machine.
 func drive(
-	target, body, window string, connections int, work string,
-) error {
-	// wrk needs the body in a Lua script. Four threads drive both paths,
-	// and every thread past that is one the proxy doesn't get.
+	target, body, window string, threads, connections int, work string,
+) (report, error) {
+	// wrk needs the body in a Lua script.
 	content, err := os.ReadFile(body)
 	if err != nil {
-		return err
+		return report{}, err
 	}
 	script := filepath.Join(work, "wrk.lua")
 	lua := fmt.Sprintf("wrk.method = \"POST\"\n"+
 		"wrk.headers[\"Content-Type\"] = \"application/json\"\n"+
 		"wrk.body = [==[%s]==]\n", content)
 	if err := os.WriteFile(script, []byte(lua), 0o600); err != nil {
-		return err
+		return report{}, err
 	}
 	wrk := exec.Command("wrk",
-		"-t"+strconv.Itoa(threadsFor(connections)),
+		"-t"+strconv.Itoa(threadsFor(threads, connections)),
 		"-c"+strconv.Itoa(connections), "-d"+window,
 		"-s", script, "--latency", target)
 	wrk.Stdout, wrk.Stderr = os.Stdout, os.Stderr
-	return wrk.Run()
+
+	started := time.Now()
+	runErr := wrk.Run()
+	// Taken from wait4 rather than sampled: procfs is gone by the time wrk has exited,
+	// and this is the exact figure the kernel charged it.
+	spent := report{elapsed: time.Since(started), memoryUnknown: true}
+	if state := wrk.ProcessState; state != nil {
+		spent.cpu = state.UserTime() + state.SystemTime()
+	} else {
+		spent.cpuUnknown = true
+	}
+	return spent, runErr
 }
 
 // report is what the proxy spent over one run.
@@ -584,6 +635,34 @@ func (r report) cores() float64 {
 		return 0
 	}
 	return r.cpu.Seconds() / r.elapsed.Seconds()
+}
+
+// cpuLine is [report.String] without the memory,
+// for the two processes a run watches for their CPU alone.
+func cpuLine(r report) string {
+	if r.cpuUnknown {
+		return "CPU unavailable"
+	}
+	return fmt.Sprintf("%.1fs of CPU over %.0fs, %.1f cores",
+		r.cpu.Seconds(), r.elapsed.Seconds(), r.cores())
+}
+
+// balance is what the three of them came to against the machine underneath.
+// Read a run as the proxy's number only while this is under what the machine has:
+// past that they are taking cores from each other and the proxy is the one
+// being starved, since it is the only one of the three the kernel can't leave idle.
+// Hardware threads, so a machine with SMT reaches its physical core count
+// well before this reads full.
+func balance(proxy, generator, upstream report) string {
+	if proxy.cpuUnknown || generator.cpuUnknown || upstream.cpuUnknown {
+		return "balance unavailable"
+	}
+	held := proxy.cores() + generator.cores() + upstream.cores()
+	return fmt.Sprintf("balance: %.1f of %d cores held, %.0f%% of the machine "+
+		"(proxy %.0f%%, generator %.0f%%, upstream %.0f%%)",
+		held, runtime.NumCPU(), 100*held/float64(runtime.NumCPU()),
+		100*proxy.cores()/held, 100*generator.cores()/held,
+		100*upstream.cores()/held)
 }
 
 func (r report) String() string {

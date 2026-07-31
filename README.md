@@ -18,24 +18,24 @@ Generating a gqlhash is [faster](#performance) than parsing a document into an A
 
 On 14 cores of a 24-core Xeon `gqlhash-proxy` turns away **~631,000** unknown documents a second at a median of **155 µs**, and forwards **~213,000** allowed ones.
 
-`gqlhash-proxy` at `GOGC=800`, wrk at 200 connections for 20s on 14 cores, generator and proxy on the same 24-core Xeon w5-2455X:
+`gqlhash-proxy` at `GOGC=800`, wrk at 200 connections for 20s, generator and proxy on the same Xeon w5-2455X — 12 physical cores, 24 hardware threads:
 
 | | rejected | forwarded |
 | --- | --- | --- |
-| req/s | **~631,000** | ~213,000 |
-| median latency | **155 µs** | 0.88 ms |
-| p99 latency | 0.98 ms | 4.19 ms |
-| CPU per request | 22 µs | 66 µs |
-| cores held by the proxy | 14 of 24 | 14 of 24 |
-| cores busy on the machine | 18.2 of 24 (76%) | 21.7 of 24 (90%) |
-| RSS peak / mean | 160 / 106 MB | 164 / 158 MB |
+| req/s | **~928,000** | ~211,000 |
+| median latency | **140 µs** | 0.94 ms |
+| p99 latency | 2.75 ms | 4.27 ms |
+| CPU per request | 18 µs | 66 µs |
+| cores held by the proxy | 16.8 of 24 | 13.9 of 24 |
+| cores busy on the machine | 23.0 of 24 (96%) | 21.4 of 24 (89%) |
+| RSS peak / mean | 202 / 111 MB | 168 / 160 MB |
 
 <details>
 <summary>Benchmarking Details</summary>
 The results above are a median of three runs.
 A rejection never opens an upstream connection, which is where the three-fold difference comes from.
 
-**These are numbers from a contended machine running, and they understate the proxy.** The load generator and the sample API run on the same 24 cores, so the proxy never had the box to itself: it held ~14 cores while wrk and the upstream took the rest, and the forwarded run left only ~2 cores idle. What a figure worth quoting needs is a second machine driving the load. `go run ./internal/cmd/loadtest` reproduces exactly the above, contention included.
+**These are numbers from a contended machine, and they understate the proxy.** The load generator and the sample API run on the same 24 hardware threads, so the proxy never had the box to itself: rejecting, it held 16.8 while wrk took 6.1 and the machine ran out at 96%; forwarding, the sample API alone cost 5.7. What a figure worth quoting needs is a second machine driving the load. `go run ./internal/cmd/loadtest` reproduces exactly the above, contention included, and prints what each of the three held so a run starved by its own generator is visible in its output.
 
 - [More details](TUNING_GQLHASH_PROXY.md)
 - [Performance Profile](PERFORMANCE.md)

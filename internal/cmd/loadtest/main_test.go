@@ -41,24 +41,63 @@ func TestWrkDuration(t *testing.T) {
 // TestConnections pins the contract wrk imposes: it won't run with fewer
 // connections than threads.
 func TestConnections(t *testing.T) {
+	// Four threads rather than the default, which follows the machine:
+	// what this pins is the rule, not the count one machine happens to derive.
 	for _, n := range []int{0, 1, 2, 3, -1, maxConnections + 1} {
-		if err := checkConnections(n); err == nil {
+		if err := checkConnections(4, n); err == nil {
 			t.Errorf("%d: expected a refusal", n)
 		}
 	}
 	for _, n := range []int{4, 200, maxConnections} {
-		if err := checkConnections(n); err != nil {
+		if err := checkConnections(4, n); err != nil {
 			t.Errorf("%d: unexpected refusal: %v", n, err)
 		}
 	}
+	// The default has to be a count wrk will take, whatever the machine.
+	if err := checkConnections(defaultWrkThreads(), 200); err != nil {
+		t.Errorf("the default thread count was refused: %v", err)
+	}
+	// The floor follows -threads rather than the default.
+	if err := checkConnections(16, 8); err == nil {
+		t.Error("expected 8 connections under 16 threads to be refused")
+	}
+	if err := checkConnections(0, 200); err == nil {
+		t.Error("expected a thread count under one to be refused")
+	}
 	// Threads never outnumber connections, whatever the count.
-	for _, c := range []struct{ connections, want int }{
-		{4, 4}, {8, 4}, {200, 4},
+	for _, c := range []struct{ threads, connections, want int }{
+		{4, 4, 4}, {4, 8, 4}, {4, 200, 4}, {16, 200, 16}, {16, 16, 16},
 	} {
-		if got := threadsFor(c.connections); got != c.want {
-			t.Errorf("%d connections: expected %d threads; received %d",
-				c.connections, c.want, got)
+		if got := threadsFor(c.threads, c.connections); got != c.want {
+			t.Errorf("%d threads, %d connections: expected %d; received %d",
+				c.threads, c.connections, c.want, got)
 		}
+	}
+}
+
+// TestBalance covers the accounting that tells a saturated proxy from a machine
+// with nothing left to give it.
+func TestBalance(t *testing.T) {
+	second := time.Second
+	got := balance(
+		report{cpu: 14 * second, elapsed: second},
+		report{cpu: 4 * second, elapsed: second},
+		report{cpu: 2 * second, elapsed: second},
+	)
+	for _, want := range []string{"20.0 of ", "proxy 70%", "generator 20%", "upstream 10%"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in %q", want, got)
+		}
+	}
+
+	// A reading that failed can't be counted as a zero: it would report the
+	// machine as emptier than it is, which is the one conclusion this feeds.
+	if got := balance(
+		report{cpu: second, elapsed: second},
+		report{cpuUnknown: true},
+		report{cpu: second, elapsed: second},
+	); got != "balance unavailable" {
+		t.Errorf("expected an unavailable balance; received %q", got)
 	}
 }
 
