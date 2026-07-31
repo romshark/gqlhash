@@ -12,14 +12,12 @@ import (
 	"time"
 )
 
-// upgradeAPI is an API that speaks a protocol upgrade: it answers 101 to a
-// request offering one and records whatever arrives after that,
-// which is what a tunnel through the proxy looks like from behind it.
+// upgradeAPI answers 101 to a request offering an upgrade and records whatever
+// arrives after, which is what a tunnel through the proxy looks like from behind it.
 //
-// It's raw rather than an [http.Server] because the point is what reached it
-// byte for byte: a header a proxy should have stopped is one net/http would
-// hand over already parsed and folded, and the bytes after a 101 are no HTTP
-// message at all.
+// Raw rather than an [http.Server] because what matters is what reached it byte
+// for byte: net/http hands over a header already parsed and folded,
+// and the bytes after a 101 are no HTTP message at all.
 type upgradeAPI struct {
 	url string
 
@@ -122,13 +120,13 @@ func (a *upgradeAPI) smuggled() []string {
 
 // TestProtocolUpgrade covers a client offering to leave HTTP behind.
 //
-// The offer is what turns one allowlisted document into an unhashed channel:
-// the request that carries it is hashed and allowed, the API answers 101,
-// and everything the client writes from then on reaches the API without ever
-// passing the allowlist again. One allowed document buys a subscription to anything.
+// The offer turns one allowlisted document into an unhashed channel:
+// the request carrying it is hashed and allowed, the API answers 101,
+// and everything written from then on reaches the API without passing the allowlist
+// again. One allowed document buys a subscription to anything.
 //
-// So the upgrade stops here, under both commands:
-// the offer is not forwarded and the request is decided like any other.
+// So the upgrade stops here under both commands: the offer isn't forwarded and
+// the request is decided like any other.
 func TestProtocolUpgrade(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()

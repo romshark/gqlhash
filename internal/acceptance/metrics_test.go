@@ -14,13 +14,11 @@ import (
 )
 
 // TestDecisionsAreCounted covers what a decision is called. Every refusal has a
-// series of its own, because an operator reading a spike does something
-// different for each: an allowlist out of date, a client sending nonsense,
-// a client and -server.max-body disagreeing, somebody probing for a way past the
-// allowlist, and a nesting attack.
+// series of its own, since an operator reading a spike does something different
+// for each: an allowlist out of date, a client sending nonsense, a client and
+// -server.max-body disagreeing, somebody probing, and a nesting attack.
 //
-// It runs on a server of its own: what's asserted is the count,
-// which every request before it would move.
+// On a server of its own, since what's asserted is the count.
 func TestDecisionsAreCounted(t *testing.T) {
 	// The default of -depth-limit, which this run doesn't set,
 	// and a document past it.
@@ -130,8 +128,7 @@ func TestAmbiguousDecisionCoversEveryShape(t *testing.T) {
 		_, exposition := control(t, e.server, http.MethodGet, "/metrics", "")
 		for _, want := range []string{
 			`gqlhash_proxy_requests_total{decision="ambiguous"} 4`,
-			// None of them is a malformed request, which is where they used to
-			// land and where a broken client still does.
+			// None of them is malformed, which is where a broken client lands.
 			`gqlhash_proxy_requests_total{decision="malformed"} 0`,
 		} {
 			if !strings.Contains(exposition, want) {

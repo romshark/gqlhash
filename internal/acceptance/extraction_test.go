@@ -110,9 +110,8 @@ func TestBatchElementCollision(t *testing.T) {
 // so ?Query= names no document, where the JSON member is matched without case
 // because a JSON decoder matches a struct field that way.
 //
-// The asymmetry is the contract. A reimplementation folding case here refuses
-// requests the original serves; one folding case nowhere serves requests it
-// should refuse.
+// The asymmetry is the contract: folding case here refuses requests the original serves,
+// folding it nowhere serves requests it should refuse.
 func TestGETParameterNameCase(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := shared(t, tgt)

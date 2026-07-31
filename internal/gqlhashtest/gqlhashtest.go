@@ -1,15 +1,12 @@
 // Package gqlhashtest holds what the tests of this module read from: documents
 // that must be rejected, and a hash that does nothing.
 //
-// It's a package rather than an export_test.go because two packages read it,
-// gqlhash and parser, and neither is the other's test. Nothing outside a test
-// imports it, so none of this reaches a binary.
+// A package rather than an export_test.go because gqlhash and parser both read
+// it and neither is the other's test. Nothing outside a test imports it.
 package gqlhashtest
 
-// NoopHash is a hasher that discards its input. Its digest is constant.
-//
-// It's what pins the narrow [gqlhash.Hash] interface: no Size, no BlockSize,
-// and it still goes everywhere a hasher goes.
+// NoopHash discards its input and answers a constant digest. It pins the narrow
+// [gqlhash.Hash] interface: no BlockSize, and it still goes everywhere.
 type NoopHash struct{}
 
 func (NoopHash) Write(d []byte) (int, error) { return len(d), nil }
@@ -94,8 +91,8 @@ var UnexpectedEOF = []string{
 	"{ foo @dir(x:3)",
 }
 
-// UnexpectedToken are documents holding a token the grammar doesn't allow
-// there. Every one of them must be answered with [parser.ErrUnexpectedToken].
+// UnexpectedToken are documents holding a token the grammar doesn't allow there.
+// Every one of them must be answered with [parser.ErrUnexpectedToken].
 var UnexpectedToken = []string{
 	"?",
 	"{?",

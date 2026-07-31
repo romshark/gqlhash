@@ -53,7 +53,6 @@ func TestRun(t *testing.T) {
 		}
 	}
 
-	// OK
 	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
 		args(), "{foo}")
 	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
@@ -104,7 +103,6 @@ func TestRun(t *testing.T) {
 		config.SupportedHashFunctions+"\n"), nil,
 		args(`-hash`, `sha9`), "{foo}")
 
-	// Err
 	f(t, 1, stderr("no input\n"), nil,
 		args(), "")
 
@@ -136,7 +134,6 @@ func TestRun(t *testing.T) {
 		" malformed number\n"), nil,
 		args(`-file`, invalidGraphQL), "this must not be read")
 
-	// Input file doesn't exist
 	f(t, 1, stderr(`error reading file "non-existing-file.graphql": `+
 		`open non-existing-file.graphql: no such file or directory`+"\n"), nil,
 		args(`-file`, "non-existing-file.graphql"), "this must not be read")

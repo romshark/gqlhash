@@ -153,10 +153,10 @@ func FuzzUnescapeJSONAgainstEncodingJSON(f *testing.F) {
 // refuses a request that names the member twice and reads the one document out
 // of the rest.
 //
-// What's under test is that the document an API would run is among the ones checked here.
-// Checking more than it runs costs a request that could have been forwarded;
-// checking fewer would run a document nobody read. A refused request runs
-// nothing, which is why the escapes below are only followed where one is read.
+// What's under test is that the document an API would run is among the ones
+// checked here. Checking more costs a request that could have been forwarded;
+// checking fewer runs a document nobody read. A refused request runs nothing,
+// which is why the escapes below are only followed where one is read.
 func FuzzExtractJSONAgainstEncodingJSON(f *testing.F) {
 	for _, seed := range []string{
 		`{"query":"{a}"}`,

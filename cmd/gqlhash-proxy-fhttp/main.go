@@ -6,13 +6,12 @@
 // default proxy links no HTTP implementation it doesn't serve with.
 //
 // EXPERIMENTAL, AND NOT FOR PRODUCTION USE. Run gqlhash-proxy in front of
-// anything that matters. This command is for benchmarking, and for proving the
+// anything that matters. This one is for benchmarking, and for proving the
 // acceptance suite holds two implementations to the same rules rather than
-// describing one of them. It gives up per-request cancellation and HTTP/2, its
-// parser is younger and far less exercised than net/http's, and a client's
-// request trailer reaches the API as an ordinary header — which walks past the
-// Connection-named-header check and cannot be closed on the fasthttp side.
-// See GQLHASH_PROXY_FHTTP.md.
+// describing one. It gives up per-request cancellation and HTTP/2, its parser is
+// younger and far less exercised than net/http's, and a request trailer reaches
+// the API as an ordinary header — walking past the Connection-named-header check,
+// and not closable on the fasthttp side. See GQLHASH_PROXY_FHTTP.md.
 package main
 
 import (

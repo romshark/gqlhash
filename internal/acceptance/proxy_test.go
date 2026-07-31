@@ -97,11 +97,10 @@ func TestRejected(t *testing.T) {
 // parser refuses. None of them can be on an allowlist, so each is a rejection
 // and none of them reaches the API.
 //
-// Which error each one produces is the parser's own contract, covered where the
-// error is visible; here they collapse into one answer, and what's under test is
-// that the server makes it for all of them rather than for the sample in [TestRejected].
-// The documents come from [gqlhashtest],
-// which is fixtures and no part of any implementation.
+// Which error each produces is the parser's own contract, covered where the
+// error is visible; here they collapse into one answer, and what's under test
+// is that the server makes it for all of them rather than for the sample in
+// [TestRejected]. The documents come from [gqlhashtest], which is fixtures.
 func TestRejectsUnparsableDocuments(t *testing.T) {
 	documents := slices.Concat(gqlhashtest.UnexpectedEOF, gqlhashtest.UnexpectedToken)
 
@@ -601,15 +600,14 @@ func TestDuplicateQueryParam(t *testing.T) {
 }
 
 // TestQueryKeyCollision is the rule that a request names the document once and
-// once only. Two members whose names are the same once unescaped are a
-// collision, whatever they carry: which of them the API runs is the decoder's
-// business, so the request is refused rather than one of them picked and a body
-// forwarded that an API may read the other way round.
+// once only. Two members whose names match once unescaped are a collision,
+// whatever they carry: which the API runs is the decoder's business,
+// so the request is refused rather than one picked and a body forwarded that an API
+// may read the other way round.
 //
-// It's the rule TestDuplicateQueryParam holds a GET to, and it's what closes
-// the bypass an escaped key opens: "query" beside "quer\u0079" is one name written twice,
-// so neither the case nor the escape can be what smuggles a second document
-// past the one that was hashed.
+// The rule TestDuplicateQueryParam holds a GET to, and what closes the bypass
+// an escaped key opens: "query" beside "quer\u0079" is one name written twice,
+// so neither case nor escape smuggles a second document past the hashed one.
 func TestQueryKeyCollision(t *testing.T) {
 	// The member name written four ways that name it: plain, the y as \u0079,
 	// the q as \u0051, which unescapes to another case, and that case itself.
@@ -753,7 +751,6 @@ func TestConnRecycling(t *testing.T) {
 	})
 }
 
-// countingListener counts what it accepts.
 type countingListener struct {
 	net.Listener
 	conns *atomic.Int64

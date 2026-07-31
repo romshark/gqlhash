@@ -29,8 +29,8 @@ type Hasher struct {
 	// see [gqlhash.Options].
 	DepthLimit int
 
-	// CmdPrintVersion says the command was asked for its version and nothing else,
-	// so the caller prints it and returns instead of hashing.
+	// CmdPrintVersion means the caller prints the version and returns instead
+	// of hashing.
 	CmdPrintVersion bool
 }
 
@@ -64,19 +64,18 @@ type Proxy struct {
 	Control  ProxyControl
 	Log      ProxyLog
 
-	// CmdPrintVersion says the command was asked for its version and nothing else,
-	// so the caller prints it and returns instead of serving.
+	// CmdPrintVersion means the caller prints the version and returns instead
+	// of serving.
 	CmdPrintVersion bool
 }
 
 // ProxyServer is the listener that takes the traffic. Its timeouts bound what a
-// client can hold open, and a zero value leaves the one it stands for off.
+// client can hold open; a zero value leaves that one off.
 type ProxyServer struct {
 	Listen string
 
-	// Underlay names the HTTP implementation serving the traffic, which is a
-	// property of the binary rather than a flag. It's reported in the startup
-	// log so an operator can tell which one is running.
+	// Underlay names the HTTP implementation serving the traffic,
+	// a property of the binary rather than a flag. Reported in the startup log.
 	Underlay string
 
 	// MaxBody is the largest request body to accept, in bytes.
@@ -98,17 +97,16 @@ type ProxyUpstream struct {
 	// Timeout is how long a request to it may take.
 	Timeout time.Duration
 
-	// MaxIdleConnsPerHost is what caps connection reuse: there is one upstream,
+	// MaxIdleConnsPerHost caps connection reuse: there's one upstream,
 	// so every forwarded request draws from that one pool.
 	// MaxIdleConns is the ceiling over it, 0 for none.
 	MaxIdleConnsPerHost int
 	MaxIdleConns        int
 
 	// MaxConnLifetime retires an upstream connection once it's this old, 0 to
-	// keep it for as long as the upstream will. It's what lets a pool follow an
-	// upstream that moves: a name resolving to several backends is balanced per
-	// connection, so a pool that never turns over never reaches a backend that
-	// wasn't there when it was filled.
+	// keep it as long as the upstream will. It lets a pool follow an upstream
+	// that moves: a name resolving to several backends is balanced per connection,
+	// so one that never turns over never reaches a new backend.
 	MaxConnLifetime time.Duration
 
 	// HTTP2 allows h2 to an https upstream, which multiplexes onto one connection
@@ -122,17 +120,15 @@ type ProxyControl struct {
 	// Address is never empty: there is no way to run without this server.
 	Address string
 
-	// Token is what a request to an endpoint that changes something must carry as
-	// a bearer token, empty for no check. It comes from the environment alone,
-	// never from a flag.
+	// Token is the bearer token a request to a changing endpoint must carry,
+	// empty for no check. From the environment alone, never a flag.
 	Token string
 }
 
 // ProxyLog is how the proxy writes its log.
 type ProxyLog struct {
-	// Level is left as it was given.
-	// The command owns the logger and turns it into a level,
-	// so this package needs no logging dependency and neither does the hashing command.
+	// Level is left as given: the command owns the logger and parses it,
+	// so neither this package nor the hashing command needs that dependency.
 	Level string
 
 	// JSON writes JSON instead of readable text. Requests logs every forwarded
@@ -142,13 +138,12 @@ type ProxyLog struct {
 }
 
 // ProxyCommand is the command that serves the proxy,
-// which the hasher names where a caller reaches for it as a subcommand.
+// named by the hasher where a caller reaches for it as a subcommand.
 const ProxyCommand = "gqlhash-proxy"
 
-// ParseHasher reads the flags of the gqlhash command.
-//
-// run is false when the caller is done and must return exitCode, which covers
-// -help, a bad flag and a bad value alike. name is the command as invoked.
+// ParseHasher reads the flags of the gqlhash command. run is false when the
+// caller is done and must return exitCode, which covers -help,
+// a bad flag and a bad value alike. name is the command as invoked.
 func ParseHasher(
 	name string, args []string, stderr io.Writer,
 ) (cfg Hasher, exitCode int, run bool) {
@@ -214,10 +209,9 @@ const EnvPrefix = "GQLHASH_PROXY_"
 
 // EnvName is the environment variable that stands for the flag named flag.
 //
-// Only the proxy reads these. It's a long-running service configured by a deployment,
-// while the hashing command is invoked per document:
-// an environment variable that silently changed -hash there would change
-// the hashes a pipeline produces without anything saying so.
+// Only the proxy reads these: it's a long-running service configured by a deployment,
+// where the hashing command is invoked per document and a variable
+// silently changing -hash would change what a pipeline produces.
 func EnvName(flag string) string {
 	name := strings.NewReplacer("-", "_", ".", "_").Replace(flag)
 	return EnvPrefix + strings.ToUpper(name)
@@ -235,10 +229,9 @@ func ParseProxy(
 
 // ParseProxyFor is [ParseProxy] for a binary serving with a named underlay.
 //
-// underlay is reported in the startup log. http1Only refuses -upstream.http2:
-// an implementation that can't speak h2 stops the run rather than accepting the
-// flag and serving something other than what it asks for. An empty underlay is
-// net/http, which has neither restriction.
+// underlay is reported in the startup log. http1Only refuses -upstream.http2
+// rather than accepting the flag and serving something else.
+// An empty underlay is net/http, which has neither restriction.
 func ParseProxyFor(
 	underlay string, http1Only bool,
 	name string, args []string, stderr io.Writer,
@@ -388,10 +381,9 @@ func ParseProxyFor(
 		_, _ = fmt.Fprintf(stderr, "-upstream.url %q is no absolute URL\n", *fUpstream)
 		return cfg, 2, false
 	}
-	// The scheme is one of the two a forward goes over. Anything else used to be
-	// accepted and then read as one of them anyway, differently by each underlay:
-	// an ftp:// upstream reached one as a failure and the other as a plain HTTP
-	// request that happened to work.
+	// One of the two schemes a forward goes over. Anything else is read as one
+	// of them anyway, differently by each underlay: an ftp:// upstream reaches
+	// one as a failure and the other as a plain HTTP request that works.
 	if upstream.Scheme != "http" && upstream.Scheme != "https" {
 		_, _ = fmt.Fprintf(stderr,
 			"-upstream.url %q must name http or https, not %q\n",
@@ -400,8 +392,8 @@ func ParseProxyFor(
 	}
 	cfg.Upstream.URL = upstream
 
-	// The token has no flag: a process argument is readable by anyone on the host,
-	// while the environment of a process isn't.
+	// The token has no flag: a process argument is readable by anyone on the
+	// host, a process environment isn't.
 	cfg.Control.Token = strings.TrimSpace(os.Getenv(EnvName("control.token")))
 
 	if cfg.AllowlistDir == "" {
@@ -441,7 +433,7 @@ func ParseProxyFor(
 	}
 	// An unset write timeout follows the upstream timeout. Set explicitly,
 	// it has to leave the upstream its full time,
-	// or the proxy cuts off a response that is still arriving.
+	// or the proxy cuts off a response still arriving.
 	if !isSet(cli, "server.write-timeout") {
 		cfg.Server.WriteTimeout = cfg.Upstream.Timeout + 10*time.Second
 	} else if cfg.Server.WriteTimeout != 0 && cfg.Server.WriteTimeout <= cfg.Upstream.Timeout {
@@ -525,11 +517,10 @@ func applyEnv(cli *flag.FlagSet, stderr io.Writer) (exitCode int, ok bool) {
 		if !set {
 			return
 		}
-		// Set on the set rather than on the value: the flag set records what
-		// was set that way, which is what isSet reads. Setting the value alone
-		// leaves the flag looking untouched, so a default derived from another
-		// flag overwrites what the environment asked for,
-		// and a rule that refuses a combination never runs.
+		// Set on the flag set rather than the value, since that's what isSet reads.
+		// Setting the value alone leaves the flag looking untouched,
+		// so a default derived from another flag overwrites what the environment
+		// asked for and a rule refusing a combination never runs.
 		if err := cli.Set(f.Name, value); err != nil {
 			_, _ = fmt.Fprintf(stderr, "%s=%q: %v\n", name, value, err)
 			exitCode, ok = 2, false
@@ -542,8 +533,8 @@ func applyEnv(cli *flag.FlagSet, stderr io.Writer) (exitCode int, ok bool) {
 //
 // proxyCommand names the command that serves the proxy, for the one command
 // that isn't it: reaching for the proxy by subcommand is a plausible guess from
-// the hasher and no guess at all from the proxy, which is already there.
-// It's empty where there's nothing to point at.
+// the hasher and none at all from the proxy.
+// Empty where there's nothing to point at.
 func parse(
 	cli *flag.FlagSet, args []string, stderr io.Writer, proxyCommand string,
 ) (int, bool) {
@@ -553,9 +544,9 @@ func parse(
 		}
 		return 2, false
 	}
-	// Every command takes its input from stdin or a flag,
-	// so there is nothing for a positional argument to mean. Without this the
-	// flag package ignores it and a mistyped command silently hashes stdin.
+	// Every command takes its input from stdin or a flag, so a positional
+	// argument means nothing. Without this the flag package ignores it and a
+	// mistyped command silently hashes stdin.
 	if cli.NArg() > 0 {
 		if proxyCommand != "" && cli.Arg(0) == "proxy" {
 			_, _ = fmt.Fprintf(stderr, "the proxy is the %s command\n", proxyCommand)

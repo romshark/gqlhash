@@ -6,25 +6,22 @@
 // with. The decision isn't here: every request goes through [proxy.Core], which
 // is the same code the net/http underlay reaches.
 //
-// EXPERIMENTAL, AND NOT FOR PRODUCTION USE. What it's for is benchmarking,
-// and proving the acceptance suite holds two implementations to the same rules
-// rather than describing one. Beyond the costs below, its parser is younger and
-// far less exercised than net/http's, and a request trailer reaches the API as
-// an ordinary header — fasthttp merges trailer fields into the header set
-// before a handler runs, declared or not, so nothing here can tell them apart
-// afterwards. See GQLHASH_PROXY_FHTTP.md.
+// EXPERIMENTAL, AND NOT FOR PRODUCTION USE. It exists for benchmarking,
+// and to prove the acceptance suite holds two implementations to the same rules rather
+// than describing one. Its parser is younger and far less exercised than net/http's,
+// and a request trailer reaches the API as an ordinary header:
+// fasthttp merges trailer fields into the header set before a handler runs,
+// declared or not. See GQLHASH_PROXY_FHTTP.md.
 //
-// What this underlay can't do, and what the command documents: HTTP/1.1 only,
-// on both sides, so HTTP/2 belongs in front of it. It has no cancellation
-// signal tied to client disconnect either — [fasthttp.RequestCtx.Done] closes
-// on server shutdown alone — so a client that hangs up doesn't stop the
-// upstream work its request started. The forward is still bounded by
-// -upstream.timeout, which [fasthttp.HostClient.DoTimeout] applies below — except
-// for an event stream, which is relayed as it arrives and bounded only
-// at its headers, see newHostClient and [server.within].
+// What it can't do, and what the command documents: HTTP/1.1 only on both sides,
+// so HTTP/2 belongs in front of it. No cancellation on client disconnect either —
+// [fasthttp.RequestCtx.Done] closes on server shutdown alone —
+// so a client that hangs up doesn't stop the upstream work it started.
+// The forward is still bounded by -upstream.timeout through
+// [fasthttp.HostClient.DoTimeout], except for an event stream,
+// which is bounded only at its headers; see newHostClient and [server.within].
 // A protocol upgrade isn't forwarded: the offer goes with the other hop-by-hop
-// headers in removeHopByHop, and an upstream answering 101 anyway is answered
-// with a 502 rather than relayed, under either underlay.
+// headers in removeHopByHop, and an upstream answering 101 anyway gets a 502.
 //
 // [fasthttp]: https://github.com/valyala/fasthttp
 package proxyfast
@@ -62,18 +59,16 @@ type server struct {
 	core   *proxy.Core
 	client *fasthttp.HostClient
 
-	// streamClient carries a forward whose answer is relayed as it arrives,
-	// which is a client of its own because the bound belongs to the connection
-	// rather than to the request: fasthttp sets one read deadline before the
-	// headers and it covers the body too, so a stream carried by the ordinary
-	// client would be cut at -upstream.timeout. This one has no read deadline,
-	// and the wait for the headers is bounded by [server.within] instead.
+	// streamClient carries a forward relayed as it arrives. A client of its own
+	// because the bound belongs to the connection: fasthttp's one read deadline
+	// covers the body too, so the ordinary client would cut a stream at
+	// -upstream.timeout. This one has none; [server.within] bounds the headers.
 	streamClient *fasthttp.HostClient
 
 	// live are the streams being written right now. A drain waits for what's in
-	// flight and a subscription never finishes on its own, so the shutdown ends
-	// these before it starts waiting. fasthttp writes a body stream after the
-	// handler has returned, so nothing else knows they exist.
+	// flight and a subscription never finishes, so the shutdown ends these first.
+	// fasthttp writes a body stream after the handler returns,
+	// so nothing else knows they exist.
 	live sync.Map
 
 	// upstream is where a forwarded request goes,
@@ -87,12 +82,10 @@ type server struct {
 // so it answers the continuation itself and forwards no Expect header.
 var continue100 = []byte("100-continue")
 
-// readBufferSize is what a request line and the headers of one are read into.
-// A GET carrying a document of the size an allowlist holds fits in this,
-// and a connection costs it while it's open.
+// readBufferSize takes a request line and its headers. Sized for a GET
+// carrying an allowlisted document; a connection costs it while it's open.
 const readBufferSize = 64 << 10
 
-// New builds the underlay over core.
 func New(
 	core *proxy.Core, cfg config.Proxy, upstream *url.URL, log zerolog.Logger,
 ) proxy.DataPlaneServer {
@@ -109,10 +102,9 @@ func New(
 		log:     log,
 	}
 	s.client = newHostClient(cfg, upstream, false)
-	// The same upstream reached the same way, but without a read deadline and
-	// answering into a body stream instead of a buffer. A pool of its own is
-	// what a separate client costs; only a request asking for a stream takes a
-	// connection from it.
+	// The same upstream reached the same way, without a read deadline and
+	// answering into a body stream. A separate client costs a pool of its own,
+	// drawn from only by a request asking for a stream.
 	s.streamClient = newHostClient(cfg, upstream, true)
 	s.server = &fasthttp.Server{
 		Handler:      s.handle,
@@ -120,12 +112,10 @@ func New(
 		WriteTimeout: cfg.Server.WriteTimeout,
 		IdleTimeout:  cfg.Server.IdleTimeout,
 		// -server.write-timeout bounds writing one answer, so it would cut an
-		// event stream at whatever it's set to. fasthttp takes a write timeout
-		// per request only where it's positive, so "not bounded" is spelled as
-		// a bound no process outlives. Which request gets it is decided by
-		// what the client asked for, since this runs before there's an answer
-		// to look at; one that asked for a stream and receives an ordinary
-		// answer writes it and is done, so the wider bound costs nothing.
+		// event stream. fasthttp takes a per-request write timeout only where
+		// it's positive, so "unbounded" is spelled as a bound no process outlives.
+		// The client's ask decides, since this runs before there's an answer to look at;
+		// one that asked for a stream and gets an ordinary answer writes it and is done.
 		HeaderReceived: func(h *fasthttp.RequestHeader) fasthttp.RequestConfig {
 			if proxy.AcceptsEventStream(string(h.Peek("Accept"))) {
 				return fasthttp.RequestConfig{WriteTimeout: streamWriteTimeout}
@@ -133,21 +123,18 @@ func New(
 			return fasthttp.RequestConfig{}
 		},
 		// One over the limit, so a body that's too large still reaches the
-		// handler and is answered with the same envelope the net/http underlay gives.
-		// Anything past that fasthttp refuses itself,
-		// which lands in ErrorHandler below and is answered the same way.
+		// handler and gets the same envelope net/http gives.
+		// Past that fasthttp refuses it into ErrorHandler, answered the same way.
 		MaxRequestBodySize: int(min(cfg.Server.MaxBody+1, math.MaxInt32)),
-		// The request line and the headers are read into this buffer,
-		// which fasthttp defaults to 4KiB: a GET carrying its document in the query
-		// string is refused past that, where net/http grows its own.
-		// It's a buffer per connection rather than a limit, so it's sized for the
-		// documents a GET carries and not for -server.max-body,
-		// and GQLHASH_PROXY_FHTTP.md names the ceiling it leaves.
+		// fasthttp defaults this to 4KiB, past which a GET carrying its document
+		// in the query string is refused, where net/http grows its own.
+		// A buffer per connection rather than a limit, so it's sized for what a GET
+		// carries and not for -server.max-body. GQLHASH_PROXY_FHTTP.md names the
+		// ceiling it leaves.
 		ReadBufferSize: readBufferSize,
 		ErrorHandler:   s.handleReadError,
-		// fasthttp answers text/plain where a handler set no content type.
-		// The answer of the API is what a client reads, headers included,
-		// so an answer that carried none arrives with none.
+		// fasthttp answers text/plain where a handler set none.
+		// The client reads the API's answer, headers included, so none stays none.
 		NoDefaultContentType:  true,
 		Logger:                &logger{log: log},
 		NoDefaultServerHeader: true,
@@ -158,15 +145,13 @@ func New(
 
 // newHostClient builds the client a forward is carried with. With stream it
 // reads the answer into a body stream and puts no deadline on the connection,
-// which is what lets a subscription outlive -upstream.timeout; everything else
-// is the same upstream reached the same way.
+// which lets a subscription outlive -upstream.timeout.
 func newHostClient(
 	cfg config.Proxy, upstream *url.URL, stream bool,
 ) *fasthttp.HostClient {
-	// -upstream.timeout bounds an exchange. A stream is none, and fasthttp's
-	// read deadline covers the body as well as the headers, so a streaming
-	// client that carried one would lose the subscription at the timeout.
-	// What bounds the wait for its headers is in [server.do].
+	// -upstream.timeout bounds an exchange and a stream is none,
+	// so a streaming client carrying one would lose the subscription at the timeout:
+	// fasthttp's read deadline covers the body too. [server.do] bounds the headers.
 	readTimeout := cfg.Upstream.Timeout
 	if stream {
 		readTimeout = 0
@@ -174,26 +159,23 @@ func newHostClient(
 	return &fasthttp.HostClient{
 		Addr:  upstream.Host,
 		IsTLS: upstream.Scheme == "https",
-		// -upstream.max-idle-conns-per-host sizes the pool of connections kept.
-		// fasthttp has no separate limit for the ones opened, so MaxConns is both,
-		// and a request past it fails with ErrNoFreeConns rather than
-		// being redialed the way net/http redials one. MaxConnWaitTimeout is
-		// what keeps the flag a pool size instead of a concurrency limit:
-		// the surplus waits for a free connection, bounded by -upstream.timeout,
-		// and is answered rather than refused.
+		// fasthttp has no separate limit for connections opened, so MaxConns is
+		// both and a request past it fails with ErrNoFreeConns rather than
+		// being redialed the way net/http does. MaxConnWaitTimeout keeps
+		// -upstream.max-idle-conns-per-host a pool size and not a concurrency limit:
+		// the surplus waits, bounded by -upstream.timeout.
 		MaxConns:            cfg.Upstream.MaxIdleConnsPerHost,
 		MaxConnWaitTimeout:  cfg.Upstream.Timeout,
 		MaxIdleConnDuration: 90 * time.Second,
-		// A connection taken from the pool may have been closed by the upstream
-		// since it was put there, which an API restarting closes all of them.
-		// The request never reached it, so it goes again on a fresh connection
-		// rather than turning a rolling deploy into a burst of 502s. Once,
-		// and only where the connection failed: a timeout means the API may have
-		// the request already, and no proxy may send that twice.
+		// A pooled connection may have been closed by the upstream since,
+		// which a restart does to all of them. The request never reached it,
+		// so it goes again on a fresh one rather than turning a rolling deploy into a
+		// burst of 502s. Once, and only where the connection failed:
+		// a timeout means the API may have the request already.
 		RetryIfErr: retryDeadConn,
 		// Where net/http needs the idle connections closed on an interval,
-		// fasthttp retires one by its own age, after the request using it is
-		// done. Zero leaves the connection for as long as the upstream will.
+		// fasthttp retires one by its own age once the request using it is done.
+		// Zero keeps it for as long as the upstream will.
 		MaxConnDuration:    cfg.Upstream.MaxConnLifetime,
 		ReadTimeout:        readTimeout,
 		WriteTimeout:       cfg.Upstream.Timeout,
@@ -210,8 +192,8 @@ func (s *server) Serve(listener net.Listener) error {
 
 func (s *server) Shutdown(ctx context.Context) error {
 	// The streams end first, so the drain has only exchanges left to wait for.
-	// Closing the reader fails the copy fasthttp is in the middle of,
-	// which is what ends the write and lets the connection close.
+	// Closing the reader fails the copy fasthttp is mid-way through, ending the
+	// write and letting the connection close.
 	s.live.Range(func(key, _ any) bool {
 		key.(*upstreamStream).endForShutdown()
 		return true
@@ -219,22 +201,21 @@ func (s *server) Shutdown(ctx context.Context) error {
 	return s.server.ShutdownWithContext(ctx)
 }
 
-// handle answers one request. It's the fasthttp counterpart of the net/http handler,
-// and the decision in the middle is the same call.
+// handle answers one request, the fasthttp counterpart of the net/http handler.
+// The decision in the middle is the same call.
 func (s *server) handle(ctx *fasthttp.RequestCtx) {
 	start := time.Now()
 
 	// An expectation this doesn't understand is refused rather than forwarded,
-	// as RFC 9110 requires of any recipient. net/http refuses one inside its
-	// own server, before a handler exists to see it; fasthttp knows only
-	// 100-continue and would have carried the rest upstream, where the answer would
-	// be whatever that API makes of it. The check is here so the two answer alike.
+	// as RFC 9110 requires of any recipient. net/http refuses one inside its own server;
+	// fasthttp knows only 100-continue and would carry the rest upstream.
+	// The check is here so the two answer alike.
 	//
-	// What counts it still differs: net/http refuses this before a handler
-	// exists, so nothing is counted there, while this is a refusal the proxy
-	// made and so is counted like one. That difference holds for every request
-	// an HTTP implementation turns away on its own, and the acceptance suite
-	// pins only what both keep — the status, and that nothing is forwarded.
+	// What counts still differs: net/http refuses before a handler exists,
+	// so nothing is counted there, while this is a refusal the proxy made.
+	// That holds for every request an HTTP implementation turns away on its own,
+	// and the acceptance suite pins only what both keep — the status,
+	// and that nothing is forwarded.
 	if expect := ctx.Request.Header.Peek("Expect"); len(expect) > 0 &&
 		!bytes.EqualFold(expect, continue100) {
 		verdict := s.core.ExpectationFailed()
@@ -246,13 +227,13 @@ func (s *server) handle(ctx *fasthttp.RequestCtx) {
 	req := proxy.Request{
 		IsGET: ctx.IsGet(),
 		// Read whatever the method: a request whose document is its body and
-		// which names a query parameter too is refused, not forwarded.
+		// that names a query parameter too is refused, not forwarded.
 		RawQuery: string(ctx.URI().QueryString()),
 	}
 	if req.IsGET {
 		// fasthttp reads the body whatever the method, so a body on a GET is
 		// there to be seen. The decision refuses it: the document is in the
-		// query string, and a body is a second place it could be.
+		// query string and a body is a second place it could be.
 		req.HasBody = len(ctx.PostBody()) > 0
 	} else {
 		// The body is read and owned by ctx, so the decision runs over those
@@ -265,7 +246,7 @@ func (s *server) handle(ctx *fasthttp.RequestCtx) {
 	verdict, answer := s.core.Decide(req)
 	if verdict != proxy.VerdictAllowed {
 		if s.core.Debug() && verdict == proxy.VerdictRejected {
-			// Why debug: a rejection is the path a flood takes,
+			// Debug: a rejection is the path a flood takes,
 			// so one event each is log volume the caller controls.
 			s.log.Debug().
 				Str("remote", ctx.RemoteAddr().String()).
@@ -281,14 +262,13 @@ func (s *server) handle(ctx *fasthttp.RequestCtx) {
 		s.log.Debug().Str("remote", ctx.RemoteAddr().String()).Msg("forwarding")
 	}
 	s.forward(ctx, req.Body, req.IsGET)
-	// The duration includes the upstream answer,
+	// Includes the upstream answer,
 	// so a dashboard can tell the proxy apart from the API behind it.
 	s.core.Observe(proxy.VerdictAllowed, start)
 }
 
-// retryDeadConn reports whether a failed forward goes again.
-// Only the first attempt, and only where the connection itself failed:
-// those are the requests the upstream never saw.
+// retryDeadConn reports whether a failed forward goes again. Only the first attempt,
+// and only where the connection failed: the upstream never saw those.
 func retryDeadConn(_ *fasthttp.Request, attempts int, err error) (
 	resetTimeout, retry bool,
 ) {
@@ -301,9 +281,8 @@ func retryDeadConn(_ *fasthttp.Request, attempts int, err error) (
 }
 
 // handleReadError answers a request fasthttp couldn't read. The handler never
-// runs for one, so the count is raised through the core to keep the totals whole,
-// and the answer is timed like every other:
-// a request that produced a status is one a dashboard has to see.
+// runs for one, so the core raises the count to keep the totals whole,
+// and the answer is timed like any other that produced a status.
 func (s *server) handleReadError(ctx *fasthttp.RequestCtx, err error) {
 	start := time.Now()
 	if s.core.Debug() {
@@ -314,7 +293,6 @@ func (s *server) handleReadError(ctx *fasthttp.RequestCtx, err error) {
 	s.core.Observe(verdict, start)
 }
 
-// answer writes what the core decided.
 func (s *server) answer(ctx *fasthttp.RequestCtx, a proxy.Answer) {
 	ctx.SetStatusCode(a.Code)
 	ctx.SetContentType(s.core.ContentType())
@@ -325,13 +303,12 @@ func (s *server) answer(ctx *fasthttp.RequestCtx, a proxy.Answer) {
 // is being written. See the HeaderReceived hook in New.
 const streamWriteTimeout = 100 * 365 * 24 * time.Hour
 
-// upstreamStream is the answer of the API,
-// read by the server as it writes it to the client.
+// upstreamStream is the API's answer, read by the server as it writes it to the client.
 //
 // It owns the request and the answer it was read from: fasthttp writes a body
-// stream after the handler has returned, so releasing them there would close
-// the stream out from under it. Closing this is what releases them,
-// and fasthttp closes a body stream whether it finished writing or the client left.
+// stream after the handler returns, so releasing them there would close the
+// stream out from under it. Closing this releases them, and fasthttp closes a
+// body stream whether it finished writing or the client left.
 type upstreamStream struct {
 	reader io.Reader
 	req    *fasthttp.Request
@@ -339,7 +316,7 @@ type upstreamStream struct {
 	server *server
 
 	// read is whether the stream reached its end.
-	// A stream that didn't is one the API is still writing into, see Close.
+	// One that didn't is a stream the API is still writing into, see Close.
 	read bool
 }
 
@@ -354,24 +331,22 @@ func (s *upstreamStream) endForShutdown() {
 func (s *upstreamStream) Read(p []byte) (int, error) {
 	n, err := s.reader.Read(p)
 	if err != nil {
-		// EOF or a failure: either way there is nothing more to come,
-		// and the connection is only reusable in the first case —
-		// which fasthttp decides for itself once it's told the read ended.
+		// EOF or a failure: nothing more to come either way, and only the first
+		// leaves the connection reusable — fasthttp's call once it's told.
 		s.read = errors.Is(err, io.EOF)
 	}
 	return n, err
 }
 
-// Close releases what the answer was read from, which is what returns the
-// connection to the pool — but only where the stream ended.
+// Close releases what the answer was read from,
+// returning the connection to the pool — but only where the stream ended.
 //
 // Where it didn't, the client left mid-subscription and the API is still
-// writing events into that connection. Pooling it hands the next subscription
-// a socket with somebody else's events queued on it, which it reads as a status line:
-// measured as one abandoned stream making the next two forwards fail,
-// and a browser tab closing is exactly this case. Releasing the response closes the
-// stream with no error, which fasthttp reads as a clean end, so the failure has
-// to be handed to it explicitly.
+// writing events into that connection. Pooling it hands the next subscription a
+// socket with somebody else's events queued on it, read as a status line:
+// one abandoned stream fails the next two forwards, and a browser tab closing is
+// exactly this case. Releasing the response closes the stream with no error,
+// which fasthttp reads as a clean end, so the failure is handed over explicitly.
 func (s *upstreamStream) Close() error {
 	s.server.live.Delete(s)
 	if !s.read {
@@ -391,33 +366,28 @@ var errClientLeftMidStream = errors.New("the client left mid-stream")
 // errDraining ends a stream because the proxy is shutting down.
 var errDraining = errors.New("the proxy is draining")
 
-// maxBufferedAnswer bounds an answer read into memory on the streaming path.
-//
-// It applies where a client asked for a stream and the API answered something else,
-// which is the one place this underlay reads a body the streaming client gave it:
-// that client ignores MaxResponseBodySize, so without a bound an API
-// that never stops sending is a memory exhaustion one request long.
-// The net/http underlay needs none — it relays an answer as it arrives rather than
-// holding it.
+// maxBufferedAnswer bounds an answer read into memory on the streaming path,
+// where a client asked for a stream and the API answered something else.
+// That's the one place this underlay reads a body the streaming client gave it,
+// and that client ignores MaxResponseBodySize: without a bound, an API that never
+// stops sending is memory exhaustion one request long. The net/http underlay
+// relays as it arrives rather than holding, so it needs none.
 const maxBufferedAnswer = 64 << 20
 
-// errAnswerTooLarge is an answer past that bound.
 var errAnswerTooLarge = errors.New("the upstream answer is too large to buffer")
 
 // forward carries the request upstream and answers with what comes back.
 //
-// The named result is what the deferred release reads, not something a caller needs:
-// an answer relayed as a stream is written after this returns and owns
-// what it was read from. The timing needs nothing either way — this returns
-// once the headers are in, so what [server.handle] observes for a stream is
-// already the time to its headers rather than the length of the subscription.
+// The named result is for the deferred release, not the caller: an answer relayed as
+// a stream is written after this returns and owns what it was read from.
+// This returns once the headers are in, so what [server.handle] observes
+// for a stream is already the time to its headers.
 func (s *server) forward(
 	ctx *fasthttp.RequestCtx, body []byte, isGET bool,
 ) (streamed bool) {
 	req := fasthttp.AcquireRequest()
 	res := fasthttp.AcquireResponse()
-	// Released here unless the answer is a stream,
-	// which outlives this call and takes them with it.
+	// Released here unless the answer is a stream, which outlives this call.
 	defer func() {
 		if !streamed {
 			fasthttp.ReleaseRequest(req)
@@ -425,9 +395,9 @@ func (s *server) forward(
 		}
 	}()
 
-	// What the client asked for decides how the forward is carried,
-	// since the choice is made before there's an answer to look at.
-	// What the API answers decides how it's relayed, further down.
+	// The client's ask decides how the forward is carried, since the choice
+	// comes before there's an answer to look at.
+	// The API's answer decides how it's relayed, further down.
 	wantsStream := proxy.AcceptsEventStream(
 		string(ctx.Request.Header.Peek("Accept")))
 
@@ -438,9 +408,9 @@ func (s *server) forward(
 	}
 	s.setForwarded(ctx, req)
 
-	// The upstream URL is the GraphQL endpoint, so its path replaces the one of
-	// the request rather than being joined with it. The query is kept:
-	// a GET carries the document in it.
+	// The upstream URL is the GraphQL endpoint, so its path replaces the
+	// request's rather than being joined with it.
+	// The query is kept: a GET carries the document in it.
 	uri := req.URI()
 	uri.SetSchemeBytes(s.scheme)
 	uri.SetHostBytes(s.host)
@@ -454,12 +424,10 @@ func (s *server) forward(
 		if wantsStream {
 			// Copied, because a streaming forward can outlive this handler:
 			// one whose headers never arrive is abandoned rather than stopped,
-			// and the goroutine carrying it may still retry the request on a
-			// fresh connection.
+			// and the goroutine carrying it may still retry on a fresh connection.
 			// SetBodyRaw would leave that retry pointing at ctx's buffer,
-			// which fasthttp has since recycled into another request —
-			// a document this proxy never hashed, sent upstream under the
-			// decision it made about a different one.
+			// since recycled into another request — a document this proxy never hashed,
+			// sent under the decision made about another.
 			req.SetBody(body)
 		} else {
 			// SetBodyRaw keeps the bytes rather than copying them: nothing here
@@ -473,7 +441,7 @@ func (s *server) forward(
 	deadline := time.Now().Add(s.timeout)
 	err := s.do(ctx, req, res, wantsStream, deadline)
 	if errors.Is(err, errAbandoned) {
-		// The headers never came and the forward was left to finish on its own,
+		// The headers never came and the forward was left running,
 		// so req and res belong to it now.
 		return true
 	}
@@ -493,9 +461,8 @@ func (s *server) forward(
 	}
 
 	if res.StatusCode() == fasthttp.StatusSwitchingProtocols {
-		// The offer was dropped by removeHopByHop above, so a 101 is an API
-		// answering a question nobody asked. Relaying it would hand the client
-		// a channel to the API on the strength of that answer alone.
+		// removeHopByHop dropped the offer above, so a 101 answers a question
+		// nobody asked. Relaying it would hand the client a channel to the API.
 		s.core.CountUpstreamError()
 		s.log.Error().Msg("the upstream switched protocols; nothing offered an upgrade")
 		s.answer(ctx, proxy.Answer{
@@ -506,30 +473,27 @@ func (s *server) forward(
 	}
 
 	// An answer read into a body stream that isn't a stream after all:
-	// the client asked for one and the API answered something else,
-	// which the GraphQL over SSE protocol allows for a request it refuses.
-	// Reading it whole is what the ordinary path does,
-	// and what keeps a truncated answer from reaching a client as a complete one.
+	// the client asked for one and the API answered something else, which GraphQL
+	// over SSE allows for a request it refuses. Read whole, as the ordinary path does,
+	// so a truncated answer can't reach a client as a complete one.
 	if wantsStream && !proxy.IsEventStream(string(res.Header.ContentType())) {
 		var payload []byte
 		err := s.within(ctx, req, res, deadline,
 			"the upstream answer didn't complete",
 			func() (err error) {
-				// A bodyless answer — a 204, or a 304 — leaves no stream to
-				// read. Reading it anyway dereferenced nil, and it happened in
-				// the goroutine below, where no recover can reach it:
-				// one allowed request against an API that answers 204 took the
-				// whole process down.
+				// A bodyless answer — a 204, a 304 — leaves no stream to read.
+				// Reading it anyway dereferences nil in the goroutine below,
+				// where no recover reaches it: one allowed request against an
+				// API that answers 204 takes the process down.
 				stream := res.BodyStream()
 				if stream == nil {
 					return nil
 				}
 				// Bounded, because this reads into memory and the streaming
 				// client ignores MaxResponseBodySize. An API answering
-				// application/json and then never stopping drove one request
-				// from 13 MB to 15 GB of resident memory in eight seconds:
-				// the deadline below answers the client at its timeout but
-				// abandons the read, which then ran on with nothing to stop it.
+				// application/json and then never stopping drives one request
+				// from 13 MB to 15 GB resident in eight seconds:
+				// the deadline answers the client but abandons the read, which runs on.
 				limited := io.LimitReader(stream, maxBufferedAnswer+1)
 				payload, err = io.ReadAll(limited)
 				if err == nil && int64(len(payload)) > maxBufferedAnswer {
@@ -553,8 +517,8 @@ func (s *server) forward(
 	}
 
 	res.Header.CopyTo(&ctx.Response.Header)
-	// CopyTo carries the setting with the headers, so the server's own is set
-	// again here: an answer that named no type reaches the client with none.
+	// CopyTo carries the setting with the headers, so the server's own is set again:
+	// an answer that named no type reaches the client with none.
 	ctx.Response.Header.SetNoDefaultContentType(true)
 	removeHopByHop(&ctx.Response.Header)
 	ctx.SetStatusCode(res.StatusCode())
@@ -562,11 +526,11 @@ func (s *server) forward(
 	if wantsStream && proxy.IsEventStream(string(res.Header.ContentType())) {
 		// Relayed as it arrives: fasthttp writes a body stream chunk by chunk,
 		// flushing each, so an event reaches the client when the API sent it
-		// rather than when the answer ends. Which, for a subscription, is never.
+		// and not when the answer ends — which, for a subscription, is never.
 		stream := res.BodyStream()
 		if stream == nil {
 			// An event stream carrying no body: the headers are the whole answer,
-			// so there is nothing to relay and nothing to own.
+			// so there's nothing to relay and nothing to own.
 			return false
 		}
 		relayed := &upstreamStream{
@@ -582,18 +546,17 @@ func (s *server) forward(
 
 // errAbandoned is a forward that outlived -upstream.timeout and was left
 // running: nothing interrupts a fasthttp client mid-request, so the request and
-// the answer belong to that goroutine until it ends and the caller must let
-// them go without releasing them.
+// the answer belong to that goroutine until it ends.
+// The caller lets them go without releasing them.
 var errAbandoned = errors.New("the forward was abandoned")
 
 // do carries the forward, with or without a read deadline on the connection.
 //
-// The ordinary client bounds the whole exchange, which is what -upstream.timeout means.
-// The streaming one has no deadline at all, because fasthttp's covers the body too and
-// a stream has no length to bound; what it does to the parts of a streaming forward that
-// aren't the stream is bounded by [server.within] against the one deadline,
-// so a client naming text/event-stream can't ask for less of a bound than
-// any other client gets.
+// The ordinary client bounds the whole exchange, which is what
+// -upstream.timeout means. The streaming one has no deadline at all,
+// since fasthttp's covers the body and a stream has no length to bound;
+// [server.within] bounds the parts that aren't the stream against the same deadline,
+// so naming text/event-stream can't buy a client a wider bound than any other gets.
 func (s *server) do(
 	ctx *fasthttp.RequestCtx, req *fasthttp.Request, res *fasthttp.Response,
 	wantsStream bool, deadline time.Time,
@@ -609,12 +572,11 @@ func (s *server) do(
 
 // within runs work under the exchange deadline.
 //
-// Where work doesn't finish in time the forward is abandoned rather than
-// stopped, since nothing interrupts a fasthttp client mid-request: the client
-// keeps req and res until it's done with them, this answers the 504 without
-// them, and the release happens when the goroutine ends. That way an API that
-// takes a connection and then says nothing costs one goroutine until it lets go,
-// instead of holding a forward for every request that reached it.
+// Work that doesn't finish in time is abandoned rather than stopped, since
+// nothing interrupts a fasthttp client mid-request: the client keeps req and res,
+// this answers the 504 without them, and the release happens when the goroutine ends.
+// An API that takes a connection and says nothing then costs
+// one goroutine until it lets go, not a forward per request that reached it.
 func (s *server) within(
 	ctx *fasthttp.RequestCtx, req *fasthttp.Request, res *fasthttp.Response,
 	deadline time.Time, what string, work func() error,
@@ -627,8 +589,8 @@ func (s *server) within(
 	case err := <-done:
 		return err
 	case <-timer.C:
-		// The work is abandoned, not stopped — nothing interrupts a fasthttp
-		// client mid-request. What can be stopped is a read of the answer's body:
+		// Abandoned, not stopped — nothing interrupts a fasthttp client mid-request.
+		// A read of the answer's body can be stopped:
 		// closing the stream fails it now instead of leaving it running
 		// against an API that never stops sending.
 		if stream, ok := res.BodyStream().(fasthttp.ReadCloserWithError); ok {
@@ -649,7 +611,7 @@ func (s *server) within(
 	}
 }
 
-// header is what the two helpers below need of a fasthttp header,
+// header is what the helpers below need of a fasthttp header,
 // which the request and the response carry as separate types.
 type header interface {
 	Del(key string)
@@ -658,7 +620,7 @@ type header interface {
 }
 
 // hopByHopHeaders belong to one connection rather than to the message,
-// so they stop here. The list is the one net/http/httputil carries,
+// so they stop here. The same list net/http/httputil carries,
 // so both underlays forward the same headers.
 var hopByHopHeaders = []string{
 	"Connection",
@@ -675,16 +637,15 @@ var hopByHopHeaders = []string{
 // requestOnlyHeaders stop at the proxy too, but belong to the request alone,
 // so they're kept out of the list above rather than deleted from every answer.
 var requestOnlyHeaders = []string{
-	// The expectation was the proxy's to meet and it met it: the body has been
-	// read and hashed, and a 100 was sent if one was asked for. Forwarding it
-	// makes the API run the handshake again for a body already in flight.
+	// The expectation was the proxy's to meet and it met it:
+	// the body is read and hashed, and a 100 sent if one was asked for.
+	// Forwarding it makes the API run the handshake again for a body already in flight.
 	"Expect",
 }
 
-// removeHopByHop drops the hop-by-hop headers, and the ones Connection names
-// with them: a client naming a header there is asking for it not to be forwarded,
-// and honouring that is what keeps a header from being smuggled past
-// something in front of this proxy.
+// removeHopByHop drops the hop-by-hop headers and the ones Connection names with them:
+// naming a header there asks for it not to be forwarded,
+// and honouring that keeps one from being smuggled past whatever is in front.
 func removeHopByHop(h header) {
 	if named := h.Peek("Connection"); len(named) > 0 {
 		for token := range splitTokens(string(named)) {
@@ -717,10 +678,10 @@ func splitTokens(v string) func(func(string) bool) {
 
 // setForwarded tells the upstream who the request came from.
 //
-// It follows the net/http underlay exactly,
-// including what [net/http/httputil.ReverseProxy] does before its hook runs:
-// the forwarding headers a client sent are dropped from the outbound request first,
-// so that without -trust-forwarded a client can't put anything of its own in them.
+// It follows the net/http underlay exactly, including what
+// [net/http/httputil.ReverseProxy] does before its hook runs:
+// the client's forwarding headers are dropped from the outbound request first,
+// so without -trust-forwarded a client can't put anything of its own in them.
 func (s *server) setForwarded(ctx *fasthttp.RequestCtx, req *fasthttp.Request) {
 	// What the client claimed, read before it's dropped.
 	var chain, host, proto string
@@ -763,8 +724,8 @@ func (s *server) setForwarded(ctx *fasthttp.RequestCtx, req *fasthttp.Request) {
 }
 
 // logger hands what the fasthttp server reports to zerolog, at debug level:
-// a malformed request is the caller's doing and a flood of them is the
-// caller's to make, which is where rejections sit too.
+// a malformed request is the caller's doing and a flood of them the caller's to make,
+// where rejections sit too.
 type logger struct{ log zerolog.Logger }
 
 func (l *logger) Printf(format string, args ...any) {

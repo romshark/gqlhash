@@ -26,16 +26,13 @@ import (
 )
 
 // Allowlist is the set of documents a request may carry, read from a directory
-// by [Allowlist.Reload].
-//
-// It's safe for concurrent use: a reload doesn't disturb the calls in flight,
-// which are answered by the documents of the load before it.
+// by [Allowlist.Reload]. Safe for concurrent use: a reload doesn't disturb the
+// calls in flight, which are answered by the load before it.
 type Allowlist struct {
 	newHash func() hash.Hash
 	options gqlhash.Options
 
-	// current is nil until the first Reload,
-	// which is no allowlist at all rather than an empty one.
+	// current is nil until the first Reload: no allowlist rather than an empty one.
 	current atomic.Pointer[list]
 
 	// loading serializes [Allowlist.Reload], which several callers may reach at once.
@@ -43,7 +40,7 @@ type Allowlist struct {
 }
 
 // list is one published set of hashes and when it was published.
-// It's immutable: a reload swaps a whole one.
+// Immutable: a reload swaps a whole one.
 type list struct {
 	docs     map[string]struct{}
 	loadedAt time.Time
@@ -55,9 +52,9 @@ func New(newHash func() hash.Hash, options gqlhash.Options) *Allowlist {
 	return &Allowlist{newHash: newHash, options: options}
 }
 
-// Allowed reports whether a request may carry the document with key, which is
+// Allowed reports whether a request may carry the document with key,
 // the hash of its canonical form, so formatting makes no difference.
-// The lookup allocates nothing, so a key may be a subslice of a request body.
+// The lookup allocates nothing, so key may be a subslice of a request body.
 //
 // Nothing is allowed before the first [Allowlist.Reload].
 func (a *Allowlist) Allowed(key []byte) bool {
@@ -69,7 +66,6 @@ func (a *Allowlist) Allowed(key []byte) bool {
 	return ok
 }
 
-// Len returns the number of documents on the list.
 func (a *Allowlist) Len() int {
 	l := a.current.Load()
 	if l == nil {
@@ -78,9 +74,9 @@ func (a *Allowlist) Len() int {
 	return len(l.docs)
 }
 
-// Stats returns what the allowlist holds and when it was loaded. Both belong to
-// the same load, which reading them apart wouldn't promise: a reload in between
-// pairs the count of one load with the time of another.
+// Stats returns what the allowlist holds and when it was loaded, both from the
+// same load — reading them apart would let a reload in between pair one load's
+// count with another's time.
 //
 // loadedAt is the zero time before the first [Allowlist.Reload].
 func (a *Allowlist) Stats() (documents int, loadedAt time.Time) {
@@ -92,10 +88,10 @@ func (a *Allowlist) Stats() (documents int, loadedAt time.Time) {
 }
 
 // Result is what an [Allowlist.Reload] published. Reporting it is the caller's:
-// which of it deserves an event, and at which level, is theirs to decide.
+// which of it deserves an event, and at which level.
 type Result struct {
-	// Files is the file of every document on the allowlist,
-	// in the order they were read. It's empty rather than nil where a load took nothing.
+	// Files is the file of every document on the allowlist, in the order they
+	// were read. Empty rather than nil where a load took nothing.
 	Files []string
 
 	// Skipped is one error per file left out: a document that can't be read,
@@ -103,9 +99,9 @@ type Result struct {
 	// Each one names the file, and a syntax error names the line and the column.
 	Skipped []error
 
-	// SchemaErr is set where the .graphqls files hold no schema that could be read,
+	// SchemaErr is set where the .graphqls files hold no readable schema,
 	// which leaves every document unchecked rather than unserved.
-	// It's no file left out, so it isn't one of Skipped.
+	// No file was left out, so it isn't one of Skipped.
 	SchemaErr error
 
 	// Added and Removed count the documents against the list this one replaced.
@@ -113,17 +109,16 @@ type Result struct {
 }
 
 // Reload reads dir and publishes what it holds, replacing what the allowlist
-// held before. Nothing remembers the last dir: another one publishes that
-// directory instead. Concurrent callers queue.
+// held before. Nothing remembers the last dir; concurrent callers queue.
 //
 // A document is skipped where it can't be read, doesn't parse, or the schema
 // doesn't take it, so one broken file doesn't keep the rest from being served.
-// Documents that share a hash are all skipped: which one a request meant is
+// Documents sharing a hash are all skipped: which one a request meant is
 // unknowable. Every skip is named in the [Result].
 //
 // A directory holding no usable document publishes an empty allowlist, which
 // rejects every request. A schema that can't be read leaves the documents
-// unchecked rather than unserved, and is reported as [Result.SchemaErr].
+// unchecked rather than unserved, reported as [Result.SchemaErr].
 func (a *Allowlist) Reload(dir string) (Result, error) {
 	a.loading.Lock()
 	defer a.loading.Unlock()
@@ -142,8 +137,8 @@ func (a *Allowlist) Reload(dir string) (Result, error) {
 		schemaErr = fmt.Errorf("%s: %w", strings.Join(schemaFiles, ", "), schemaErr)
 	}
 
-	// byHash gathers the files under the hash of their document,
-	// so a hash two of them share is seen before anything is published.
+	// byHash gathers the files under their document's hash,
+	// so a shared one is seen before anything is published.
 	byHash := make(map[string][]string, len(files))
 	order := make([]string, 0, len(files))
 	h := a.newHash()
@@ -179,7 +174,7 @@ func (a *Allowlist) Reload(dir string) (Result, error) {
 	for _, key := range order {
 		names := byHash[key]
 		if len(names) > 1 {
-			// Which of them a request meant is unknowable, so none of them is served:
+			// Which a request meant is unknowable, so none is served:
 			// allowing the wrong one is worse than allowing neither.
 			for i, name := range names {
 				others := append(append([]string{}, names[:i]...), names[i+1:]...)
@@ -205,25 +200,22 @@ func (a *Allowlist) Reload(dir string) (Result, error) {
 
 // scanDir returns the documents and the schema files under dir, sorted.
 //
-// The root is resolved through symlinks first. -allowlist commonly names one:
+// The root is resolved through symlinks first, since -allowlist commonly names one:
 // a deploy swaps an allowlist atomically by pointing a link at the new
-// directory (ln -s v2 tmp; mv -T tmp current), and [filepath.WalkDir] lstats
-// its root, so it would see the link rather than the directory it names and
-// walk nothing at all. That's an allowlist holding no document, which rejects
-// every request — a total outage, arrived at silently, on the one deployment
-// shape this is most likely to be run in.
+// directory (ln -s v2 tmp; mv -T tmp current), and [filepath.WalkDir] lstats its root,
+// so it would see the link and walk nothing at all — an allowlist holding no document,
+// rejecting every request, on the deployment shape this is most likely run in.
 //
-// What's reported is still the path as it was given. Only the root is resolved,
-// so a swap doesn't rewrite every entry of documents.files,
-// and a symlinked directory *inside* the allowlist is left unwalked as before:
-// following those invites a loop, and nothing needs them.
+// Only the root is resolved: what's reported is still the path as it was given,
+// so a swap doesn't rewrite every entry of documents.files, and a symlinked
+// directory inside the allowlist stays unwalked — following those invites a loop.
 func scanDir(dir string) (docs, schemas []string, err error) {
 	root := dir
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 		root = resolved
 	}
 	// given maps a path under the resolved root back to the argument,
-	// so that what a caller reads is the allowlist it named.
+	// so a caller reads the allowlist it named.
 	given := func(path string) string {
 		if root == dir {
 			return path
@@ -263,17 +255,16 @@ func scanDir(dir string) (docs, schemas []string, err error) {
 	return docs, schemas, nil
 }
 
-// schemaExt is what a file holding the schema is named.
+// schemaExt names a file holding the schema.
 // A directory without one is checked against no schema.
 const schemaExt = ".graphqls"
 
-// isDocument reports whether name is a GraphQL document.
 func isDocument(name string) bool {
 	return strings.HasSuffix(name, ".graphql") || strings.HasSuffix(name, ".gql")
 }
 
-// loadSchema reads the schema files as one schema.
-// It returns nil where there is none, and an error where they hold no valid schema.
+// loadSchema reads the schema files as one schema: nil where there is none,
+// an error where they hold no valid one.
 func loadSchema(files []string) (*ast.Schema, error) {
 	if len(files) == 0 {
 		return nil, nil

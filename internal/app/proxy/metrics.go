@@ -14,8 +14,8 @@ import (
 	"github.com/romshark/gqlhash/v2/internal/allowlist"
 )
 
-// decision is what the proxy did with a request. It's an index rather than the
-// label itself so that a request finds its histogram by offset, see [metrics].
+// decision is what the proxy did with a request. An index rather than the label itself,
+// so a request finds its histogram by offset, see [metrics].
 type decision uint8
 
 const (
@@ -44,21 +44,19 @@ func (d decision) String() string { return decisionLabels[d] }
 //
 // The counters are read from [counters] on scrape, so counting a request costs
 // what it costs without metrics. Only the duration is measured per request,
-// which is why [proxy.ServeHTTP] reads the clock for every request.
+// which is why [proxy.ServeHTTP] reads the clock.
 type metrics struct {
 	registry *prometheus.Registry
 	duration *prometheus.HistogramVec
 	// observers is the histogram of each decision, resolved once. Asking the
-	// vector for one by its label per request hashes the label and looks it up
-	// under a lock, which was ~3% of the rejected path.
+	// vector per request hashes the label and takes a lock:
+	// ~3% of the rejected path.
 	observers [decisionCount]prometheus.Observer
 }
 
 // newMetrics returns metrics over counters and the documents in use in list.
-//
-// It takes the counters rather than the [proxy] that keeps them, so a proxy can
-// build its own metrics while it's being built: the two would otherwise each
-// need the other first.
+// It takes the counters rather than the [proxy] holding them, so a proxy can
+// build its own: the two would otherwise each need the other first.
 func newMetrics(counters *counters, list *allowlist.Allowlist) *metrics {
 	m := &metrics{
 		registry: prometheus.NewRegistry(),
@@ -67,7 +65,7 @@ func newMetrics(counters *counters, list *allowlist.Allowlist) *metrics {
 			Subsystem: "proxy",
 			Name:      "request_duration_seconds",
 			Help:      "Time from reading a request to answering it.",
-			// A rejection takes microseconds and a forwarded request milliseconds,
+			// A rejection takes microseconds and a forward milliseconds,
 			// so the buckets span both. The default set starts at 5ms.
 			Buckets: []float64{
 				0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005,
@@ -76,8 +74,8 @@ func newMetrics(counters *counters, list *allowlist.Allowlist) *metrics {
 		}, []string{"decision"}),
 	}
 
-	// Resolving every observer here also means all three series exist from the
-	// start, so a dashboard doesn't wait for the first request of a kind.
+	// Resolved here, so every series exists from the start and a dashboard
+	// doesn't wait for the first request of a kind.
 	for d := range m.observers {
 		m.observers[d] = m.duration.WithLabelValues(decision(d).String())
 	}
@@ -96,7 +94,6 @@ func (m *metrics) Observe(d decision, start time.Time) {
 	m.observers[d].Observe(time.Since(start).Seconds())
 }
 
-// Handler serves the metrics.
 func (m *metrics) Handler(log zerolog.Logger) http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{
 		ErrorLog:      &promLogger{log: log},
@@ -107,11 +104,9 @@ func (m *metrics) Handler(log zerolog.Logger) http.Handler {
 // promLogger hands the errors of the metrics handler to zerolog.
 type promLogger struct{ log zerolog.Logger }
 
-// Println takes the arguments of [fmt.Sprintln]: any number of them and no
-// format string. promhttp passes the message and the error apart, so they're
-// joined before they reach the log. A format string with one verb here would
-// keep the first and leave the error in an %!(EXTRA) tail, which is the part
-// worth reading.
+// Println takes the arguments of [fmt.Sprintln]: any number, no format string.
+// promhttp passes the message and the error apart, so they're joined here.
+// One verb would keep the first and leave the error in an %!(EXTRA) tail.
 func (l *promLogger) Println(v ...any) {
 	l.log.Error().Msg("serving metrics: " +
 		strings.TrimSuffix(fmt.Sprintln(v...), "\n"))
@@ -165,13 +160,11 @@ func (c *proxyCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(descUpstreamErrors,
 		prometheus.CounterValue, float64(made.upstream))
 
-	// Both come from one call, so a reload between them can't pair the count of
-	// one load with the time of another.
+	// One call, so a reload between them can't pair one load's count with another's time.
 	documents, loadedAt := c.allowlist.Stats()
 
 	// A count of 0 is the truth before the first reload. A timestamp of 0 isn't:
-	// it reads as 1970, and an alert on the age of the allowlist would fire on it.
-	// Nothing is the honest answer until there's a load to report.
+	// it reads as 1970, and an alert on the allowlist's age would fire on it.
 	ch <- prometheus.MustNewConstMetric(descDocuments,
 		prometheus.GaugeValue, float64(documents))
 	if !loadedAt.IsZero() {

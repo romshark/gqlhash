@@ -60,10 +60,10 @@ func TestExtractJSON(t *testing.T) {
 //
 //	{"query":"<allowed>","quer\u0079":"<anything>"}
 //
-// The proxy sees the first member alone, allows it and forwards the body. The
-// API unescapes the second key to query and runs that document instead, which
-// was never hashed and can be any operation the schema exposes.
-// So the second one is a collision: the request names the document twice and is refused.
+// The proxy would see the first member alone, allow it and forward the body,
+// while the API unescapes the second key to query and runs that document —
+// never hashed, and any operation the schema exposes.
+// So the second is a collision: the request names the document twice and is refused.
 func TestExtractJSONEscapedQueryKey(t *testing.T) {
 	f := func(t *testing.T, expectErr error, expect []string, body string) {
 		t.Helper()
@@ -140,10 +140,9 @@ func TestExtractJSONQueryCollision(t *testing.T) {
 	f(t, errQueryCollision, `[{"query":"{a}"},{"query":"{b}","queRY":"{c}"}]`, true)
 }
 
-// TestExtractQueryParamEncodedName is the GET half of
-// TestExtractJSONEscapedQueryKey. extractQueryParam compares the raw parameter name,
-// so quer%79 is no query to it, while [net/url.ParseQuery] decodes the
-// name first and puts both under query.
+// TestExtractQueryParamEncodedName is the GET half of TestExtractJSONEscapedQueryKey.
+// extractQueryParam compares the raw parameter name, so quer%79 is no query to it,
+// while [net/url.ParseQuery] decodes the name first and puts both under query.
 func TestExtractQueryParamEncodedName(t *testing.T) {
 	f := func(t *testing.T, expectErr error, expect, rawQuery string) {
 		t.Helper()
