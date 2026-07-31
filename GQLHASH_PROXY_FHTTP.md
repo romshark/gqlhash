@@ -18,28 +18,27 @@ Only the command naming fasthttp links it. `gqlhash-proxy` is 12.24 MB stripped 
 
 Both drive the same `proxy.Core`, so the allowlist, hashing, `-ignore`, `-allow-batch` and `-opaque-errors` behave identically. One parity suite runs every assertion against both.
 
-Measurements below: Xeon w5-2455X, 24 cores, loopback, wrk at 200 connections, 58-byte upstream answer.
+Measurements below: Xeon w5-2455X — 12 physical cores, 24 hardware threads — loopback, wrk at 200 connections, 58-byte upstream answer. `gqlhash-proxy` is driven at `-threads 8` and `gqlhash-proxy-fhttp` at `-threads 10`, the counts that saturate each. They differ because the faster command needs a bigger generator to be saturated at all; the balance each run prints confirms neither is waiting on wrk. An earlier revision of this page drove both at four threads, which understated `gqlhash-proxy` on the rejected path by 22% and `gqlhash-proxy-fhttp` by 119% — enough to reverse the conclusion, since it read as net/http winning that path by 4%.
 
 ## Throughput
 
-Each command at its own best `GOGC`.
-
 | forwarded | req/s | p99 | RSS peak / mean |
 | --- | --- | --- | --- |
-| `gqlhash-proxy`, `GOGC=100` | 160,434 | 5.16 ms | 51 / 49 MB |
-| `gqlhash-proxy`, `GOGC=800` | 210,260 | 4.40 ms | 166 / 156 MB |
-| `gqlhash-proxy-fhttp`, `GOGC=100` | 312,211 | 2.34 ms | 35 / 33 MB |
-| **`gqlhash-proxy-fhttp`, `GOGC=400`** | **390,966** | **1.90 ms** | **55 / 49 MB** |
+| `gqlhash-proxy`, `GOGC=100` | 160,354 | 4.95 ms | 52 / 50 MB |
+| `gqlhash-proxy`, `GOGC=800` | 210,877 | 4.27 ms | 168 / 160 MB |
+| `gqlhash-proxy-fhttp`, `GOGC=100` | 308,619 | 2.30 ms | 49 / 44 MB |
+| **`gqlhash-proxy-fhttp`, `GOGC=800`** | **389,677** | **1.80 ms** | 144 / 83 MB |
 
 | rejected | req/s | p99 | RSS peak / mean |
 | --- | --- | --- | --- |
-| `gqlhash-proxy`, `GOGC=100` | 515,733 | 1.67 ms | 50 / 40 MB |
-| **`gqlhash-proxy`, `GOGC=800`** | **629,780** | 0.98 ms | 159 / 106 MB |
-| `gqlhash-proxy-fhttp`, any `GOGC` | 603,278 | **0.57 ms** | 35 / 35 MB |
+| `gqlhash-proxy`, `GOGC=100` | 630,043 | **2.43 ms** | 52 / 41 MB |
+| `gqlhash-proxy`, `GOGC=800` | 927,557 | 2.75 ms | 202 / 111 MB |
+| **`gqlhash-proxy-fhttp`, any `GOGC`** | **1,319,581** | 3.04 ms | 49 / 49 MB |
 
-- Forwarding: fasthttp is ~86% faster on a third of the memory. It replaces `httputil.ReverseProxy` and `http.Transport`; no `GOGC` value closes that gap.
-- Rejecting: a GC-tuned `gqlhash-proxy` is 4% faster on throughput. fasthttp wins the tail, 0.57 ms against 0.98 ms, and the memory, 35 MB against 159 MB peak.
-- `GOGC` is worth ~25% to fasthttp when forwarding. On the rejected path fasthttp is flat across it.
+- Forwarding: fasthttp is ~92% faster at the same `GOGC` and ~85% faster with each at its best. It replaces `httputil.ReverseProxy` and `http.Transport`; no `GOGC` value closes that gap.
+- Rejecting: **fasthttp is 42% faster than a GC-tuned `gqlhash-proxy` and 2.1× faster than an untuned one**, on a quarter of the memory. It allocates nothing on this path, so the collector never runs and `GOGC` does nothing for it.
+- The tail is the one thing fasthttp does not win at 200 connections: 3.04 ms against 2.43 ms. It is serving 2.1× the rate to get there, so the two p99s are not measurements of the same load. At 1,000 connections, where both are past their throughput peak, fasthttp wins it back — 3.56 ms against 6.43 ms, see [PERFORMANCE.md](PERFORMANCE.md#connections).
+- `GOGC` is worth ~26% to fasthttp when forwarding, and nothing at all when rejecting.
 
 ## Size
 
@@ -156,8 +155,8 @@ Under either command, a request smuggled past a front end still has to hash to s
 
 ## Choosing
 
-`gqlhash-proxy-fhttp` for forwarded volume or a small memory footprint.
+`gqlhash-proxy-fhttp` for throughput or a small memory footprint. It is faster on both paths at every connection count measured, so there is no longer a workload that picks `gqlhash-proxy` on performance.
 
-`gqlhash-proxy` when a client hanging up should stop upstream work, when parser agreement with something in front matters more than throughput, or when the rejected path is what you are sized for. It is also the default: its parser has two decades of adversarial attention on it.
+`gqlhash-proxy` for everything else, which is most of it: when a client hanging up should stop upstream work, when parser agreement with something in front matters, when a request trailer must not arrive as a header, when `HTTP_PROXY` or HTTP/2 upstreams are in play, or when an API may answer `1xx`. It is also the default: its parser has two decades of adversarial attention on it. The costs listed above are the reason to run it, and none of them got cheaper because the other build got faster.
 
 Switching is running the other binary with the same flags.
