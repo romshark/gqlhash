@@ -229,11 +229,10 @@ func TestGETWithBody(t *testing.T) {
 // TestGETBodyIsBytesNotFraming covers what "carrying a body" means when the
 // body is empty or its length isn't declared.
 //
-// A body is bytes. An empty one names no document, so it's no second place one
-// could be and the request is decided on its query string; bytes are,
-// whatever framing declared them. The two shapes here can't be reached through
-// [http.Request], which always declares a length, so they're written raw — and
-// they're where the two commands used to disagree,
+// A body is bytes. An empty one names no document, so the request is decided on
+// its query string; bytes do, whatever framing declared them. Neither shape
+// here is reachable through [http.Request], which always declares a length,
+// so both are written raw — and both are where the two commands can disagree,
 // one reading a framing and the other the bytes.
 func TestGETBodyIsBytesNotFraming(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {

@@ -63,26 +63,25 @@ var (
 // Error says where in the document parsing stopped. Its zero value means no
 // error, so callers check [Error.Err] instead of comparing to nil.
 //
-// Why a value and no error: putting it into an error allocates on every rejected
-// document.
+// A value and no error: boxing one allocates on every rejected document.
 //
-// WARNING: never hold an Error in an error interface variable. It satisfies error so
-// that [errors.Is] reaches the sentinel through [Error.Unwrap] and so that %v
-// prints the offset, but an interface holding a zero value isn't nil:
+// WARNING: never hold an Error in an error interface variable. It satisfies
+// error so [errors.Is] reaches the sentinel through [Error.Unwrap] and %v prints
+// the offset, but an interface holding a zero value isn't nil:
 //
 //	var err error = someError   // never nil, whatever it holds
 //
-// reads as a failure for every document, including the ones that parsed. Where
-// an error is wanted, pass [Error.Err], which is nil exactly when nothing failed.
+// reads as a failure for every document, the ones that parsed included.
+// Where an error is wanted, pass [Error.Err], nil exactly when nothing failed.
 type Error struct {
 	// Err is nil when there's no error. Otherwise it's [ErrUnexpectedEOF],
 	// [ErrUnexpectedToken], one of the errors wrapping [ErrUnexpectedToken],
 	// [ErrTooDeep], or the error of the [io.Writer].
 	Err error
 
-	// Offset is the byte index into the document where parsing stopped, and -1
-	// where there is no position, which is the error of an [io.Writer].
-	// Offset 0 is the first byte of the document, so it can't stand for "no position".
+	// Offset is the byte index where parsing stopped, and -1 where there is no position,
+	// which is the error of an [io.Writer]. Offset 0 is the first byte of the document,
+	// so it can't stand for "no position".
 	//
 	// [Position] turns it into a line and a column.
 	Offset int
@@ -91,8 +90,8 @@ type Error struct {
 // IsErr returns true if e holds an error.
 func (e Error) IsErr() bool { return e.Err != nil }
 
-// Error reads the value, including the zero one, which says so rather than
-// pretending to be a failure. See the requirement on [Error].
+// Error reads the value. The zero one says so rather than pretending to be a failure.
+// See the requirement on [Error].
 func (e Error) Error() string {
 	switch {
 	case e.Err == nil:
@@ -112,12 +111,12 @@ func newError(src string, offset int, err error) Error {
 
 // Position returns the 1-based line and column of offset in s.
 // A column counts characters, not bytes: a malformed byte counts as one,
-// as it does for the parser. It returns 0, 0 for a negative offset,
-// which is what an [Error] carries where there is no position.
+// as it does for the parser. A negative offset,
+// which is what an [Error] without a position carries, returns 0, 0.
 //
-// Why not a method of [Error]: a line and a column are presentation,
-// and finding them scans the document up to offset.
-// That belongs where the message is formatted, not on the path that rejects a document.
+// Not a method of [Error]: finding a line and a column scans the document up to offset,
+// which belongs where the message is formatted rather than on the path
+// that rejects a document.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#LineTerminator
@@ -140,9 +139,8 @@ func Position[S string | []byte](s S, offset int) (line, column int) {
 }
 
 // The hash prefixes introduce the tokens of the canonical form.
-//
-// Why: without them two tokens collapse into one, and the fields of
-// `{ foo bar }` would produce the bytes of the single field `{ foobar }`.
+// Without them two tokens collapse into one: the fields of `{ foo bar }` would
+// produce the bytes of the single field `{ foobar }`.
 //
 // Requirement: no prefix may be 0x9, 0xA or 0xD. Those are valid bytes within a
 // string value (https://spec.graphql.org/September2025/#SourceCharacter).
@@ -186,11 +184,9 @@ const (
 	// Only formatting, comments and descriptions are left out.
 	IgnoreNothing Ignore = iota
 
-	// IgnoreInputs leaves out every argument value:
-	// literals, lists, input objects and variable usages alike.
-	// The name of an argument is kept, only its value is left out,
-	// so `f(x: 1)` and `f` still differ. The variable signature,
-	// which is the definitions in the operation, is kept as well.
+	// IgnoreInputs leaves out every argument value: literals, lists,
+	// input objects and variable usages alike. The argument name is kept,
+	// so `f(x: 1)` and `f` still differ, and so is the variable signature.
 	//
 	// These 3 queries produce the same hash:
 	//
@@ -226,11 +222,9 @@ type Options struct {
 
 	// DepthLimit is how deeply selection sets, list values and input object
 	// values may nest before a document is rejected with [ErrTooDeep].
-	// Anything below 1 takes [DefaultDepthLimit], so there is no value that
-	// turns the limit off.
+	// Below 1 takes [DefaultDepthLimit]: no value turns the limit off.
 	//
-	// Nesting is what a document can grow cheaply,
-	// so this is the bound on the work one costs.
+	// Nesting is what a document grows cheaply, so this bounds what one costs.
 	DepthLimit int
 }
 
@@ -242,24 +236,21 @@ const (
 
 	// DefaultDepthLimit is the nesting an [Options] with no DepthLimit takes.
 	//
-	// It's past what a document written for an API reaches: a Relay-style query
-	// costs two levels per page of pagination, a filter of nested input objects a
-	// few more. It's far below what a document costs to attack with, which is
-	// what the limit is for.
+	// Past what a document written for an API reaches — a Relay-style query
+	// costs two levels per page, a filter of nested input objects a few more —
+	// and far below what a document costs to attack with.
 	//
-	// It's also the stack a fresh parser holds: one byte per open ListValue or
-	// InputObjectValue, so a parser that takes this depth without growing costs
-	// 128 bytes.
+	// Also the stack a fresh parser holds: one byte per open ListValue or
+	// InputObjectValue, so taking this depth without growing costs 128 bytes.
 	DefaultDepthLimit = 128
 
-	// maxRetainedBufferSize is the largest buffer a parser keeps between calls.
-	// A bigger one is released, so one oversized document doesn't make a parser
-	// hold on to an oversized buffer.
+	// maxRetainedBufferSize is the largest buffer a parser keeps between calls,
+	// so one oversized document doesn't leave it holding an oversized buffer.
 	maxRetainedBufferSize = 1 << 20
 )
 
-// state holds the buffers a [Parser] reuses across calls. It's not generic:
-// the state machine works on a string, whatever the input type.
+// state holds the buffers a [Parser] reuses across calls. Not generic: the
+// state machine works on a string, whatever the input type.
 type state struct {
 	// buf holds the canonical token stream until it's written out.
 	buf []byte
@@ -287,7 +278,7 @@ var pool = sync.Pool{New: func() any {
 // and writes its canonical form to w, applying options.
 //
 // The canonical form leaves out comments, spaces, tabs, line-breaks,
-// carriage-returns and descriptions, so two documents that differ only in
+// carriage-returns and descriptions, so two documents differing only in
 // formatting produce the same bytes. w receives it in a single Write,
 // and nothing at all for a document that turns out to be invalid.
 //
@@ -295,8 +286,8 @@ var pool = sync.Pool{New: func() any {
 // the error of w if the write failed. Parse never resets w,
 // so several documents can be written into one sum.
 //
-// A named type such as json.RawMessage doesn't satisfy the constraint, so it
-// takes a conversion: Parse(w, options, []byte(raw)). The conversion copies nothing.
+// A named type such as json.RawMessage takes a conversion,
+// which copies nothing: Parse(w, options, []byte(raw)).
 //
 // Reuse a [Parser] where this is called per request, it can be more efficient.
 //
@@ -319,9 +310,9 @@ type Parser[S string | []byte] struct{ s *state }
 
 // NewParser creates a new reusable parser instance.
 //
-// bufferSize is the starting size of the buffer, see [DefaultBufferSize], which
-// stands in when it's less than 1. The stack a value nests on takes
-// [DefaultDepthLimit] frames, which no document under that limit exceeds.
+// bufferSize is the buffer's starting size; below 1 takes [DefaultBufferSize].
+// The stack a value nests on takes [DefaultDepthLimit] frames,
+// which no document under that limit exceeds.
 func NewParser[S string | []byte](bufferSize int) *Parser[S] {
 	return &Parser[S]{s: newState(bufferSize)}
 }
@@ -331,11 +322,9 @@ func (p *Parser[S]) Parse(w io.Writer, options Options, s S) Error {
 	return parse(p.s, w, options, asString(s))
 }
 
-// asString views s as a string without copying it.
-//
-// The state machine only reads the source and keeps no reference to it,
-// so the view doesn't outlive the call. The return after the switch is unreachable:
-// the constraint admits no third type.
+// asString views s as a string without copying it. The state machine only reads
+// the source and keeps no reference, so the view doesn't outlive the call.
+// The return after the switch is unreachable: the constraint admits no third type.
 func asString[S string | []byte](s S) string {
 	switch v := any(s).(type) {
 	case string:

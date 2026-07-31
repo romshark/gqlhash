@@ -55,13 +55,11 @@ func TestBatchShapes(t *testing.T) {
 				code, answer)
 		}
 
-		// Where the rule actually falls: every document the batch carries has
-		// to be allowed, and an element carrying none carries none.
-		// So a batch of one allowed document beside a number is served,
-		// where that number alone is refused for naming no document at all.
-		// Nothing unhashed reaches the API either way —
-		// a number holds no document to run — but the two rows read oddly together,
-		// which is why they're written down.
+		// Where the rule falls: every document a batch carries has to be
+		// allowed, and an element carrying none carries none. So an allowed
+		// document beside a number is served, where that number alone is
+		// refused for naming no document. Nothing unhashed reaches the API
+		// either way, but the two rows read oddly together.
 		if code, answer := post(t, e.server,
 			`[{"query":"`+allowedText+`"},7]`); code != http.StatusOK {
 			t.Errorf("expected the element carrying no document ignored;"+
@@ -250,10 +248,9 @@ func TestEmptyGraphQLBody(t *testing.T) {
 // TestHEADWithQueryString covers the method a cache or a health checker sends.
 //
 // Only a GET reads the query string, so for every other method a `query`
-// parameter is a parameter beside a body — which is `ambiguous`, the one series
-// the design calls worth an alert. A health check pointed at the wrong URL
-// therefore raises the alarm meant for somebody probing, and that's shared
-// behaviour worth knowing rather than a difference.
+// parameter is a parameter beside a body: `ambiguous`, the one series the
+// design calls worth an alert. A health check pointed at the wrong URL raises
+// the alarm meant for somebody probing — shared behaviour worth knowing.
 func TestHEADWithQueryString(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := newEnv(t, tgt, []string{allowedDoc})
@@ -488,13 +485,12 @@ func TestUpstreamURLShapes(t *testing.T) {
 	})
 }
 
-// TestReloadMethodGate covers the method gate on /reload, which was probed
-// with GET only and never while a token was configured.
+// TestReloadMethodGate covers the method gate on /reload,
+// with and without a token configured.
 //
-// The rule is that /reload stays POST-first: a wrong method is 405 whatever the
-// token says, so a browser or a scraper that wanders onto the control address
-// can't spend the work of a reload, and a 405 never tells anybody whether they
-// had the right token.
+// /reload stays POST-first: a wrong method is 405 whatever the token says,
+// so a browser or scraper wandering onto the control address can't spend the work of
+// a reload, and a 405 tells nobody whether they had the right token.
 func TestReloadMethodGate(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
@@ -541,10 +537,9 @@ func TestReloadMethodGate(t *testing.T) {
 // TestFailedReloadLeavesTheStateAlone covers what /status says after a reload
 // that failed.
 //
-// A deploy script reads /status to decide whether its new documents are live.
-// Stamping the load time at the start of a reload would still serve the old
-// documents — which is all that was checked before — while telling that script
-// the new ones had landed.
+// A deploy script reads /status to decide whether its new documents are live,
+// so stamping the load time at the start of a reload would tell it the new ones
+// had landed while the old ones are still served.
 func TestFailedReloadLeavesTheStateAlone(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
@@ -699,9 +694,9 @@ func TestReloadKeepsTheCounters(t *testing.T) {
 // document has.
 //
 // 403 is indistinguishable from a plain rejection in the answer, so the label
-// is the only thing that tells an operator a nesting flood from an allowlist
-// that's out of date. An implementation classifying depth only where its JSON
-// extraction lives books the cheapest carrier as `rejected`.
+// is the only thing telling an operator a nesting flood from an allowlist out
+// of date. Classifying depth only where the JSON extraction lives books the
+// cheapest carrier as `rejected`.
 func TestTooDeepAcrossCarriers(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
@@ -799,13 +794,11 @@ func TestStatusReportsUpstreamErrors(t *testing.T) {
 	})
 }
 
-// TestMetricsHistogramBuckets covers the bucket set of the duration histogram,
-// which only ever had two `le=` values substring-matched against it.
-//
-// A reimplementation with five buckets passes that and gives different
-// quantiles from the same traffic, which is a dashboard that disagrees with
-// itself across a deploy. One without +Inf passes it too,
-// and is not a histogram Prometheus can read.
+// TestMetricsHistogramBuckets covers the whole bucket set of the duration
+// histogram. Matching a `le=` value or two leaves a reimplementation free to
+// ship five buckets, giving different quantiles from the same traffic — a
+// dashboard that disagrees with itself across a deploy — or to drop +Inf,
+// which is no histogram Prometheus can read.
 func TestMetricsHistogramBuckets(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := shared(t, tgt)
@@ -911,13 +904,11 @@ func TestMetricsIsAWholeExposition(t *testing.T) {
 // answer has begun: the API sends its headers and a partial body, then stops.
 //
 // A timeout before the headers is a 504 (TestUpstreamTimeout). After them the
-// status is already on the wire and can't be taken back, so this is the
-// truncated-answer rule instead — a client never receives a complete-looking answer,
-// and which of "no answer at all" and "502" it receives is the underlay's,
-// exactly as in TestBrokenUpstreamAnswer.
+// status is on the wire and can't be taken back, so the truncated-answer rule
+// applies instead: no complete-looking answer, and which of "nothing" and "502"
+// the client sees is the underlay's, as in TestBrokenUpstreamAnswer.
 //
-// What both keep, and what went uncounted on one of them:
-// the timeout is an upstream failure and is counted as one.
+// What both keep: the timeout is an upstream failure and is counted as one.
 func TestUpstreamTimeoutAfterTheHeaders(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
@@ -957,9 +948,9 @@ func TestUpstreamTimeoutAfterTheHeaders(t *testing.T) {
 // lands in.
 //
 // The proxy decided `allowed` and the API then failed, so that's where it's
-// counted and that's where it's timed. The design calls this a known wart —
-// the fix would be an outcome label on the histogram rather than a seventh
-// decision — and an unpinned wart is one a reimplementation gets to differ on.
+// counted and timed. The design calls this a known wart — the fix is an outcome
+// label on the histogram rather than a seventh decision — and an unpinned wart
+// is one a reimplementation gets to differ on.
 func TestUpstreamTimeoutIsTimedAsAllowed(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
@@ -1031,11 +1022,9 @@ func TestAllowlistUnreadableDocument(t *testing.T) {
 // TestDepthLimitAtLoadTime covers the half of -depth-limit that isn't the
 // request path: a document on the allowlist that nests past it.
 //
-// The flag is documented as applying to the allowlist and to requests alike so
-// the two can't disagree. Only the request half was pinned, so an
-// implementation that checked requests alone passed — and would then hold a
-// document it refuses to serve,
-// which is an allowlist entry that can never match anything.
+// The flag applies to the allowlist and to requests alike, so the two can't disagree.
+// Checking requests alone leaves the allowlist holding a document the
+// proxy refuses to serve: an entry that can never match anything.
 func TestDepthLimitAtLoadTime(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
@@ -1106,9 +1095,8 @@ func TestFlagsThatAreOnlyEverParsed(t *testing.T) {
 // duration and size flag reads as "no limit" and which here is a limit of zero.
 //
 // It starts and then refuses every request carrying a body, while a GET whose
-// document is in the query string is still served. That's an unguarded
-// comparison rather than a design, and pinning it is what makes changing it a
-// decision somebody took.
+// document is in the query string is still served. An unguarded comparison
+// rather than a design, pinned so changing it is a decision somebody took.
 func TestMaxBodyZeroRefusesEveryBody(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := newEnv(t, tgt, []string{allowedDoc}, "-server.max-body", "0")
@@ -1127,10 +1115,10 @@ func TestMaxBodyZeroRefusesEveryBody(t *testing.T) {
 
 // TestUpstreamURLScheme covers what -upstream.url may name.
 //
-// A scheme that is neither http nor https used to be accepted and then read as
-// one of them anyway, differently by each underlay — an ftp:// upstream was a
-// 502 under one and a served request under the other. It's refused at startup
-// now, which is where a value nobody can forward over belongs.
+// A scheme that is neither http nor https is refused at startup, which is where
+// a value nobody can forward over belongs. Accepted, it would be read as one of
+// them anyway and differently by each underlay: an ftp:// upstream is a 502
+// under one and a served request under the other.
 func TestUpstreamURLScheme(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()

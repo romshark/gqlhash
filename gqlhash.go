@@ -31,14 +31,14 @@ var (
 )
 
 // The defaults an [Options] with no value of its own takes, and the size a
-// [Hasher] starts at. They're here as well as in [parser] so that reasoning
-// about Options takes no second import.
+// [Hasher] starts at. Re-exported from [parser] so reasoning about Options
+// takes no second import.
 const (
 	// DefaultDepthLimit is the nesting an [Options] with no DepthLimit takes.
 	DefaultDepthLimit = parser.DefaultDepthLimit
 
-	// DefaultBufferSize is how many bytes of canonical form a fresh [Hasher]
-	// holds. It's a starting size and no limit, see [NewHasherWithBuffer].
+	// DefaultBufferSize is how many bytes of canonical form a fresh [Hasher] holds.
+	// A starting size and no limit, see [NewHasherWithBuffer].
 	DefaultBufferSize = parser.DefaultBufferSize
 )
 
@@ -77,7 +77,7 @@ func Position[S string | []byte](s S, offset int) (line, column int) {
 // Two valid documents that differ are no error: equal is false and the returned
 // [Error] is the zero value. equal is false whenever the [Error] holds one.
 //
-// Order is significant: two documents with the same fields in a different order differ.
+// Order is significant: the same fields in a different order differ.
 func Compare[S string | []byte](
 	h Hash, options Options, a, b S,
 ) (equal bool, err Error) {
@@ -118,12 +118,11 @@ func NewHasher[S string | []byte](h Hash, options Options) *Hasher[S] {
 	return NewHasherWithBuffer[S](h, options, 0)
 }
 
-// NewHasherWithBuffer is [NewHasher] with the buffer the canonical form is
-// built in sized by the caller. 0 takes [DefaultBufferSize].
+// NewHasherWithBuffer is [NewHasher] with the canonical-form buffer sized by the caller;
+// 0 takes [DefaultBufferSize].
 //
 // The buffer grows to whatever a document needs, so this only decides what the
-// first documents cost: size it for the largest document a caller hashes and
-// nothing grows it again.
+// first documents cost: sized for the largest, nothing grows it again.
 func NewHasherWithBuffer[S string | []byte](
 	h Hash, options Options, bufferSize int,
 ) *Hasher[S] {
@@ -135,12 +134,8 @@ func NewHasherWithBuffer[S string | []byte](
 	}
 }
 
-// Append reads the document s and appends its hash to buffer.
-// It resets the hash of h.
-//
-// A document that's rejected leaves buffer as it was, which is what the AppendX
-// convention promises: buf, err = h.Append(buf, s) keeps what buf held where s
-// didn't parse.
+// Append reads the document s and appends its hash to buffer, resetting the hash of h.
+// A rejected document leaves buffer as it was, as the AppendX convention promises.
 func (h *Hasher[S]) Append(buffer []byte, s S) ([]byte, Error) {
 	h.hash.Reset()
 	if err := h.parser.Parse(h.hash, h.options, s); err.Err != nil {
@@ -159,8 +154,8 @@ func (h *Hasher[S]) Compare(a, b S) (equal bool, err Error) {
 	size := len(sums)
 
 	h.hash.Reset()
-	// The buffer is kept on every way out, so a rejected document doesn't cost
-	// the next call its capacity.
+	// Kept on every way out,
+	// so a rejected document doesn't cost the next call its capacity.
 	if err = h.parser.Parse(h.hash, h.options, b); err.Err != nil {
 		h.sums = sums
 		return false, err
@@ -172,11 +167,8 @@ func (h *Hasher[S]) Compare(a, b S) (equal bool, err Error) {
 }
 
 // AppendHash reads the document s and appends its hash to buffer,
-// applying options. It resets h.
-//
-// A document that's rejected leaves buffer as it was, which is what the AppendX
-// convention promises: buf, err = AppendHash(buf, ...) keeps what buf held where
-// s didn't parse.
+// applying options and resetting h.
+// A rejected document leaves buffer as it was, as the AppendX convention promises.
 //
 // On a per-request path use a [Hasher], which allocates nothing.
 func AppendHash[S string | []byte](

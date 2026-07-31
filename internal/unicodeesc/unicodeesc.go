@@ -1,9 +1,8 @@
 // Package unicodeesc reads the \uXXXX escape that JSON and GraphQL share.
 //
-// Both spell a code point as four hexadecimal digits, and both spell one above
-// 0xFFFF as a pair of surrogates. What a half of a pair on its own means is
-// where the two part ways: JSON replaces it, GraphQL rejects it.
-// So this package answers what a value is and leaves what to do about it to the caller.
+// Both spell a code point as four hexadecimal digits and one above 0xFFFF as a
+// surrogate pair. They part ways over half a pair on its own — JSON replaces it,
+// GraphQL rejects it — so this answers what a value is and leaves the rest to the caller.
 package unicodeesc
 
 // Source is a document, held either way a caller of this module holds one.
@@ -33,8 +32,8 @@ func DigitValue(b byte) uint32 {
 }
 
 // Value returns the value of the four hexadecimal digits s begins with.
-// The result is meaningless unless all four are digits, which a caller that
-// hasn't checked them already gets from [Hex4] instead.
+// The result is meaningless unless all four are digits;
+// a caller that hasn't checked takes [Hex4] instead.
 //
 // s must hold at least four bytes.
 func Value[S Source](s S) uint32 {

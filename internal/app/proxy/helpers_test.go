@@ -16,7 +16,6 @@ import (
 
 func testLogger() zerolog.Logger { return zerolog.New(io.Discard) }
 
-// writeDoc writes a document into dir, creating parent directories.
 func writeDoc(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)

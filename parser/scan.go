@@ -40,7 +40,6 @@ func lineTerminatorLen(s string, i int) int {
 	return 0
 }
 
-// hasPrefixAt reports whether s continues with prefix at index i.
 func hasPrefixAt(s string, i int, prefix string) bool {
 	return len(s)-i >= len(prefix) && s[i:i+len(prefix)] == prefix
 }
@@ -58,10 +57,9 @@ func isKeywordAt(s string, i int, kw string) bool {
 	return i == len(s) || !lutNameCont[s[i]]
 }
 
-// sourceCharacterLen returns the length in bytes of the SourceCharacter at s[i],
-// or 0 if those bytes aren't a well-formed UTF-8 encoding of a Unicode scalar
-// value. Surrogates, overlong encodings, truncated sequences and values above
-// U+10FFFF all return 0.
+// sourceCharacterLen returns the length in bytes of the SourceCharacter at
+// s[i], or 0 if those bytes are no well-formed UTF-8 encoding of a Unicode scalar value:
+// surrogates, overlong encodings, truncated sequences and values above U+10FFFF.
 //
 // Requirement: s[i] is at least [utf8.RuneSelf]. An ASCII byte is a
 // SourceCharacter one byte wide and no scanner asks.
@@ -117,10 +115,9 @@ func nameEnd(s string, i int) int {
 }
 
 // skipIgnorables returns the index of the first byte at or after i that isn't
-// part of an Ignored token.
-//
-// A byte inside a comment that is no CommentChar, which is any byte that breaks
-// UTF-8, ends the skip. The caller reports it as an unexpected token.
+// part of an Ignored token. A byte inside a comment that is no CommentChar —
+// any byte breaking UTF-8 — ends the skip,
+// and the caller reports it as an unexpected token.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#sec-Line-Terminators
@@ -128,8 +125,8 @@ func nameEnd(s string, i int) int {
 //   - https://spec.graphql.org/September2025/#sec-White-Space
 //   - https://spec.graphql.org/September2025/#UnicodeBOM
 func skipIgnorables(s string, i int) int {
-	// Why split in two: most tokens of a minified document have nothing to skip,
-	// and this body stays small enough to be inlined into the state machine.
+	// Split in two: most tokens of a minified document have nothing to skip,
+	// and this body stays small enough to inline into the state machine.
 	if i < len(s) && lutIgnorable[s[i]] != ignorableNone {
 		return skipIgnorablesSlow(s, i)
 	}
@@ -255,12 +252,10 @@ func skipIgnorablesSlow(s string, i int) int {
 	}
 }
 
-// scanNumber scans the IntValue or FloatValue that begins at s[i], which must be
-// a NegativeSign or a Digit. It returns the index right after the number and
-// whether it's a FloatValue.
-//
-// A Digit, '.' or NameStart may not follow the number: a number that breaks a
-// lexical rule is one broken token, not several valid ones.
+// scanNumber scans the IntValue or FloatValue that begins at s[i], which must
+// be a NegativeSign or a Digit. It returns the index right after the number and
+// whether it's a FloatValue. No Digit, '.' or NameStart may follow: a number
+// breaking a lexical rule is one broken token, not several valid ones.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#IntValue
@@ -480,9 +475,9 @@ func scanStringLine(s string, i int) (end int, esc bool, errPos int, err error) 
 }
 
 // scanStringBlock scans the contents of a block StringValue. i must be the index
-// right after the opening `"""`. It returns the index right after the closing
-// `"""`, the common indentation to strip from every line but the first, and
-// whether the block holds anything but WhiteSpace and LineTerminators.
+// right after the opening `"""`. It returns the index right after the closing one,
+// the common indentation to strip from every line but the first,
+// and whether the block holds anything but WhiteSpace and LineTerminators.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#sec-String-Value
@@ -491,7 +486,7 @@ func scanStringBlock(s string, i int) (
 ) {
 	prefixLenSet := false
 	// content is the index of the first byte that is neither WhiteSpace nor a
-	// LineTerminator, or -1 while no such byte was seen.
+	// LineTerminator, -1 until one is seen.
 	content := -1
 
 	for i < len(s) {
@@ -522,8 +517,8 @@ func scanStringBlock(s string, i int) (
 		switch s[i] {
 		case '"':
 			if i+2 < len(s) && s[i+1] == '"' && s[i+2] == '"' {
-				// End of the block string. A block that holds nothing but
-				// WhiteSpace and LineTerminators has no content at all.
+				// End of the block string. One holding nothing but WhiteSpace
+				// and LineTerminators has no content at all.
 				return i + 3, prefixLen, content >= 0 && content != i, 0, nil
 			}
 			// Just a quote, not the end of the block string yet.
@@ -611,7 +606,7 @@ var lutIgnorable = [256]byte{
 }
 
 // lutCommentStop marks the bytes that end the fast scan over a comment: the
-// LineTerminators, which end the comment, and the non-ASCII bytes, which need
+// LineTerminators, which end the comment, and the non-ASCII bytes, which have
 // to be checked for being a SourceCharacter.
 var lutCommentStop = func() (t [256]bool) {
 	t['\n'], t['\r'] = true, true
@@ -622,9 +617,9 @@ var lutCommentStop = func() (t [256]bool) {
 }()
 
 // lutStringStop marks the bytes that end the fast scan over a single-line
-// string: the closing quote, the backslash of an escape sequence, the control
-// characters, which are rejected, and the non-ASCII bytes, which need to be
-// checked for being a SourceCharacter.
+// string: the closing quote, the backslash of an escape, the control characters,
+// which are rejected, and the non-ASCII bytes,
+// which have to be checked for being a SourceCharacter.
 var lutStringStop = func() (t [256]bool) {
 	t['"'], t['\\'] = true, true
 	for b := range 0x20 {
@@ -638,8 +633,8 @@ var lutStringStop = func() (t [256]bool) {
 
 // lutBlockStop marks the bytes that end the fast scan over a block string:
 // the quote of a delimiter, the backslash of a `\"""`, the LineTerminators and
-// WhiteSpace, which the indentation is measured by, and the non-ASCII bytes,
-// which need to be checked for being a SourceCharacter.
+// WhiteSpace, which measure the indentation, and the non-ASCII bytes,
+// which have to be checked for being a SourceCharacter.
 var lutBlockStop = func() (t [256]bool) {
 	t['"'], t['\\'] = true, true
 	t['\n'], t['\r'], t[' '], t['\t'] = true, true, true, true
@@ -687,9 +682,9 @@ var lutDigit = func() (t [256]bool) {
 	return t
 }()
 
-// lutStringEscape marks the bytes of a string value that must be escaped: the
-// backslash, which the escaping uses, and the control bytes the hash prefixes
-// are taken from. Tab, line feed and carriage return are no prefixes and stay.
+// lutStringEscape marks the bytes of a string value that must be escaped:
+// the backslash the escaping uses, and the control bytes the hash prefixes come from.
+// Tab, line feed and carriage return are no prefixes and stay.
 var lutStringEscape = func() (t [256]bool) {
 	for b := range 0x20 {
 		t[b] = true

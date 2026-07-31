@@ -311,10 +311,9 @@ func TestShutdownTimeoutIsHonored(t *testing.T) {
 // flag reads as "no bound".
 //
 // Here it means the opposite: nothing is waited for, so a request in flight is
-// abandoned the moment the signal arrives and the command exits 1. That's worth
-// pinning precisely because the help text of every other duration invites the
-// other reading, and an implementation that took 0 for "wait forever" would
-// hang on every deploy instead of dropping one request.
+// abandoned the moment the signal arrives and the command exits 1.
+// Worth pinning because every other duration's help invites the other reading,
+// and taking 0 for "wait forever" hangs every deploy instead of dropping a request.
 func TestShutdownTimeoutZeroAbandonsAtOnce(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		upstream, entered, release := blockingUpstream(t, false)

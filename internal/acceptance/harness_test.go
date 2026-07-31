@@ -23,9 +23,19 @@ import (
 // which is what a plain go test runs.
 var binaries paths
 
+// withFHTTP says whether the experimental fasthttp build is one of the servers
+// under test. It only applies to the commands this repository builds:
+// -proxy.bin names the targets outright and replaces them.
+var withFHTTP = true
+
 func init() {
 	flag.Var(&binaries, "proxy.bin",
 		"path to a proxy binary to run the acceptance tests against, repeatable")
+	flag.BoolVar(&withFHTTP, "proxy.fhttp", true,
+		"also run every test against gqlhash-proxy-fhttp, the experimental\n"+
+			"fasthttp build. -proxy.fhttp=false leaves it out, which halves the\n"+
+			"suite: it's not a build to deploy, and every rule it keeps is a rule\n"+
+			"gqlhash-proxy keeps too. Ignored where -proxy.bin names the targets.")
 }
 
 type paths []string
@@ -39,8 +49,12 @@ type target struct{ name, path string }
 // targets is what every test in this package runs against.
 var targets []target
 
-// commands are the ones built when no -proxy.bin is given.
+// commands are the ones built when no -proxy.bin is given. The second is the
+// experimental fasthttp build, which -proxy.fhttp=false leaves out.
 var commands = []string{"gqlhash-proxy", "gqlhash-proxy-fhttp"}
+
+// experimental is the command -proxy.fhttp governs.
+const experimental = "gqlhash-proxy-fhttp"
 
 func TestMain(m *testing.M) {
 	flag.Parse()
@@ -89,6 +103,9 @@ func resolve(dir string) ([]target, error) {
 	}
 	out := make([]target, 0, len(commands))
 	for _, name := range commands {
+		if name == experimental && !withFHTTP {
+			continue
+		}
 		path := filepath.Join(dir, name)
 		args := []string{"build", "-o", path}
 		if os.Getenv("GOCOVERDIR") != "" {
@@ -140,7 +157,6 @@ type server struct {
 	keep    bool // A shared server, which outlives the test that started it.
 }
 
-// running reports whether the process is still up.
 func (s *server) running() bool {
 	if s.stopped {
 		return false
@@ -165,7 +181,6 @@ func (s *server) signal(sig os.Signal) {
 // interrupt is [server.signal] with SIGINT, the signal a terminal sends.
 func (s *server) interrupt() { s.signal(os.Interrupt) }
 
-// wait waits for the process to end and answers its exit code.
 func (s *server) wait(t *testing.T) int {
 	t.Helper()
 	if s.stopped {
@@ -331,7 +346,6 @@ func freePort(t *testing.T) string {
 	return address
 }
 
-// accepting reports whether something takes a connection on address.
 func accepting(address string) bool {
 	conn, err := net.DialTimeout("tcp", address, time.Second)
 	if err != nil {
@@ -495,7 +509,6 @@ func (s *spy) count() int {
 	return len(s.requests)
 }
 
-// last is the request the API received most recently.
 func (s *spy) last(t *testing.T) recorded {
 	t.Helper()
 	s.mu.Lock()
@@ -568,9 +581,8 @@ func newEnvFor(
 // one per target, started when the first test asks for it and stopped when the
 // run ends. The tests here are serial, so the one server is each test's in turn.
 //
-// A test that needs its own documents publishes them with [env.allow] rather
-// than starting a server for them. One that needs a flag, an upstream of its own,
-// or the counters of the proxy at zero starts its own with [newEnv].
+// A test needing its own documents publishes them with [env.allow]. One needing a flag,
+// an upstream of its own, or the counters at zero calls [newEnv].
 func shared(t *testing.T, tgt target) *env {
 	t.Helper()
 	if e, ok := sharedEnvs[tgt.name]; ok {
@@ -627,7 +639,6 @@ func (e *env) allow(t *testing.T, documents ...string) {
 	e.api.reset()
 }
 
-// writeDoc writes a document into an allowlist directory.
 func writeDoc(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {

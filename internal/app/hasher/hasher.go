@@ -19,10 +19,8 @@ import (
 
 // Run hashes the document of stdin or of -file and writes the result to stdout.
 //
-// name and version are what -version reports. Every command passes its own,
-// so the output names the binary the caller ran and the version its build injected.
-//
-// args[0] is the name of the command as invoked, as in [os.Args].
+// name and version are what -version reports, so the output names the binary
+// the caller ran. args[0] is the command as invoked, as in [os.Args].
 func Run(
 	name, version string,
 	args []string,
@@ -61,17 +59,16 @@ func Run(
 
 	h, ok := config.NewHasher(cfg.Hash)
 	if !ok {
-		// config.ParseHasher takes no other value, so this is a function that was
-		// added to the vocabulary and not to the table that builds them.
+		// config.ParseHasher takes no other value, so this is a function added
+		// to the vocabulary and not to the table that builds them.
 		_, _ = fmt.Fprintf(stderr, "unsupported hash function: %d\n", cfg.Hash)
 		return 1
 	}
 	sum, errHash := gqlhash.AppendHash(nil, h,
 		gqlhash.Options{Ignore: cfg.Ignore, DepthLimit: cfg.DepthLimit}, input)
 	if errHash.IsErr() {
-		// A hash never fails a write, so the error is a syntax error and carries
-		// a position. The format is the one editors and CI annotations parse:
-		// file:line:column: message.
+		// A hash never fails a write, so this carries a position.
+		// The format is the one editors and CI annotations parse.
 		line, column := gqlhash.Position(input, errHash.Offset)
 		_, _ = fmt.Fprintf(stderr, "%s:%d:%d: syntax error: %v\n",
 			source, line, column, errHash.Err)
@@ -95,10 +92,9 @@ func Run(
 		return 1
 	}
 
-	// A write that fails is what a closed pipe looks like: `gqlhash -file q.graphql
-	// | head -1` leaves nobody to read the answer. Every other failure of this
-	// command is an exit code, and so is this one, rather than a goroutine dump
-	// over whatever the reader did get.
+	// A failed write is what a closed pipe looks like: `gqlhash -file q.graphql
+	// | head -1` leaves nobody to read the answer. An exit code like every other
+	// failure here, rather than a goroutine dump over what the reader did get.
 	if _, err = io.WriteString(stdout, encoded); err != nil {
 		_, _ = fmt.Fprintf(stderr, "writing the hash: %v\n", err)
 		return 1
@@ -106,7 +102,6 @@ func Run(
 	return 0
 }
 
-// printVersion writes the version and the build information to w.
 func printVersion(w io.Writer, name, version string) (exitCode int) {
 	_, _ = fmt.Fprintf(w, "%s v%s\n\n", name, version)
 	_, _ = fmt.Fprintln(w, "MIT License")

@@ -98,10 +98,9 @@ func TestUpstreamTimeout(t *testing.T) {
 // -upstream.max-idle-conns-per-host: every one of them is answered,
 // and every one of them reaches the API as the client wrote it.
 //
-// The documents differ per request on purpose. Identical bodies can't catch the
-// worst defect this proxy can have — a body forwarded under another request's
-// connection — and only allowed documents reach the API at all, so they're all
-// allowed and all distinct.
+// The documents differ per request on purpose: identical bodies can't catch the
+// worst defect this proxy can have, a body forwarded under another request's
+// connection. Only allowed documents reach the API, so they're all allowed too.
 func TestConcurrentRequests(t *testing.T) {
 	const concurrent = 16
 

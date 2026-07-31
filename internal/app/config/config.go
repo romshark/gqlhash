@@ -27,11 +27,9 @@ import (
 )
 
 // hashFunctions is the one place a hash function is spelled out: the flag value
-// that names it, the constant it parses to, whether an allowlist may rely on it,
-// and how one is made. Everything else about them is derived from this, so
-// adding one is one edit rather than five that fail quietly.
-//
-// The order is the order the help strings list them in.
+// naming it, the constant it parses to, whether an allowlist may rely on it,
+// and how one is made. Everything else derives from this, so adding one is one edit
+// rather than five that fail quietly. The order is the help strings' order.
 var hashFunctions = []struct {
 	name  string
 	value HashFunction
@@ -95,9 +93,8 @@ var outputFormats = []struct {
 	{"base64url", FormatBase64URL},
 }
 
-// The values a flag takes, in the order the tables hold them. They read as one
-// line of help, so a change to the punctuation here is a change to the text and
-// to nothing else.
+// The values a flag takes, in table order. They read as one line of help,
+// so the punctuation here is the help text.
 var (
 	SupportedHashFunctions = names(hashFunctions,
 		func(i int) (string, bool) { return hashFunctions[i].name, true })
@@ -129,9 +126,9 @@ func names[E any](table []E, take func(i int) (name string, ok bool)) string {
 
 // NewHasher returns a new hasher for f, and false if f names none.
 //
-// The second return is what keeps an unknown function from being found later:
-// a nil [hash.Hash] fails at the first Reset, on the request path, with nothing
-// left pointing back at the configuration that was wrong.
+// The second return keeps an unknown function from surfacing later:
+// a nil [hash.Hash] fails at the first Reset, on the request path,
+// with nothing left pointing at the configuration that was wrong.
 func NewHasher(f HashFunction) (hash.Hash, bool) {
 	for _, e := range hashFunctions {
 		if e.value == f {

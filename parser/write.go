@@ -12,12 +12,12 @@ import (
 // piece once the document is read. buf grows into whatever the largest document
 // needs and is then reused.
 //
-// Why buffer instead of writing each token to dst: a hash consumes fixed-size
-// blocks, 64 bytes for SHA-1, so many small writes keep it in its partial-block
-// path, copying every fragment into its own buffer first. One large write lets
-// its block loop run over buf directly. Token-by-token writes measure 38%
-// slower for testdata/big.graphql with SHA-1 (2355 ns against 3256 ns), and no
-// different with [io.Discard], so the Write calls themselves are not the cost.
+// Buffered rather than written token by token because a hash consumes
+// fixed-size blocks — 64 bytes for SHA-1 — so small writes keep it in its
+// partial-block path, copying every fragment first. One large write lets its
+// block loop run over buf directly: token-by-token measures 38% slower for
+// testdata/big.graphql with SHA-1 (2355 ns against 3256 ns),
+// and no different with [io.Discard], so the Write calls themselves are not the cost.
 type writer struct {
 	dst io.Writer
 	buf []byte
@@ -27,20 +27,18 @@ type writer struct {
 	mute int
 }
 
-// flush hands the buffered stream to the destination and empties the buffer.
-// It's called once per document.
-//
-// Every document writes at least the prefix of its first definition, so buf
-// holds something.
+// flush hands the buffered stream to the destination and empties the buffer,
+// once per document. Every document writes at least the prefix of its first
+// definition, so buf holds something.
 func (w *writer) flush() error {
 	_, err := w.dst.Write(w.buf)
 	w.buf = w.buf[:0]
 	return err
 }
 
-// writeByte writes one byte, whatever it stands for: an [HPrefQuery] and the
-// prefixes beside it, a punctuator of a type reference, a byte of a string value
-// that needs no escape, or the line feed that joins the lines of a block string.
+// writeByte writes one byte, whatever it stands for: a hash prefix,
+// a punctuator of a type reference, an unescaped byte of a string value,
+// or the line feed joining the lines of a block string.
 func (w *writer) writeByte(b byte) {
 	if w.mute == 0 {
 		w.buf = append(w.buf, b)
@@ -66,8 +64,8 @@ func (w *writer) tok(prefix byte, s string) {
 // nameTok writes prefix followed by the Name that begins at s[i], which must be
 // a NameStart, and returns the index right after that Name.
 //
-// Why scan and write in one step: a Name is the most frequent token of a
-// document, and this keeps it down to a single call.
+// Scanned and written in one step: a Name is the most frequent token of a document,
+// so this keeps it to a single call.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#Name
@@ -124,16 +122,15 @@ func (w *writer) nameStr(s string, i int) int {
 	return i
 }
 
-// esc writes b as a backslash escape. No string value can hold a byte that
-// looks like a hash prefix.
+// esc writes b as a backslash escape.
+// No string value can hold a byte that looks like a hash prefix.
 func (w *writer) esc(b byte) {
 	if w.mute == 0 {
 		w.buf = append(w.buf, lutStringEscapeSeq[b][0], lutStringEscapeSeq[b][1])
 	}
 }
 
-// strByte writes one byte of a string value, escaping it if it must not appear
-// as it is.
+// strByte writes one byte of a string value, escaping it if it must not appear as it is.
 func (w *writer) strByte(b byte) {
 	if lutStringEscape[b] {
 		w.esc(b)
@@ -153,16 +150,14 @@ func (w *writer) strRune(r rune) {
 
 // stringValue writes a single-line string with its escape sequences evaluated,
 // so two spellings of one value produce the same bytes. s is the source between
-// the quotes as [scanStringLine] validated it, esc says whether it holds any
-// escape sequence.
+// the quotes as [scanStringLine] validated it; esc says whether it holds any.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#sec-String-Value
 func (w *writer) stringValue(s string, esc bool) {
 	if !esc {
-		// Without an escape sequence the value stands for itself. A control
-		// byte, the only other byte that needs escaping, is rejected in a
-		// single-line string.
+		// Without an escape the value stands for itself: a control byte,
+		// the only other byte needing one, is rejected in a single-line string.
 		w.str(s)
 		return
 	}
@@ -219,18 +214,18 @@ func (w *writer) stringValue(s string, esc bool) {
 	}
 }
 
-// blockStringValue writes the BlockStringValue of s, the raw content between the
-// `"""` delimiters as [scanStringBlock] validated it. prefixLen bytes of common
-// indentation are stripped from every line but the first, leading and trailing
-// blank lines are dropped, and the lines are joined by a single line feed. LF,
-// CRLF and CR therefore produce the same bytes.
+// blockStringValue writes the BlockStringValue of s, the raw content between
+// the `"""` delimiters as [scanStringBlock] validated it. prefixLen bytes of
+// common indentation come off every line but the first, leading and trailing
+// blank lines are dropped, and the lines are joined by one line feed — so LF,
+// CRLF and CR produce the same bytes.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#BlockStringValue()
 func (w *writer) blockStringValue(s string, prefixLen int) {
 	s = trimEmptyLinesSuffix(s)
 
-	// The first line keeps its indentation, the common prefix never applies to it.
+	// The first line keeps its indentation; the common prefix skips it.
 	i, firstLineIsEmpty := 0, true
 	for ; i < len(s) && lineTerminatorLen(s, i) == 0; i++ {
 		if s[i] != ' ' && s[i] != '\t' {
@@ -258,7 +253,7 @@ func (w *writer) blockStringValue(s string, prefixLen int) {
 			}
 		}
 		if blank && !contentSeen {
-			// A leading blank line is dropped. Trailing ones are gone already,
+			// Leading blank lines are dropped. Trailing ones are gone already,
 			// so a blank line after content is interior and stays.
 			continue
 		}
@@ -297,17 +292,16 @@ func (w *writer) blockStringLine(s string) {
 	w.str(s[start:])
 }
 
-// trimEmptyLinesSuffix removes any trailing empty lines from s.
-// An empty line is a line that holds nothing but WhiteSpace.
+// trimEmptyLinesSuffix removes the trailing empty lines of s,
+// an empty line being one that holds nothing but WhiteSpace.
 //
 // Requirement: s holds at least one byte that is neither WhiteSpace nor a
 // LineTerminator, which is what [scanStringBlock] reports as content.
 func trimEmptyLinesSuffix(s string) string {
 	e := len(s)
 	for {
-		// The LineTerminator that ends the second-to-last line. Scanning for its
-		// last byte keeps CRLF intact: '\n' is found first, the preceding '\r'
-		// is picked up below.
+		// The LineTerminator ending the second-to-last line. Scanning for its
+		// last byte keeps CRLF intact: '\n' is found first, the '\r' below.
 		termEnd := -1
 		for i := e - 1; i >= 0; i-- {
 			if s[i] == '\n' || s[i] == '\r' {
@@ -320,12 +314,12 @@ func trimEmptyLinesSuffix(s string) string {
 			return s[:e]
 		}
 		if !containsOnlyWhiteSpace(s[termEnd+1 : e]) {
-			return s[:e] // Line is not empty, stop trimming.
+			return s[:e]
 		}
 		if s[termEnd] == '\n' && termEnd > 0 && s[termEnd-1] == '\r' {
 			termEnd-- // Drop the whole CRLF, not just the '\n'.
 		}
-		e = termEnd // Remove empty line.
+		e = termEnd
 	}
 }
 

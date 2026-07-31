@@ -250,10 +250,9 @@ func TestAllowlistStartupMatchesReload(t *testing.T) {
 //
 // The symlinked root is the one that matters: a deploy swaps an allowlist
 // atomically by pointing a link at a new directory, and a walk that lstats its
-// root sees the link rather than the directory, loads nothing and rejects every
-// request. It fails closed, which is the safe direction, but it fails — and an
-// implementation that listed the directory instead would serve v1 and then v2
-// where this served neither, which is the unsafe direction,
+// root sees the link, loads nothing and rejects every request.
+// That fails closed, but it fails — and an implementation listing the directory instead
+// would serve v1 and then v2 where this served neither, which is the unsafe direction,
 // and pass a suite that never looked.
 func TestAllowlistRootShapes(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
@@ -328,9 +327,9 @@ func TestAllowlistRootIsAFile(t *testing.T) {
 //
 // A fragment in one file and the query using it in another are two documents,
 // not one source set: the fragment is never used and the query's spread is
-// unknown, so with a schema present both are skipped and the request is
-// refused. Pooling the directory — a plausible reading of "a directory of documents" —
-// would serve it, and would change the hash of every document that uses a fragment.
+// unknown, so with a schema present both are skipped. Pooling the directory —
+// a plausible reading of "a directory of documents" — would serve it,
+// and would change the hash of every document that uses a fragment.
 func TestAllowlistFragmentPerFile(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
@@ -407,11 +406,10 @@ func TestAllowlistSchemaSeveralFiles(t *testing.T) {
 
 // TestAllowlistEmptySchemaFile covers a .graphqls holding nothing.
 //
-// It's a schema that defines no type, not the absence of a schema: every
-// document asks for something it doesn't have, so every document is skipped and
-// every request refused. Treating a blank file as "no schema here" would be
-// fail-open where this is fail-closed, and a generator writing an empty file is
-// exactly the accident that wants catching.
+// A schema that defines no type, not the absence of a schema: every document
+// asks for something it doesn't have, so every one is skipped and every request refused.
+// Reading a blank file as "no schema here" would be fail-open where
+// this is fail-closed, and a generator writing one is the accident to catch.
 func TestAllowlistEmptySchemaFile(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
@@ -471,10 +469,9 @@ func TestAllowlistDocumentByteNoise(t *testing.T) {
 // the allowlist, as against the symlinked root TestAllowlistRootShapes covers.
 //
 // The root is resolved because an operator named it; a link found while walking
-// is not followed, because following those invites a loop and nothing needs
-// them. A generator that emits one gets no error and no documents from it,
-// so the rule is worth stating rather than leaving to whichever walk an
-// implementation reaches for.
+// is not, since following those invites a loop and nothing needs them.
+// A generator that emits one gets no error and no documents, so the rule is worth
+// stating rather than leaving to whichever walk an implementation reaches for.
 func TestAllowlistSymlinkedSubdirectory(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()

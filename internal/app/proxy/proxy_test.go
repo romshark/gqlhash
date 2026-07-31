@@ -47,7 +47,6 @@ func testProxyWith(
 	return p, spy
 }
 
-// upstreamAnswer is what the test upstream answers.
 const upstreamAnswer = `{"data":{"ok":true}}`
 
 // upstreamSpy records what reached the upstream API.

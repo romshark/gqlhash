@@ -115,12 +115,11 @@ func TestForwardedGETKeepsTheDocument(t *testing.T) {
 
 // TestForwardedGETKeepsASemicolonQuery covers the separator that isn't `&`.
 //
-// The reading rule splits a query string on `;` as well as `&`, which is what
-// makes it safe: a document named twice either way is refused rather than
-// forwarded. The forwarding half used to defeat that — net/http's proxy drops
-// the parameters net/url can't parse, and for a `;`-separated query that is all
-// of them, so the API received an allowed GET carrying no document at all and
-// answered whatever it does for that.
+// The reading rule splits a query string on `;` as well as `&`, so a document
+// named twice either way is refused rather than forwarded. The forwarding half
+// can defeat that: net/http's proxy drops the parameters net/url can't parse,
+// which for a `;`-separated query is all of them, leaving the API an allowed
+// GET carrying no document.
 //
 // Neither half is any use without the other, so the query string reaches the
 // API exactly as the client wrote it.

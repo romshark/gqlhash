@@ -14,7 +14,6 @@ import (
 	"github.com/romshark/gqlhash/v2/parser"
 )
 
-// writeDoc writes a document into dir, creating parent directories.
 func writeDoc(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)

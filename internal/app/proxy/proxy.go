@@ -22,22 +22,19 @@ import (
 	"github.com/romshark/gqlhash/v2/parser"
 )
 
-// upstreamCopyBuffer is what one answer is copied through. A GraphQL answer that
-// needs more than this takes more than one turn around the loop, which is
-// cheaper than holding 32KiB per request in flight.
+// upstreamCopyBuffer is what one answer is copied through. A bigger answer takes
+// more turns around the loop, cheaper than 32KiB per request in flight.
 const upstreamCopyBuffer = 8 * 1024
 
-// bufferPool gives [httputil.ReverseProxy] the buffers it copies answers through,
-// so that forwarding doesn't allocate one per request.
+// bufferPool keeps [httputil.ReverseProxy] from allocating a copy buffer per request.
 type bufferPool struct{ pool sync.Pool }
 
 func (b *bufferPool) Get() []byte  { return b.pool.Get().([]byte) }
 func (b *bufferPool) Put(p []byte) { b.pool.Put(p) } //nolint:staticcheck // the interface takes a slice
 
-// counters of what the proxy decided, one per cache line: packed,
-// two cores raising different counters bounce one line between them,
-// ~10.7ns against ~8.6ns per raise.
-// A flood of one decision contends whatever the layout.
+// counters of what the proxy decided, one per cache line. Packed, two cores
+// raising different counters bounce one line between them: ~10.7ns against
+// ~8.6ns per raise. A flood of one decision contends whatever the layout.
 type counters struct {
 	allowed   paddedCounter
 	rejected  paddedCounter
@@ -48,16 +45,14 @@ type counters struct {
 	upstream  paddedCounter
 }
 
-// paddedCounter is a counter on a cache line of its own:
-// 56 bytes beside the 8 of the counter.
+// paddedCounter is a counter on a cache line of its own.
 type paddedCounter struct {
 	atomic.Uint64
 	_ [56]byte
 }
 
-// decisions is what a proxy did, read at one moment. It's a struct and not four
-// returns so that a caller names what it takes: the four are the same type,
-// and nothing catches a transposition at the call or a reorder of the counters.
+// decisions is what a proxy did, read at one moment. A struct rather than seven
+// returns of one type, where nothing catches a transposition at the call.
 type decisions struct {
 	allowed   uint64
 	rejected  uint64
@@ -68,7 +63,6 @@ type decisions struct {
 	upstream  uint64
 }
 
-// snapshot returns what the proxy decided.
 func (c *counters) snapshot() decisions {
 	return decisions{
 		allowed:   c.allowed.Load(),
@@ -99,24 +93,21 @@ type proxy struct {
 	logRequests     bool
 	trustForwarded  bool
 
-	// debug says whether the logger keeps a debug event.
-	// The level is set once at startup, so it's read once instead of per event.
+	// debug is the level, read once at startup instead of per event.
 	debug bool
 
-	// metrics are always kept. The control server is what exposes them, and a
-	// run always has one, so a request costs the clock read and the observation
-	// either way and the hot path has nothing to decide.
+	// metrics are always kept: every run has a control server exposing them,
+	// so the hot path pays the clock read either way and has nothing to decide.
 	metrics *metrics
 
 	newHash   func() hash.Hash
 	states    sync.Pool
 	drainOnce sync.Once
 
-	// draining is closed when the shutdown starts. A drain waits for the
-	// requests in flight, and a subscription is in flight by definition —
-	// it has no natural end to wait for — so a proxy carrying one sat out the
-	// whole -server.shutdown-timeout and then exited 1, on every deploy.
-	// Streams watch this and end; everything else is waited for as before.
+	// draining is closed when the shutdown starts. Streams watch it and end;
+	// everything else is waited for. A drain waits for what's in flight and a
+	// subscription never ends on its own, so without this a proxy carrying one
+	// sits out the whole -server.shutdown-timeout and exits 1.
 	draining chan struct{}
 }
 
@@ -124,7 +115,6 @@ type proxy struct {
 // package to end its streams on. See [proxy.draining].
 func (c *Core) Draining() <-chan struct{} { return c.p.draining }
 
-// StartDraining closes it, once however many times it's called.
 func (p *proxy) StartDraining() {
 	p.drainOnce.Do(func() { close(p.draining) })
 }
@@ -142,18 +132,13 @@ const (
 	defaultSpans = 8
 
 	// maxRetainedBuffer is the largest buffer a state carries back into the pool.
-	//
-	// -server.max-body allows a megabyte by default, so a burst of requests that
-	// size would otherwise leave the pool holding one per concurrent request for
-	// the life of the process. Releasing above this costs an allocation on the
-	// rare large request and keeps the common one free.
-	//
-	// The parser holds the same policy for the same reason,
-	// see parser.maxRetainedBufferSize.
+	// Without it a burst of -server.max-body-sized requests leaves the pool
+	// holding a megabyte per concurrent request for the life of the process.
+	// Same policy as parser.maxRetainedBufferSize.
 	maxRetainedBuffer = 64 << 10
 
-	// maxRetainedSpans bounds the same for a batch: a megabyte of tiny documents
-	// is tens of thousands of them, and the pool shouldn't keep the room for it.
+	// maxRetainedSpans is the same bound for a batch:
+	// a megabyte of tiny documents is tens of thousands of spans.
 	maxRetainedSpans = 1024
 )
 
@@ -172,9 +157,8 @@ type state struct {
 	hash   hash.Hash
 	parser *parser.Parser[[]byte]
 
-	// writer relays the answer, releasing what bounds an exchange where the
-	// answer turns out to be an event stream.
-	// It's here so that forwarding costs no allocation of its own.
+	// writer relays the answer, releasing the exchange bounds where that answer
+	// turns out to be an event stream. Inline, so forwarding allocates nothing.
 	writer streamWriter
 }
 
@@ -193,11 +177,11 @@ type proxyConfig struct {
 	// LogRequests logs a forwarded request at debug level.
 	logRequests bool
 
-	// TrustForwarded keeps the X-Forwarded-* headers of the incoming request and
-	// appends to them, instead of replacing them with the direct peer.
+	// TrustForwarded appends to the X-Forwarded-* headers of the incoming
+	// request instead of replacing them with the direct peer.
 	//
-	// Requirement: only set this where a trusted load balancer is in front.
-	// A client that reaches the proxy directly can claim any address.
+	// Requirement: only behind a trusted load balancer.
+	// A client reaching the proxy directly can claim any address.
 	trustForwarded bool
 
 	// MaxBody is the largest request body to accept, in bytes.
@@ -207,7 +191,6 @@ type proxyConfig struct {
 	upstreamTimeout time.Duration
 }
 
-// newProxy returns a proxy forwarding to upstream.
 func newProxy(
 	allowlist *allowlist.Allowlist,
 	upstream *url.URL,
@@ -227,9 +210,8 @@ func newProxy(
 		newHash:        newHash,
 		draining:       make(chan struct{}),
 	}
-	// The metrics read the counters of this proxy, which is why they're built
-	// here rather than handed in: a caller would need the proxy to build them
-	// and the proxy to be built with them.
+	// Built here rather than handed in: the metrics read this proxy's counters,
+	// so a caller would need each of the two before the other.
 	p.metrics = newMetrics(&p.counters, allowlist)
 	p.logRequests = config.logRequests && p.debug
 	p.states.New = func() any {
@@ -243,48 +225,42 @@ func newProxy(
 		}
 	}
 	p.upstream = &httputil.ReverseProxy{
-		// Without a pool ReverseProxy allocates 32KiB to copy every answer,
-		// which is most of what forwarding costs when the answers are small.
+		// Without a pool ReverseProxy allocates 32KiB per answer,
+		// most of what forwarding costs when the answers are small.
 		BufferPool: &bufferPool{pool: sync.Pool{
 			New: func() any { return make([]byte, upstreamCopyBuffer) },
 		}},
 		Rewrite: func(r *httputil.ProxyRequest) {
-			// The upstream URL is the GraphQL endpoint,
-			// so it replaces the path instead of prefixing it. SetURL would join the
-			// two and turn a request to /graphql into /graphql/graphql.
+			// The upstream URL is the GraphQL endpoint, so its path replaces the
+			// request's. SetURL joins them: /graphql becomes /graphql/graphql.
 			r.Out.URL.Scheme = upstream.Scheme
 			r.Out.URL.Host = upstream.Host
 			r.Out.URL.Path, r.Out.URL.RawPath = upstream.Path, upstream.RawPath
-			// The query string of the client, verbatim. ReverseProxy drops the
-			// parameters net/url can't parse before this runs, which for a
-			// `;`-separated one is all of them: an allowed GET reached the API
-			// carrying no document at all. Restoring it is safe because the
-			// reading rule already splits on `;` as well as `&`, so a document
+			// The client's query string, verbatim. ReverseProxy has already
+			// dropped what net/url can't parse, which for a `;`-separated query
+			// is all of it — an allowed GET reaching the API with no document.
+			// Safe to restore: the reading rule splits on `;` too, so a document
 			// named twice either way is refused rather than forwarded.
 			r.Out.URL.RawQuery = r.In.URL.RawQuery
-			// An empty Host makes the request carry the host of the upstream URL.
+			// An empty Host makes the request carry the upstream URL's.
 			r.Out.Host = ""
 			// A protocol upgrade stops here. ReverseProxy strips these with the
-			// other hop-by-hop headers and then puts them back for an upgrade,
-			// which is how one allowlisted document used to buy a tunnel:
-			// the API answered 101 and everything the client wrote afterwards
-			// reached it without passing the allowlist again. This runs after
-			// that, so what it drops stays dropped, and the answer's 101 then
-			// has nothing to match.
+			// other hop-by-hop headers and puts them back for an upgrade,
+			// which is one allowlisted document buying a tunnel: the API answers 101
+			// and everything written afterwards bypasses the allowlist.
+			// This runs after that, so the 101 then has nothing to match.
 			r.Out.Header.Del("Upgrade")
 			r.Out.Header.Del("Connection")
-			// The expectation was the proxy's to meet and it met it:
-			// the body has been read and hashed, and a 100 was sent if one was asked for.
-			// Forwarding it makes the API run the handshake again for a body
-			// already in flight, and ReverseProxy relays the answer's 1xx as
-			// well, so a client that asked for one continuation received two.
+			// The expectation was the proxy's to meet and it met it: the body is
+			// read and hashed, and a 100 sent if one was asked for. Forwarding it
+			// makes the API run the handshake again for a body already in flight,
+			// and ReverseProxy relays the answer's 1xx — two continuations.
 			r.Out.Header.Del("Expect")
 			setForwarded(r, p.trustForwarded)
 		},
 		ModifyResponse: func(res *http.Response) error {
-			// Nothing offered an upgrade, so a 101 is an API answering a
-			// question nobody asked. Relaying it would splice the two
-			// connections together on the strength of that answer alone.
+			// Nothing offered an upgrade, so a 101 answers a question nobody asked.
+			// Relaying it would splice the two connections together.
 			if res.StatusCode == http.StatusSwitchingProtocols {
 				return errUpstreamSwitchedProtocols
 			}
@@ -292,15 +268,14 @@ func newProxy(
 		},
 		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			// Reached, so whatever [proxy.ServeHTTP] would have counted for
-			// itself is counted here instead. The two must not both do it:
-			// the deadline can fire between them, and then the cause ServeHTTP
-			// reads is set where this had already answered for another reason.
+			// Reached, so the upstream failure is counted here and not by
+			// [proxy.ServeHTTP]. Never both: the deadline can fire between them,
+			// leaving ServeHTTP to read a cause this already answered for.
 			if sw, ok := w.(*streamWriter); ok {
 				sw.failed = true
 			}
-			// The proxy's own deadline, which is a failure of the upstream
-			// rather than of the client waiting for it.
+			// The proxy's own deadline: a failure of the upstream rather than
+			// of the client waiting for it.
 			if errors.Is(context.Cause(r.Context()), errUpstreamTimeout) {
 				p.counters.upstream.Add(1)
 				p.log.Error().Err(err).Msg("forwarding upstream")
@@ -329,7 +304,6 @@ func newProxy(
 	return p
 }
 
-// snapshot returns the decisions the proxy made.
 func (p *proxy) snapshot() decisions { return p.counters.snapshot() }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -373,7 +347,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case !allowed:
 		p.counters.rejected.Add(1)
-		// Why debug and behind a condition: a rejection is the path a flood takes,
+		// Debug and behind a condition: a rejection is the path a flood takes,
 		// so one event each is log volume the caller controls.
 		// [counters] carry the totals.
 		if p.debug {
@@ -398,26 +372,21 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = io.NopCloser(bytes.NewReader(st.body))
 		r.ContentLength = int64(len(st.body))
 	} else {
-		// A GET's body was read only to see whether it had one, and one that
-		// had is refused before this. So there is nothing to send on,
-		// and the framing it was declared under goes with it:
-		// the API receives a GET carrying no body,
-		// as it does under the fasthttp underlay.
+		// A GET's body was read only to see whether it had one,
+		// and one that had is refused before this. Nothing to send on,
+		// and the framing it was declared under goes with it,
+		// as under the fasthttp underlay.
 		r.Body, r.ContentLength, r.TransferEncoding = http.NoBody, 0, nil
 	}
 	// -upstream.timeout bounds the exchange, not the wait for its first byte:
-	// an API that answers headers and then stops is the case the flag exists
-	// for. The deadline is released once the answer is written.
+	// an API that answers headers and then stops is what the flag exists for.
 	var deadline *time.Timer
 	var cancelForward context.CancelCauseFunc
 	if p.upstreamTimeout > 0 {
 		// A cause, so the error handler can tell this deadline from a client
-		// that went away: both cancel the request, and only one of them is a
-		// failure of the upstream.
-		//
-		// A timer rather than [context.WithTimeoutCause] because a deadline
-		// that can't be called off can't be released for an event stream,
-		// which [streamWriter] does once the answer names itself one.
+		// that went away: both cancel the request, only one is an upstream failure.
+		// A timer rather than [context.WithTimeoutCause] because
+		// [streamWriter] releases it once the answer names itself a stream.
 		ctx, cancel := context.WithCancelCause(r.Context())
 		defer cancel(nil)
 		cancelForward = cancel
@@ -429,41 +398,34 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	st.writer.reset(w, p, start, deadline,
 		AcceptsEventStream(r.Header.Get("Accept")), cancelForward)
-	// In a defer, because an answer this can't finish doesn't return through
-	// here: ReverseProxy abandons a copy that fails mid-body by panicking with
-	// [http.ErrAbortHandler], which net/http recovers. An upstream that sent its
-	// headers and then stopped took that path, so the request it belongs to was
-	// counted and never timed, and the deadline that ended it never counted.
+	// Deferred, because an answer this can't finish doesn't return through here:
+	// ReverseProxy abandons a copy that fails mid-body by panicking with
+	// [http.ErrAbortHandler], which net/http recovers.
+	// An upstream that sends headers and then stops takes that path.
 	defer func() {
 		if st.writer.stopDraining != nil {
 			st.writer.stopDraining()
 		}
-		// The deadline is counted here rather than in the error handler,
-		// which no longer runs once a status is on the wire — ReverseProxy can't take
-		// one back. The cause is set exactly once, so this counts once,
-		// and a client that hung up sets a different one and is no upstream failure.
-		// Only where the error handler never ran, which is what an answer
-		// already on the wire means: ReverseProxy can't take a status back,
-		// so it abandons the copy instead, and nothing else would count the
-		// deadline that ended it. A client that hung up sets another cause and
-		// is no upstream failure.
+		// Counted here rather than in the error handler, which no longer runs
+		// once a status is on the wire. The cause is set exactly once,
+		// and a client that hung up sets a different one.
 		if !st.writer.failed &&
 			errors.Is(context.Cause(r.Context()), errUpstreamTimeout) {
 			p.counters.upstream.Add(1)
 		}
-		// A stream was timed when its headers were written,
-		// since its length is the client's business rather than the proxy's latency.
+		// A stream was timed at its headers: its length is the client's business
+		// rather than the proxy's latency.
 		if !st.writer.streamed {
-			// The duration includes the upstream answer,
-			// so a dashboard can tell the proxy apart from the API behind it.
+			// Includes the upstream answer, so a dashboard can tell the proxy
+			// apart from the API behind it.
 			p.metrics.Observe(decisionAllowed, start)
 		}
 	}()
 	p.upstream.ServeHTTP(&st.writer, r)
 }
 
-// release drops what one oversized request grew, so the pool doesn't hold it for
-// the life of the process. What the common request grew is kept:
+// release drops what one oversized request grew, so the pool doesn't hold it
+// for the life of the process. What the common request grew is kept:
 // releasing that would cost an allocation per request to save nothing.
 func (st *state) release() {
 	if cap(st.body) > maxRetainedBuffer {
@@ -475,8 +437,8 @@ func (st *state) release() {
 	if cap(st.spans) > maxRetainedSpans {
 		st.spans = make([]span, 0, defaultSpans)
 	}
-	// The connection of the request that just ended, which the pool has no
-	// business keeping alive until the state is taken again.
+	// Drops the finished request's connection, which the pool has no business
+	// holding until the state is taken again.
 	st.writer = streamWriter{}
 }
 
@@ -487,7 +449,7 @@ var errTooLarge = errors.New("request body too large")
 var errTooDeep = errors.New("operation not allowed")
 
 // isAmbiguous reports whether err is a request naming its document more than once,
-// which is answered like a malformed one and counted apart from it.
+// answered like a malformed one and counted apart from it.
 func isAmbiguous(err error) bool {
 	return errors.Is(err, errQueryCollision) ||
 		errors.Is(err, errDuplicateQuery) ||
@@ -495,13 +457,11 @@ func isAmbiguous(err error) bool {
 		errors.Is(err, errQueryBesideBody)
 }
 
-// errUpstreamTimeout is what cancels a forward that outlived -upstream.timeout,
-// as the cause of its context.
+// errUpstreamTimeout is the context cause of a forward past -upstream.timeout.
 var errUpstreamTimeout = errors.New("upstream timeout")
 
 // errUpstreamSwitchedProtocols is an API answering 101 to a forward that
-// offered no upgrade, which reaches the client as an upstream failure rather
-// than as a tunnel.
+// offered no upgrade. It reaches the client as an upstream failure, not a tunnel.
 var errUpstreamSwitchedProtocols = errors.New(
 	"the upstream switched protocols; nothing offered an upgrade")
 
@@ -512,11 +472,9 @@ var errUpstreamSwitchedProtocols = errors.New(
 func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
 	if r.Method == http.MethodGet {
 		// A body is bytes, not a framing: `Content-Length: 0` and an empty
-		// chunked body both name no document, so neither is a second place one
-		// could be. A length of 0 is net/http for "no bytes under either framing",
-		// so only an unknown or non-zero length is read — and reading
-		// it is also what applies -server.max-body to a GET, which makes an
-		// oversized body too_large before it is anything else.
+		// chunked body both name no document. A length of 0 is net/http for
+		// "no bytes under either framing", so only an unknown or non-zero one
+		// is read — which is also what applies -server.max-body to a GET.
 		st.body = st.body[:0]
 		if r.ContentLength != 0 {
 			if err = p.readBody(st, r); err != nil {
@@ -538,20 +496,19 @@ func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
 }
 
 // decide is the whole decision and the only copy of it. It takes what a request
-// carries rather than a request, so that every underlay reaches the same answer:
-// one reads the body itself, another is handed the bytes it already has.
+// carries rather than a request, so every underlay reaches the same answer.
 //
-// req.Body is read and not kept, so an underlay owning buffers of its own can pass them.
-// It allocates nothing: the document is a subslice of that body and
-// the allowlist is looked up by that subslice.
+// req.Body is read and not kept, so an underlay can pass its own buffers.
+// Allocates nothing: the document is a subslice of that body,
+// and the allowlist is looked up by that subslice.
 func (p *proxy) decide(st *state, req Request) (allowed bool, err error) {
 	var value []byte
 
 	if req.IsGET {
 		// A GET carries its document in the query string, so a body on one is a
-		// second place it could be, and which of them an API reads is the API's
-		// business. It's the question a duplicate query member asks,
-		// and it's answered the same way: the request names the document once.
+		// second place it could be, and which an API reads is the API's
+		// business. Same question a duplicate query member asks, same answer:
+		// the request names the document once.
 		if req.HasBody {
 			return false, errBodyOnGET
 		}
@@ -563,8 +520,8 @@ func (p *proxy) decide(st *state, req Request) (allowed bool, err error) {
 	}
 
 	// The document is the body from here on, so a query parameter is a second
-	// place it could be: an API reading one for a POST would run what this never hashed.
-	// It's the question a GET carrying a body asks, answered the same way.
+	// place it could be: an API reading one for a POST runs what this never
+	// hashed. Same question a GET carrying a body asks, same answer.
 	if hasQueryParam(req.RawQuery) {
 		return false, errQueryBesideBody
 	}
@@ -574,9 +531,8 @@ func (p *proxy) decide(st *state, req Request) (allowed bool, err error) {
 	}
 
 	docs, err := extractJSON(st.spans[:0], req.Body, p.allowBatch)
-	// The spans of st are kept whatever happened, so the room extractJSON grew
-	// for a batch is there for the next request. docs holds the same array and
-	// keeps its length, which is what the loop below reads.
+	// Kept whatever happened, so the room extractJSON grew for a batch is there
+	// for the next request. docs shares the array and keeps its length.
 	st.spans = docs[:0]
 	if err != nil {
 		return false, err
@@ -602,9 +558,9 @@ func (p *proxy) allow(st *state, document []byte) (allowed bool, err error) {
 
 	st.hash.Reset()
 	if e := st.parser.Parse(st.hash, p.options, document); e.IsErr() {
-		// A document nesting past the limit is told apart from one that isn't
-		// on the list: a flood of them is an attack on what hashing costs,
-		// where a document nobody allowed is usually an allowlist out of date.
+		// Nesting past the limit is told apart from not being on the list:
+		// a flood of the first is an attack on what hashing costs,
+		// where the second is usually an allowlist out of date.
 		if errors.Is(e.Err, parser.ErrTooDeep) {
 			return false, errTooDeep
 		}
@@ -629,8 +585,7 @@ func (p *proxy) readBody(st *state, r *http.Request) error {
 		if _, err := io.ReadFull(r.Body, st.body); err != nil {
 			// A body that doesn't arrive is no malformed document: the client
 			// went away, a timeout cut it off, or the connection failed.
-			// Saying which is what lets the log tell them apart, and calling it JSON
-			// would be wrong anyway for an application/graphql body.
+			// Calling it JSON is wrong for an application/graphql body anyway.
 			return fmt.Errorf("reading the request body: %w", err)
 		}
 		return nil
@@ -656,16 +611,15 @@ func (p *proxy) readBody(st *state, r *http.Request) error {
 	}
 }
 
-// reject answers with a GraphQL error body. Under -opaque-errors every rejection is
-// a 403 without detail, so a caller learns nothing about why.
+// reject answers with a GraphQL error body. Under -opaque-errors that's a 403
+// without detail, so a caller learns nothing about why.
 func (p *proxy) reject(w http.ResponseWriter, code int, message, extension string) {
 	code, message, extension = p.rejection(code, message, extension)
 	writeError(w, code, message, extension)
 }
 
-// rejection is what a rejection says after -opaque-errors has had its say.
-// It's the one copy of that rule: an underlay answering a rejection asks here first,
-// so none of them can leak a detail this is meant to withhold.
+// rejection applies -opaque-errors. The one copy of that rule:
+// every underlay asks here, so none can leak a detail this is meant to withhold.
 func (p *proxy) rejection(
 	code int, message, extension string,
 ) (int, string, string) {
@@ -676,37 +630,33 @@ func (p *proxy) rejection(
 	return code, message, extension
 }
 
-// writeError answers with the GraphQL error shape, which is what a client
-// library expects in a body.
+// writeError answers with the GraphQL error shape a client library expects.
 //
-// The envelope is written as it is rather than marshalled, which is what keeps
-// a rejection free of allocations, so the parts that come from a variable are
-// escaped on the way out. Nothing today puts a quote in a message,
-// and the client parsing this body is what pays if anything ever does.
+// The envelope is written rather than marshalled, which keeps a rejection free
+// of allocations, so the variable parts are escaped on the way out.
 func writeError(w http.ResponseWriter, code int, message, extension string) {
-	// Header.Set would build a one-element slice per rejection, which is the
-	// path a flood takes. The shared one is only ever read: Add on a full slice
-	// appends into a new one, and Del drops the entry rather than the value.
-	// The key has to be in canonical form to be assigned like this.
+	// Header.Set would build a one-element slice per rejection,
+	// the path a flood takes. The shared one is only ever read:
+	// Add on a full slice appends into a new one, Del drops the entry.
+	// The key must be canonical to be assigned like this.
 	w.Header()["Content-Type"] = contentTypeJSON
 	w.WriteHeader(code)
 	writeErrorBody(w, message, extension)
 }
 
 // writeErrorBody writes the envelope alone. The status and the content type are
-// the underlay's to set, the shape of the answer is the same under all of them.
+// the underlay's to set; the shape is the same under all of them.
 func writeErrorBody(w io.Writer, message, extension string) {
 	_, _ = io.WriteString(w, `{"errors":[{"message":"`)
 	writeJSONString(w, message)
-	// The code is a constant of this package and never comes from a request,
-	// so it goes out as it is. Only the message can carry anything.
+	// Unescaped: the code is a constant of this package and never comes from a
+	// request. Only the message can carry anything.
 	_, _ = io.WriteString(w, `","extensions":{"code":"`)
 	_, _ = io.WriteString(w, extension)
 	_, _ = io.WriteString(w, `"}}]}`)
 }
 
-// contentTypeJSON is the header value every error answer carries,
-// shared so that writing one doesn't allocate the slice that holds it.
+// contentTypeJSON is shared, so writing an error answer allocates no slice.
 var contentTypeJSON = []string{"application/json; charset=utf-8"}
 
 // jsonEscape is the escape for every byte a JSON string can't carry as it is.
@@ -721,12 +671,11 @@ var jsonEscape = func() (table [0x20]string) {
 	return table
 }()
 
-// writeJSONString writes s as the contents of a JSON string, without the quotes
-// around it. The run between two escapes is written whole, so a string needing
-// no escape costs one write and nothing else.
+// writeJSONString writes s as JSON string contents, without the quotes.
+// The run between two escapes is written whole, so a string needing none costs one write.
 //
-// Bytes above 0x7F go out as they are, which is a JSON string where s is valid
-// UTF-8. Every message here is a Go error or a constant of this package, so it is.
+// Bytes above 0x7F go out as they are, valid JSON where s is valid UTF-8.
+// Every message here is a Go error or a constant of this package, so it is.
 func writeJSONString(w io.Writer, s string) {
 	start := 0
 	for i := range len(s) {
@@ -754,10 +703,10 @@ func writeJSONString(w io.Writer, s string) {
 
 // setForwarded fills the forwarding headers of the outbound request.
 //
-// Without trust they report the direct peer, because a client that reaches
-// the proxy directly can claim any address. With trust the peer is appended
-// to the chain of the load balancer and its host and protocol are kept,
-// so the upstream API sees the original client.
+// Without trust they report the direct peer, since a client reaching the proxy
+// directly can claim any address. With trust the peer is appended to the load
+// balancer's chain and its host and protocol are kept,
+// so the API sees the original client.
 // Reference:
 //
 //   - https://datatracker.ietf.org/doc/html/rfc7239

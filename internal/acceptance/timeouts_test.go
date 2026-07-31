@@ -15,11 +15,10 @@ import (
 // TestReadTimeoutBoundsTheBody covers a client that completes its headers and
 // then dribbles its body.
 //
-// It's the half of the pair that has to hold on both: -server.read-header-timeout
-// bounds only the headers and fasthttp has no equivalent for it, so an
-// implementation could pass every other test with -server.read-timeout wired to
-// nothing. A slow body is what holds a connection open, which is what a few
-// thousand of them make an outage out of.
+// The half of the pair that has to hold on both: -server.read-header-timeout
+// bounds only the headers and fasthttp has no equivalent, so an implementation
+// could pass every other test with -server.read-timeout wired to nothing.
+// A slow body holds a connection open, and a few thousand make that an outage.
 func TestReadTimeoutBoundsTheBody(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		// The header timeout has to sit at or below the read timeout, which

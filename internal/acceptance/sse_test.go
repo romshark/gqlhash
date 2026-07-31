@@ -99,7 +99,6 @@ func (a *eventAPI) last(t *testing.T) recorded {
 	return a.requests[len(a.requests)-1]
 }
 
-// readAll reads a request body whole.
 func readAll(r *http.Request) (string, error) {
 	b, err := io.ReadAll(r.Body)
 	return string(b), err
@@ -446,14 +445,13 @@ func TestAskingForAStreamStillBoundsAnOrdinaryAnswer(t *testing.T) {
 // TestStreamAskedForAndNotGiven covers a client naming text/event-stream whose
 // request the API answers with something else.
 //
-// The bodyless case is the one that mattered: reading a body stream that isn't
-// there dereferenced nil inside a goroutine no recover could reach,
-// so one allowed request against an API answering 204 took the whole process down.
-// The client controls Accept and the API supplies the status,
-// so that was a remote kill.
+// The bodyless case is the one that matters: reading a body stream that isn't
+// there dereferences nil inside a goroutine no recover reaches,
+// so one allowed request against an API answering 204 takes the process down.
+// The client controls Accept and the API supplies the status, so that's a remote kill.
 //
-// Every case here asserts the answer *and* that the proxy is still serving
-// afterwards, which is the part a crash fails.
+// Every case asserts the answer and that the proxy is still serving afterwards,
+// which is the part a crash fails.
 func TestStreamAskedForAndNotGiven(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
@@ -533,16 +531,17 @@ func TestStreamAskedForAndNotGiven(t *testing.T) {
 //
 // The connection that stream was read over is one the API is still writing into,
 // so returning it to the pool hands the next subscription a socket with
-// somebody else's events queued on it, which it reads as a status line.
-// Measured before the fix as one abandoned stream making the next two forwards
-// fail — and a browser tab closing is exactly this case, so a deployment would
-// see it constantly.
+// somebody else's events queued on it, read as a status line: one abandoned
+// stream fails the next two forwards. A browser tab closing is exactly this
+// case, so a deployment meets it constantly.
 func TestAbandonedStreamLeavesThePoolClean(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
 		writeDoc(t, dir, "a.graphql", allowedDoc)
-		// Long enough that every subscription below is abandoned mid-flight.
-		api := newEventAPI(t, 200, 20*time.Millisecond)
+		// Long enough that every subscription below is abandoned mid-flight,
+		// and no longer: each iteration waits out whatever the API still has to
+		// send, so a longer stream is test runtime rather than more assertion.
+		api := newEventAPI(t, 20, 20*time.Millisecond)
 		s := serve(t, tgt, "-upstream.url", api.url, "-allowlist", dir)
 
 		open := func(t *testing.T) {
@@ -592,24 +591,22 @@ func TestAbandonedStreamLeavesThePoolClean(t *testing.T) {
 // TestStreamTriggerIsTheClientsAccept covers who decides that an answer is
 // relayed as a stream rather than bounded like an exchange.
 //
-// Both have to agree, and only one signal is available to both: the request's Accept.
-// The fasthttp underlay has to pick a client before there is an answer
-// to look at, so it can go on nothing else, while net/http could see the
-// answer's Content-Type and used to decide on that alone. An API that answers
-// text/event-stream to a client that never asked therefore split the two.
+// The client asks and the API agrees. Only the request's Accept is available to
+// both underlays: fasthttp picks a client before there is an answer to look at,
+// so deciding on the answer's Content-Type alone would split the two for an API
+// that streams to a client that never asked.
 //
-// The rule is that the client asks and the API agrees. A stream nobody asked
-// for is an ordinary exchange, bounded by -upstream.timeout — and since it
-// never completes within it, the truncated-answer rule is what the client sees:
-// not a complete 200.
+// A stream nobody asked for is an ordinary exchange, bounded by
+// -upstream.timeout, and since it never completes within one the client sees
+// the truncated-answer rule: not a complete 200.
 func TestStreamTriggerIsTheClientsAccept(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
 		writeDoc(t, dir, "a.graphql", allowedDoc)
 		// A stream far longer than the exchange bound below.
-		api := newEventAPI(t, 100, 50*time.Millisecond)
+		api := newEventAPI(t, 100, 20*time.Millisecond)
 		s := serve(t, tgt, "-upstream.url", api.url, "-allowlist", dir,
-			"-upstream.timeout", "500ms")
+			"-upstream.timeout", "300ms")
 
 		for _, tc := range []struct {
 			name   string
@@ -651,7 +648,7 @@ func TestStreamTriggerIsTheClientsAccept(t *testing.T) {
 				// keep-alive, which says nothing about the bound.
 				start := time.Now()
 				if err := conn.SetReadDeadline(
-					time.Now().Add(2500 * time.Millisecond)); err != nil {
+					time.Now().Add(1200 * time.Millisecond)); err != nil {
 					t.Fatal(err)
 				}
 				buf := make([]byte, 4096)
@@ -669,7 +666,7 @@ func TestStreamTriggerIsTheClientsAccept(t *testing.T) {
 
 				if tc.stream {
 					// It was still arriving well past the exchange bound.
-					if last < 1500*time.Millisecond {
+					if last < 700*time.Millisecond {
 						t.Errorf("expected a stream to outlive -upstream.timeout;"+
 							" the last of %d bytes arrived after %s", read, last)
 					}
@@ -679,7 +676,7 @@ func TestStreamTriggerIsTheClientsAccept(t *testing.T) {
 				// refusal or a connection that breaks is the underlay's,
 				// the same as any answer cut off mid-body; what must not happen is
 				// the bound being escaped by an answer nobody asked for.
-				if last > 1500*time.Millisecond {
+				if last > 700*time.Millisecond {
 					t.Errorf("expected the exchange bounded;"+
 						" bytes were still arriving after %s", last)
 				}
@@ -691,14 +688,13 @@ func TestStreamTriggerIsTheClientsAccept(t *testing.T) {
 // TestShutdownWithALiveStream covers a subscription open when the signal
 // arrives.
 //
-// A drain waits for the requests in flight, and a subscription is in flight by
-// definition — it has no natural end to wait for. So a proxy carrying one sat
-// out the whole -server.shutdown-timeout and then exited 1: on every deploy,
-// a ten-second stop reported as a failure, and under a shorter grace period a
-// SIGKILL instead.
+// A drain waits for what's in flight and a subscription has no natural end,
+// so without this a proxy carrying one sits out the whole
+// -server.shutdown-timeout and exits 1 — every deploy a ten-second stop
+// reported as a failure, or a SIGKILL under a shorter grace period.
 //
-// The rule is that a stream is closed rather than waited for.
-// An exchange is something to finish; a subscription is something to end.
+// A stream is closed rather than waited for:
+// an exchange is something to finish, a subscription something to end.
 func TestShutdownWithALiveStream(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()

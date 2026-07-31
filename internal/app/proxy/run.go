@@ -47,8 +47,8 @@ func RunWith(
 ) (exitCode int) {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// The first signal starts the shutdown and restores the default handling, so
-	// a second one exits at once instead of waiting for the shutdown timeout.
+	// The first signal starts the shutdown and restores the default handling,
+	// so a second exits at once instead of waiting out the shutdown timeout.
 	go func() {
 		<-ctx.Done()
 		stop()
@@ -76,8 +76,8 @@ func RunWith(
 	return c.serve(ctx, cfg, log)
 }
 
-// newLogger builds the logger from the flags. The level is the one thing config
-// leaves as a string, because it owns no logging dependency.
+// newLogger builds the logger from the flags. The level stays a string in config,
+// which owns no logging dependency.
 func newLogger(
 	cfg config.Proxy, stderr io.Writer,
 ) (log zerolog.Logger, ok bool) {
@@ -100,13 +100,12 @@ type components struct {
 
 	// recycle retires idle upstream connections on an interval, or is nil where
 	// -upstream.max-conn-lifetime is off. See [components.recycleConns].
-	recycle func()
-	// recycleEvery is how often it runs.
+	recycle      func()
 	recycleEvery time.Duration
 
-	// dataPlane serves the requests the proxy exists for and control answers
-	// /metrics, /status and /reload, each on a listener of its own. A run has
-	// both: the control server has no off switch, see [config.ProxyControl].
+	// dataPlane serves the requests the proxy exists for; control answers
+	// /metrics, /status and /reload. Each has a listener of its own and a run
+	// has both, since the control server has no off switch.
 	//
 	// dataPlane is whichever HTTP implementation the command carries, see
 	// [Underlay]. control is net/http under every one of them.
@@ -117,9 +116,8 @@ type components struct {
 // build assembles the components and loads the allowlist.
 func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components, error) {
 	options := gqlhash.Options{Ignore: cfg.Ignore, DepthLimit: cfg.DepthLimit}
-	// The function is checked once here rather than per request: a proxy that
-	// can't hash serves nothing, so it's a start failure and not a nil that
-	// turns up at the first request.
+	// Checked once here rather than per request: a proxy that can't hash serves nothing,
+	// so it's a start failure and not a nil at the first request.
 	if _, ok := config.NewHasher(cfg.HashFunc); !ok {
 		return nil, fmt.Errorf("unsupported hash function: %s",
 			config.HashName(cfg.HashFunc))
@@ -146,10 +144,8 @@ func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components
 		ResponseHeaderTimeout: cfg.Upstream.Timeout,
 		ForceAttemptHTTP2:     cfg.Upstream.HTTP2,
 		// The proxy asks for no encoding of its own. Without this net/http adds
-		// Accept-Encoding: gzip to a request that carried none and gunzips the
-		// answer, so an API compresses what nobody asked for and the client
-		// reads an answer in another envelope than the API sent.
-		// What the client asks for is forwarded, and what the API answers with arrives.
+		// Accept-Encoding: gzip to a request that carried none and gunzips the answer,
+		// so the client reads a different envelope than the API sent.
 		DisableCompression: true,
 	}
 	p := newProxy(list, cfg.Upstream.URL, newHash, proxyConfig{
@@ -181,15 +177,14 @@ func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components
 	var server dataPlaneServer
 	var recycle func()
 	if underlay.New != nil {
-		// An underlay of its own owns its client, so retiring its connections is
-		// its own to do. fasthttp takes the lifetime as a setting.
+		// An underlay owns its client, so retiring its connections is its own to do.
+		// fasthttp takes the lifetime as a setting.
 		server = underlay.New(p.Core(), cfg, cfg.Upstream.URL, log)
 	} else {
 		if cfg.Upstream.MaxConnLifetime > 0 {
 			// http.Transport has no lifetime of its own, and a connection can't
-			// be closed from under a request that's using it. Closing the idle
-			// ones on an interval is the safe form of the same thing:
-			// what's in flight is left alone, and what isn't gets dialled again,
+			// be closed from under the request using it. Closing the idle ones
+			// on an interval leaves what's in flight alone; the rest is dialled again,
 			// which resolves the name afresh.
 			recycle = transport.CloseIdleConnections
 		}
@@ -215,9 +210,9 @@ func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components
 func (c *components) serve(
 	ctx context.Context, cfg config.Proxy, log zerolog.Logger,
 ) (exitCode int) {
-	// The listener is opened before serving, so a bind failure is reported as
-	// one and the address that's logged is the one in use.
-	// With -server.listen :0 that address is the only way to learn the port.
+	// Opened before serving, so a bind failure is reported as one and the
+	// logged address is the one in use. Under -server.listen :0 that address is
+	// the only way to learn the port.
 	listener, err := net.Listen("tcp", cfg.Server.Listen)
 	if err != nil {
 		log.Error().Err(err).Str("listen", cfg.Server.Listen).Msg("listening")
@@ -227,9 +222,8 @@ func (c *components) serve(
 }
 
 // serveOn serves the data plane on listener and runs until ctx is done or a
-// server fails. It's separate from [components.serve] so a test can hand it a
-// listener of its own, which is the only way to fail the data-plane server
-// while it runs.
+// server fails. Separate from [components.serve] so a test can hand it a
+// listener of its own, the only way to fail the server while it runs.
 func (c *components) serveOn(
 	ctx context.Context, listener net.Listener,
 	cfg config.Proxy, log zerolog.Logger,
@@ -240,8 +234,7 @@ func (c *components) serveOn(
 	go func() { errServe <- server.Serve(listener) }()
 	go c.recycleConns(ctx)
 
-	// controlAddress is the one in use, which is the only way to learn the port
-	// behind an address ending in :0.
+	// The address in use, the only way to learn the port behind a :0.
 	controlListener, err := net.Listen("tcp", c.control.Addr)
 	if err != nil {
 		log.Error().Err(err).Str("address", c.control.Addr).
@@ -292,10 +285,9 @@ func (c *components) serveOn(
 		log.Info().Msg("shutting down")
 	}
 
-	// The streams end before the drain begins to wait. A drain waits for what
-	// is in flight, and a subscription is in flight until its client leaves —
-	// so a proxy carrying one sat out the whole -server.shutdown-timeout and
-	// then reported failure, on every deploy.
+	// The streams end before the drain begins to wait: a subscription is in
+	// flight until its client leaves, so a proxy carrying one would sit out the
+	// whole -server.shutdown-timeout and then report failure.
 	// An exchange is something to finish; a subscription is something to end.
 	c.proxy.StartDraining()
 
@@ -321,8 +313,8 @@ func (c *components) serveOn(
 // -upstream.max-conn-lifetime, and returns at once where that's off.
 //
 // A pool that never turns over pins itself to the backends it first reached:
-// a name standing for several of them is balanced per connection, so one added
-// later takes no traffic until something lets go. This is that something.
+// a name standing for several is balanced per connection, so one added later
+// takes no traffic until something lets go. This is that something.
 func (c *components) recycleConns(ctx context.Context) {
 	if c.recycle == nil || c.recycleEvery <= 0 {
 		return
@@ -339,11 +331,11 @@ func (c *components) recycleConns(ctx context.Context) {
 	}
 }
 
-// logReload reports what a load of the allowlist did. The allowlist logs nothing
-// itself: what deserves an event, and at which level, is decided here.
+// logReload reports what a load of the allowlist did. The allowlist logs nothing itself:
+// what deserves an event, and at which level, is decided here.
 //
-// Every file left out is an error, since a document that was meant to be served
-// and isn't is a deployment mistake, and the summary is one line whatever the outcome,
+// Every file left out is an error — a document meant to be served and isn't is
+// a deployment mistake — and the summary is one line whatever the outcome,
 // so a reload always leaves a trace.
 func logReload(log zerolog.Logger, dir string, r allowlist.Result) {
 	if r.SchemaErr != nil {
@@ -354,9 +346,8 @@ func logReload(log zerolog.Logger, dir string, r allowlist.Result) {
 		log.Error().Err(err).Msg("skipping a document")
 	}
 	if len(r.Files) == 0 {
-		// Serving an empty allowlist rejects every request,
-		// which is loud in the counters but silent otherwise.
-		// This is the one line that says why.
+		// An empty allowlist rejects every request, loud in the counters and
+		// silent otherwise. This is the one line that says why.
 		log.Error().Str("dir", dir).Int("skipped", len(r.Skipped)).
 			Msg("no documents on the allowlist, every request is rejected")
 	}

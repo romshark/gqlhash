@@ -4,16 +4,13 @@
 //
 //	go run ./internal/cmd/loadtest [flags]
 //
-// wrk is required. What a generator spends per request is CPU the proxy doesn't
-// get, so it has to be cheap enough not to become the answer itself.
+// wrk is required, and cheap enough per request not to become the answer itself.
+// It's closed-loop, so it stops sending while the proxy is stalled and never
+// records the stall: read its latency distribution as the shape of a healthy run
+// rather than as a service level, which needs a constant arrival rate instead.
 //
-// What wrk can't do: it's closed-loop, so it stops sending while the proxy is
-// stalled and never records the stall. Read its latency distribution as the
-// shape of a healthy run rather than as a service level. A generator driving a
-// constant arrival rate is what that needs.
-//
-// Running the generator on the machine it measures understates the proxy
-// however cheap it is; a second machine is what a number worth publishing needs.
+// Running the generator on the machine it measures understates the proxy however
+// cheap it is; a number worth publishing needs a second machine.
 //
 // The proxy is started with its upstream pool sized to -connections, which isn't
 // the default. See TUNING_GQLHASH_PROXY.md.
@@ -42,19 +39,17 @@ import (
 )
 
 // fixtures are what a run sends and what the upstream answers, kept as files so
-// they can be read, diffed and pasted into a curl without going through
-// Go string escaping.
+// they can be read, diffed and curled without Go string escaping.
 //
 //go:embed fixtures
 var fixtures embed.FS
 
 // fixture returns a file from [fixtures] without the trailing newline: the
-// bodies go out as they are, and the answer is measured by its length.
+// bodies go out as they are and the answer is measured by its length.
 func fixture(name string) string {
 	b, err := fixtures.ReadFile("fixtures/" + name)
 	if err != nil {
-		// Embedded at build time, so a miss here is a mistake in this package
-		// rather than anything a run could have caused.
+		// Embedded at build time, so a miss is a mistake in this package.
 		panic(err)
 	}
 	return strings.TrimRight(string(b), "\n")
@@ -67,14 +62,12 @@ var (
 	// request above on purpose: the hash ignores the difference.
 	allowedDoc = fixture("get-user.graphql")
 	// upstreamAnswer is short and fixed, so a run measures the proxy rather
-	// than the API behind it. Its length is part of what the numbers mean,
-	// so changing it makes runs before and after incomparable.
+	// than the API behind it. Its length is part of what the numbers mean.
 	upstreamAnswer = fixture("upstream-answer.json")
 )
 
-// wrkThreads is what wrk is asked for. It refuses to run with fewer
-// connections than threads,
-// so the count follows the connections where those are fewer.
+// wrkThreads is what wrk is asked for. It refuses to run with fewer connections
+// than threads, so the count follows the connections where those are fewer.
 const wrkThreads = 4
 
 // maxConnections is well past anything a run needs and keeps the derived pool
@@ -83,10 +76,9 @@ const maxConnections = 1 << 16
 
 func threadsFor(connections int) int { return min(wrkThreads, connections) }
 
-// wrkDuration renders d the way wrk's parser takes it, an integer and a unit.
-// Go's duration syntax is the wider of the two — it accepts 500ms, 1.5s and
-// 1m30s, all of which wrk rejects — so what wrk won't take is refused here
-// rather than by the child process.
+// wrkDuration renders d as wrk's parser takes it: an integer and a unit.
+// Go's syntax is the wider of the two — 500ms, 1.5s and 1m30s all parse and none is
+// wrk's — so what wrk won't take is refused here and not by the child process.
 func wrkDuration(d time.Duration) (string, error) {
 	if d <= 0 {
 		return "", fmt.Errorf("-duration must be positive, received %s", d)
@@ -172,7 +164,7 @@ func run(duration time.Duration, connections int, command string) error {
 		return fmt.Errorf("building ./cmd/%s: %w", command, err)
 	}
 
-	// The upstream is served from here rather than spawned: one less process to start,
+	// Served from here rather than spawned: one less process to start,
 	// and its listener is the port, so nothing races for one.
 	upstream, err := startUpstream()
 	if err != nil {
@@ -197,9 +189,8 @@ func run(duration time.Duration, connections int, command string) error {
 	for _, c := range []struct {
 		label, body string
 		// want is the decision every request of this run has to reach.
-		// wrk reports a count of non-2xx answers and no more, so it can't tell the
-		// 403 this expects from a 500, nor notice the upstream failing behind an
-		// allowed request. The proxy's own counters can.
+		// wrk counts non-2xx answers and no more, so it can't tell this 403 from a
+		// 500 or see the upstream failing behind an allowed request.
 		want string
 	}{
 		{"allowed, forwarded upstream",
@@ -226,8 +217,8 @@ func run(duration time.Duration, connections int, command string) error {
 			return fmt.Errorf("the proxy stopped during the run: %w\n%s",
 				err, proxy.logs())
 		}
-		// What the proxy spent holding that rate. Divide the cores by the req/s above
-		// for the CPU one request costs, which is the figure that ports across machines.
+		// Divide the cores by the req/s above for the CPU one request costs,
+		// the figure that ports across machines.
 		fmt.Printf("proxy: %s\n", spent)
 
 		after, err := readDecisions(proxy.control)
@@ -255,9 +246,9 @@ const (
 	decisionUpstream  = "upstream errors"
 )
 
-// decisions is what the proxy has decided, read from its control server.
-// It's the only account of a measured run that distinguishes one answer from
-// another: wrk counts non-2xx responses and stops there.
+// decisions is what the proxy has decided, read from its control server:
+// the only account of a run that tells one answer from another,
+// where wrk counts non-2xx responses and stops.
 type decisions struct {
 	Allowed   int64 `json:"allowed"`
 	Rejected  int64 `json:"rejected"`
@@ -265,8 +256,8 @@ type decisions struct {
 	Upstream  int64 `json:"upstream_errors"`
 }
 
-// counts pairs every decision with its total, in a fixed order so that a
-// message naming one of them reads the same way twice.
+// counts pairs every decision with its total, in a fixed order so a message
+// naming one reads the same way twice.
 func (d decisions) counts() []struct {
 	name  string
 	total int64
@@ -300,9 +291,8 @@ func (d decisions) String() string {
 	return strings.Join(parts, ", ")
 }
 
-// only reports whether every request of a run reached the one decision it was
-// meant to. A run that decided nothing is a failure too:
-// it means the load never arrived.
+// only reports whether every request of a run reached the one decision it was meant to.
+// A run that decided nothing failed too: the load never arrived.
 func (d decisions) only(want string) error {
 	for _, c := range d.counts() {
 		switch {
@@ -355,7 +345,7 @@ func writeFixtures(work string) error {
 
 func repoRoot() (string, error) {
 	// Asked of the toolchain rather than walked for,
-	// so it agrees with whatever go build would pick from the same directory.
+	// so it agrees with what go build would pick from the same directory.
 	out, err := exec.Command("go", "env", "GOMOD").Output()
 	if err != nil {
 		return "", fmt.Errorf("finding the module: %w", err)
@@ -367,9 +357,8 @@ func repoRoot() (string, error) {
 	return filepath.Dir(gomod), nil
 }
 
-// startUpstream serves the GraphQL API the proxy is put in front of.
-// It answers a fixed body as cheaply as it can, so a run measures the proxy and the
-// generator rather than an API.
+// startUpstream serves the GraphQL API the proxy is put in front of,
+// answering a fixed body as cheaply as it can so a run measures the proxy and not an API.
 func startUpstream() (net.Listener, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -391,13 +380,13 @@ func startUpstream() (net.Listener, error) {
 // proxyProcess is the proxy under test.
 type proxyProcess struct {
 	cmd *exec.Cmd
-	// address is the data plane, control serves /metrics, /status and /reload.
+	// address is the data plane; control serves /metrics, /status and /reload.
 	// Both are behind :0, so the log is the only place they're known.
 	address, control string
 	output           *syncBuffer
 
 	// exited carries what the process ended with. One goroutine owns Wait,
-	// so that watching for an early death and stopping it later don't both call it.
+	// so watching for an early death and stopping it later don't both call it.
 	exited chan error
 }
 
@@ -415,9 +404,9 @@ func (p *proxyProcess) stop() {
 	}
 }
 
-// died reports what the proxy ended with where it's no longer running,
-// and nil where it is. A run measures nothing once the process behind it is gone,
-// and wrk would report the connection errors without saying why.
+// died reports what the proxy ended with, nil where it's still running.
+// A run measures nothing once the process is gone, and wrk reports the connection
+// errors without saying why.
 func (p *proxyProcess) died() error {
 	select {
 	case err := <-p.exited:
@@ -444,9 +433,8 @@ func (p *proxyProcess) logs() string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// startProxy runs the proxy on a port of its own and waits for it to report the
-// address, which is the only way to learn the port behind :0 and is why nothing
-// here has to guess at a free one.
+// startProxy runs the proxy on a port of its own and waits for it to report the address,
+// the only way to learn the port behind :0 — so nothing guesses at a free one.
 func startProxy(binary, upstream, work string, connections int) (*proxyProcess, error) {
 	out := new(syncBuffer)
 	cmd := exec.Command(binary,
@@ -461,8 +449,8 @@ func startProxy(binary, upstream, work string, connections int) (*proxyProcess, 
 	cmd.Stdout, cmd.Stderr = out, out
 	// The proxy reads GQLHASH_PROXY_* from the environment, so a variable left
 	// in the shell would quietly configure what's being measured,
-	// and GQLHASH_PROXY_LOG_JSON=false would stop the address below being found at
-	// all. Everything else is passed on, GOGC and GOMEMLIMIT among it.
+	// and GQLHASH_PROXY_LOG_JSON=false would hide the address below.
+	// Everything else is passed on, GOGC and GOMEMLIMIT among it.
 	cmd.Env = withoutProxyEnv(os.Environ())
 	if err := cmd.Start(); err != nil {
 		return nil, err
@@ -477,8 +465,8 @@ func startProxy(binary, upstream, work string, connections int) (*proxyProcess, 
 			p.control = loggedAddress(out.String(), "serving /metrics and /reload")
 			return p, nil
 		}
-		// A proxy that refused its flags or couldn't bind is reported now
-		// rather than after the whole deadline has run out.
+		// A proxy that refused its flags or couldn't bind is reported now,
+		// not after the whole deadline runs out.
 		if err := p.died(); err != nil {
 			return nil, fmt.Errorf("the proxy stopped before it served: %w\n%s",
 				err, out.String())
@@ -518,7 +506,7 @@ func loggedAddress(logs, message string) string {
 }
 
 // checkReady makes sure both paths answer before anything is measured,
-// so a broken setup fails here rather than quietly measuring the wrong one.
+// so a broken setup fails here rather than measuring the wrong one.
 func checkReady(target string) error {
 	deadline := time.Now().Add(15 * time.Second)
 	for {
@@ -542,8 +530,8 @@ func checkReady(target string) error {
 	return nil
 }
 
-// readyClient bounds one attempt, so a proxy that accepts and then says nothing
-// is caught by the deadline in [checkReady] rather than hanging it.
+// readyClient bounds one attempt, so a proxy that accepts and says nothing is
+// caught by the deadline in [checkReady] rather than hanging it.
 var readyClient = &http.Client{Timeout: 5 * time.Second}
 
 func post(target, body string) (int, error) {
@@ -560,8 +548,8 @@ func post(target, body string) (int, error) {
 func drive(
 	target, body, window string, connections int, work string,
 ) error {
-	// wrk needs the body in a Lua script. Four threads drive both paths of this
-	// proxy, and every thread past that is one the proxy doesn't get.
+	// wrk needs the body in a Lua script. Four threads drive both paths,
+	// and every thread past that is one the proxy doesn't get.
 	content, err := os.ReadFile(body)
 	if err != nil {
 		return err
@@ -614,9 +602,9 @@ func (r report) String() string {
 
 // meter watches what a process spends over one run.
 //
-// The CPU is a difference across the run. The memory is sampled rather than
-// read once at the end, because a single reading says nothing about what a run
-// held, and the kernel's own high-water mark (VmHWM) spans the whole process,
+// The CPU is a difference across the run. The memory is sampled rather than read
+// once at the end: a single reading says nothing about what a run held,
+// and the kernel's high-water mark (VmHWM) spans the whole process,
 // so the second run of a pair would inherit the first one's peak.
 type meter struct {
 	pid     int
@@ -631,7 +619,7 @@ type meter struct {
 }
 
 // startMeter begins watching pid. Sampling every 50ms is fine detail against
-// runs measured in seconds and costs two small reads a tick.
+// runs measured in seconds, at two small reads a tick.
 func startMeter(pid int) *meter {
 	m := &meter{
 		pid:     pid,
@@ -672,9 +660,9 @@ func (m *meter) finish() report {
 	<-m.done
 
 	r := report{elapsed: time.Since(m.started)}
-	// Both ends are needed: without the first the difference would be the whole
-	// life of the process, and without the second it would be zero.
-	// Either one silently passes for a measurement, so neither is guessed at.
+	// Both ends are needed: without the first the difference is the whole life
+	// of the process, without the second it's zero.
+	// Either passes silently for a measurement, so neither is guessed at.
 	cpu1, cpu1OK := processCPU(m.pid)
 	if m.cpu0OK && cpu1OK {
 		r.cpu = time.Duration((cpu1 - m.cpu0) * float64(time.Second))
@@ -697,10 +685,9 @@ func (m *meter) finish() report {
 	return r
 }
 
-// clockTicks is USER_HZ, the unit /proc reports CPU in. It isn't in the file
-// and isn't fixed by the format, so it's asked for rather than assumed.
-// Reading it from the C library would need cgo;
-// one getconf per run is nothing beside a load test.
+// clockTicks is USER_HZ, the unit /proc reports CPU in. Not in the file and not
+// fixed by the format, so it's asked for rather than assumed: reading it from
+// the C library needs cgo, and one getconf per run is nothing here.
 var clockTicks = sync.OnceValues(func() (float64, error) {
 	out, err := exec.Command("getconf", "CLK_TCK").Output()
 	if err != nil {
@@ -729,11 +716,9 @@ func processCPU(pid int) (float64, bool) {
 	return parseProcStatCPU(stat, ticks)
 }
 
-// parseProcStatCPU reads the CPU out of a /proc/<pid>/stat line.
-//
-// The command name is the second field, parenthesized, and can hold spaces and
-// parentheses of its own, so the fields are counted from after the last of them
-// rather than from the start of the line.
+// parseProcStatCPU reads the CPU out of a /proc/<pid>/stat line. The command
+// name is the parenthesized second field and can hold spaces and parentheses of its own,
+// so fields are counted from after the last one rather than the start.
 func parseProcStatCPU(stat []byte, ticks float64) (float64, bool) {
 	end := bytes.LastIndexByte(stat, ')')
 	if end < 0 || ticks <= 0 {
@@ -779,8 +764,7 @@ func residentKB(pid int) (float64, bool) {
 	return 0, false
 }
 
-// psField reads one field of ps, which is what stands in for procfs on the
-// systems that have none.
+// psField reads one field of ps, which stands in for procfs where there is none.
 func psField(
 	pid int, format string, parse func(string) (float64, error),
 ) (float64, bool) {
@@ -793,7 +777,7 @@ func psField(
 }
 
 // parseClockTime reads the [HH:]MM:SS that ps prints. A run lasts seconds,
-// so the day form ps uses past 24 hours can't turn up here.
+// so the day form past 24 hours can't turn up.
 func parseClockTime(s string) (float64, error) {
 	var total float64
 	for part := range strings.SplitSeq(s, ":") {

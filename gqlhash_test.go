@@ -179,17 +179,14 @@ func TestCompare(t *testing.T) {
 		check("string", compare(sha1.New(), gqlhash.Options{}, a, b))
 		check("[]byte", compare(sha1.New(), gqlhash.Options{}, []byte(a), []byte(b)))
 
-		// Provide nil buffer.
 		check("nil buffer", compareWithBuffer(
 			nil, sha1.New(), gqlhash.Options{}, []byte(a), []byte(b),
 		))
 
-		// Provide buffer that's too small in len.
 		check("short buffer", compareWithBuffer(
 			make([]byte, 1), sha1.New(), gqlhash.Options{}, []byte(a), []byte(b),
 		))
 
-		// Provide buffer with len 0 and some capacity.
 		check("empty buffer", compareWithBuffer(
 			make([]byte, 0, 1), sha1.New(), gqlhash.Options{}, []byte(a), []byte(b),
 		))
@@ -665,7 +662,6 @@ func BenchmarkCompare(b *testing.B) {
 func TestBenchQueryCorpus(t *testing.T) {
 	for _, q := range benchQueries {
 		t.Run(q.Name, func(t *testing.T) {
-			// Prepare vektah schema
 			schema, err := vektah.LoadSchema(&ast.Source{Input: q.Schema})
 			if err != nil {
 				t.Fatalf("parsing schema: %v", err)
@@ -707,7 +703,6 @@ var ignoreModes = []struct {
 func BenchmarkReferenceSHA1(b *testing.B) {
 	for _, q := range benchQueries {
 		b.Run(q.Name, func(b *testing.B) {
-			// Prepare vektah schema
 			schema, err := vektah.LoadSchema(&ast.Source{Input: q.Schema})
 			if err != nil {
 				b.Fatalf("parsing schema: %v", err)

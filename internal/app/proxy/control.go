@@ -13,9 +13,9 @@ import (
 	"github.com/romshark/gqlhash/v2/internal/allowlist"
 )
 
-// control serves the endpoints that change what the proxy does. It's reachable
-// only where -control.listen names an address, which must be one no client of the API
-// can reach: a reload rereads and reparses every document.
+// control serves the endpoints that change what the proxy does.
+// -control.listen must name an address no client of the API can reach:
+// a reload rereads and reparses every document.
 type control struct {
 	allowlist *allowlist.Allowlist
 
@@ -33,7 +33,7 @@ func (c *control) routes(mux *http.ServeMux) {
 }
 
 // status answers with the state of the allowlist and the decisions made.
-// It takes no token: it changes nothing and says nothing a scrape of the metrics doesn't.
+// No token: it changes nothing and says nothing a metrics scrape doesn't.
 func (c *control) status(w http.ResponseWriter, _ *http.Request) {
 	documents, loadedAt := c.allowlist.Stats()
 	d := c.proxy.snapshot()
@@ -72,10 +72,9 @@ func (c *control) reload(w http.ResponseWriter, r *http.Request) {
 	}
 	logReload(c.log, c.dir, result)
 
-	// A skipped file is no failure of the reload: the rest is published.
-	// It's answered so a deployment can fail on it without reading the log.
-	// Files is never nil, so a load that took nothing answers with an empty
-	// list rather than a null a client has to special-case.
+	// A skipped file is no failure of the reload — the rest is published — but
+	// it's answered, so a deployment can fail on it without reading the log.
+	// Files is never nil: a load that took nothing answers [] and not null.
 	var answer reloadAnswer
 	answer.Documents.Total = len(result.Files)
 	answer.Documents.Files = result.Files
@@ -91,7 +90,7 @@ func (c *control) reload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(answer); err != nil {
-		// The answer is on its way out, so there's nothing left to say to the client.
+		// On its way out, so there's nothing left to say to the client.
 		c.log.Debug().Err(err).Msg("writing the reload answer")
 	}
 }
@@ -99,8 +98,8 @@ func (c *control) reload(w http.ResponseWriter, r *http.Request) {
 // reloadAnswer is what a reload replies: what the allowlist holds now and what
 // didn't make it. Every error names the file, the line and the column.
 //
-// The fields are exported although the type isn't: encoding/json marshals no
-// other kind, and lowercasing them answers {} to every reload.
+// Exported fields on an unexported type: encoding/json marshals no other kind,
+// and lowercasing them answers {} to every reload.
 type reloadAnswer struct {
 	Documents struct {
 		Total int      `json:"total"`
@@ -119,7 +118,7 @@ func (c *control) authorized(r *http.Request) bool {
 		return true
 	}
 	// The scheme is matched without case, as RFC 7235 defines it.
-	// What follows it is the token, which is matched exactly.
+	// What follows is the token, matched exactly.
 	authorization := r.Header.Get("Authorization")
 	const scheme = "bearer "
 	if len(authorization) < len(scheme) ||

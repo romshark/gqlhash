@@ -33,10 +33,19 @@ lint:
 # or against another implementation of the same contract:
 #
 #	make acceptance PROXY=/path/to/your-proxy
+#
+# FHTTP=0 leaves out gqlhash-proxy-fhttp, the experimental fasthttp build,
+# which halves the runtime. Every rule it keeps is one gqlhash-proxy keeps too,
+# so this is the run to do while working on a rule and the full one to do
+# before committing.
+#
+#	make acceptance FHTTP=0
 .PHONY: acceptance
 acceptance:
 	@echo "== test: the acceptance suite =="
-	go test $(SHUFFLE) -count=1 ./internal/acceptance $(if $(PROXY),-proxy.bin $(PROXY),)
+	go test $(SHUFFLE) -count=1 ./internal/acceptance \
+		$(if $(PROXY),-proxy.bin $(PROXY),) \
+		$(if $(filter 0 no false,$(FHTTP)),-proxy.fhttp=false,)
 
 .PHONY: cover
 cover: cover-unit cover-servers

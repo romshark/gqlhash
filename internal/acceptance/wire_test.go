@@ -70,16 +70,14 @@ func (a *answers) next() (status, body string) {
 // TestHTTPLayerRefusals covers requests refused by the HTTP implementation
 // rather than by the proxy.
 //
-// `gqlhash-proxy` answers these inside http.Server, before any handler or hook
-// exists to count them, so they carry a text/plain body and move no counter;
-// `gqlhash-proxy-fhttp` reaches its ErrorHandler and answers the JSON envelope
-// counting `malformed`. Neither can be made to do the other's thing without
-// replacing its server, so what's pinned is what both keep and what an API
-// behind either depends on: not 2xx, and nothing forwarded.
+// gqlhash-proxy answers these inside http.Server, before any handler exists to
+// count them, so they carry a text/plain body and move no counter;
+// gqlhash-proxy-fhttp reaches its ErrorHandler and answers the JSON envelope
+// counting malformed. Neither does the other's thing without replacing its
+// server, so what's pinned is what both keep: not 2xx, and nothing forwarded.
 //
-// "Every answered request is counted and timed" covers the requests the proxy
-// answered. These are the ones it never saw, so sum(requests_total) counts what
-// the proxy decided rather than every byte the socket took.
+// These are the requests the proxy never saw, so sum(requests_total) counts
+// what it decided rather than every byte the socket took.
 func TestHTTPLayerRefusals(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := newEnv(t, tgt, []string{allowedDoc})
@@ -182,13 +180,11 @@ func TestExpectContinue(t *testing.T) {
 // TestExpectationTheProxyCantMeet covers an Expect naming something else.
 //
 // RFC 9110 has a recipient refuse an expectation it doesn't understand rather
-// than pass it on, and a proxy that forwarded one would be asking the API to
-// answer for a request the proxy is the recipient of. net/http refuses it
-// inside its own server; fasthttp knows only 100-continue, so the fhttp
-// underlay refuses it in the handler. Both answer 417 and neither forwards.
-//
-// What counts it differs — one refusal happens before any handler exists —
-// which is the same difference every wire-level refusal has.
+// than pass it on: forwarding one asks the API to answer for a request the
+// proxy is the recipient of. net/http refuses it inside its own server;
+// fasthttp knows only 100-continue, so that underlay refuses it in the handler.
+// Both answer 417 and neither forwards. What counts differs,
+// as it does for every wire-level refusal.
 func TestExpectationTheProxyCantMeet(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := newEnv(t, tgt, []string{allowedDoc})
@@ -209,16 +205,14 @@ func TestExpectationTheProxyCantMeet(t *testing.T) {
 			t.Errorf("expected nothing forwarded; the API saw %d", n)
 		}
 
-		// The expectation that is understood isn't refused, whatever case it's
-		// written in: RFC 9110 makes it a token, and a client capitalising it
-		// asked for something the proxy can do.
+		// The understood expectation isn't refused whatever case it's written
+		// in: RFC 9110 makes it a token.
 		//
 		// Only the final answer is pinned. Whether an interim 100 precedes it
-		// is the underlay's: net/http matches the token without case and sends
-		// one, fasthttp compares it byte for byte and doesn't. Both then serve
-		// the request, which is what a client of either depends on — and a client
-		// that waits for a continuation it never gets is a client whose
-		// own timeout ends the wait, not a request answered wrongly.
+		// is the underlay's — net/http matches without case and sends one,
+		// fasthttp compares byte for byte and doesn't — and both then serve the request.
+		// A client waiting for a continuation it never gets ends the
+		// wait on its own timeout, not on a request answered wrongly.
 		conn, err := net.DialTimeout("tcp", e.address, 3*time.Second)
 		if err != nil {
 			t.Fatal(err)
@@ -302,17 +296,14 @@ func TestPipelinedRequests(t *testing.T) {
 // TestRequestTrailerDoesNotChangeTheDecision covers a chunked request whose
 // trailer follows the last chunk.
 //
-// Whether that trailer reaches the API, and as what, is a difference between
-// the two commands that can't be closed on the fasthttp side: it parses every
-// trailer field into the ordinary header set before the handler runs, declared
-// or not, so afterwards nothing can tell one from a header sent in the head.
-// gqlhash-proxy keeps it a trailer, which Go delivers in Request.Trailer and
-// never in Request.Header.
+// Whether that trailer reaches the API, and as what, is a difference that can't
+// be closed on the fasthttp side: it parses every trailer field into the
+// ordinary header set before the handler runs, declared or not,
+// where gqlhash-proxy keeps it in Request.Trailer and never in Request.Header.
 //
-// What both keep, and what this pins, is that a trailer buys nothing:
-// the document is still read from the chunks, still hashed, and still decided on.
-// An implementation that let a trailer disturb the body it decides on would be
-// reading a document nobody hashed.
+// What both keep is that a trailer buys nothing: the document is still read
+// from the chunks, hashed, and decided on. Letting one disturb the body would
+// be reading a document nobody hashed.
 func TestRequestTrailerDoesNotChangeTheDecision(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := newEnv(t, tgt, []string{allowedDoc})
