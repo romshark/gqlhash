@@ -16,7 +16,7 @@ It's shipped as:
 
 Generating a gqlhash is [faster](#performance) than parsing a document into an AST and comparing the ASTs.
 
-On 14 cores of a 24-core Xeon `gqlhash-proxy` turns away **~631,000** unknown documents a second at a median of **155 µs**, and forwards **~213,000** allowed ones.
+On a 24-thread Xeon, sharing the machine with the load generator that drives it, `gqlhash-proxy` turns away **~928,000** unknown documents a second at a median of **140 µs**, and forwards **~211,000** allowed ones.
 
 `gqlhash-proxy` at `GOGC=800`, wrk at 200 connections for 20s, generator and proxy on the same Xeon w5-2455X — 12 physical cores, 24 hardware threads:
 
@@ -33,7 +33,7 @@ On 14 cores of a 24-core Xeon `gqlhash-proxy` turns away **~631,000** unknown do
 <details>
 <summary>Benchmarking Details</summary>
 The results above are a median of three runs.
-A rejection never opens an upstream connection, which is where the three-fold difference comes from.
+A rejection never opens an upstream connection, which is where the four-fold difference comes from.
 
 **These are numbers from a contended machine, and they understate the proxy.** The load generator and the sample API run on the same 24 hardware threads, so the proxy never had the box to itself: rejecting, it held 16.8 while wrk took 6.1 and the machine ran out at 96%; forwarding, the sample API alone cost 5.7. What a figure worth quoting needs is a second machine driving the load. `go run ./internal/cmd/loadtest` reproduces exactly the above, contention included, and prints what each of the three held so a run starved by its own generator is visible in its output.
 
@@ -406,7 +406,7 @@ fragment userFields on User { id name }
 { user { id name } }
 ```
 
-The reason is that hashing order-insensitively and inlining fragment is more work and that would reduce the effectiveness of the proxy firewall.
+Both would cost a pass over the document that hashing doesn't otherwise need — throughput spent on every request to buy something an allowlist never asks for, since a client sends the document it registered.
 
 ## Development
 
