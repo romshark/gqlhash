@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -112,6 +114,29 @@ type ProxyUpstream struct {
 	// HTTP2 allows h2 to an https upstream, which multiplexes onto one connection
 	// and makes the pool sizes matter little.
 	HTTP2 bool
+
+	// TLSCA holds the certificates that may sign an https upstream's,
+	// read from -upstream.tls.ca. Empty takes the host's trust store.
+	//
+	// Certificates and not a file name: reading it is a start failure,
+	// so an unreadable file doesn't surface as an upstream that can't be reached.
+	TLSCA *x509.CertPool
+}
+
+// TLSClientConfig is what an https upstream's certificate is checked against,
+// and nil where that's the host's trust store, which both underlays read as the default.
+// The certificate is verified either way: nothing here turns that off,
+// and the name is checked too, see TestUpstreamTLSHostname.
+//
+// RootCAs is the only field set, so the two configs differ in one thing and
+// everything else is what crypto/tls defaults to. No version floor of its own:
+// Go raises those over time, and one pinned here would hold the proxy at the
+// floor of the release it was written against.
+func TLSClientConfig(ca *x509.CertPool) *tls.Config {
+	if ca == nil {
+		return nil
+	}
+	return &tls.Config{RootCAs: ca} //nolint:gosec // the default floor, see above
 }
 
 // ProxyControl is the server that answers the metrics and the endpoints that
@@ -297,6 +322,12 @@ func ParseProxyFor(
 			"Allow HTTP/2 to an https upstream, which multiplexes the requests\n"+
 				"onto one connection instead of one connection each.\n"+
 				"An http upstream is HTTP/1.1 either way, h2c is never used.")
+		fTLSCA = cli.String("upstream.tls.ca", "",
+			"PEM file of the certificates that may sign an https upstream's,\n"+
+				"for an upstream behind a private CA. Empty takes the host's\n"+
+				"trust store. The certificate is always verified: there is no\n"+
+				"flag to skip it, which would let anything on the path stand in\n"+
+				"for the API and be handed every allowed document.")
 
 		fListen            = cli.String("server.listen", ":8080", "Address to listen on")
 		fReadHeaderTimeout = cli.Duration("server.read-header-timeout", 10*time.Second,
@@ -391,6 +422,30 @@ func ParseProxyFor(
 		return cfg, 2, false
 	}
 	cfg.Upstream.URL = upstream
+
+	// Read here rather than at the first forward: a CA file that isn't there or
+	// holds no certificate is a configuration error, and one that surfaced later
+	// would look like an upstream that can't be reached.
+	if *fTLSCA != "" {
+		if upstream.Scheme != "https" {
+			_, _ = fmt.Fprintf(stderr,
+				"-upstream.tls.ca is set, but -upstream.url %q is no https URL\n",
+				*fUpstream)
+			return cfg, 2, false
+		}
+		pem, err := os.ReadFile(*fTLSCA)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "-upstream.tls.ca: %v\n", err)
+			return cfg, 2, false
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			_, _ = fmt.Fprintf(stderr,
+				"-upstream.tls.ca %q holds no PEM certificate\n", *fTLSCA)
+			return cfg, 2, false
+		}
+		cfg.Upstream.TLSCA = pool
+	}
 
 	// The token has no flag: a process argument is readable by anyone on the
 	// host, a process environment isn't.

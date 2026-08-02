@@ -1,6 +1,8 @@
 module github.com/romshark/gqlhash/v2
 
-go 1.26.5
+go 1.25.0
+
+toolchain go1.26.5
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0
