@@ -122,8 +122,8 @@ func (w *writer) nameStr(s string, i int) int {
 	return i
 }
 
-// esc writes b as a backslash escape.
-// No string value can hold a byte that looks like a hash prefix.
+// esc writes b as the backslash escape [lutStringEscapeSeq] names it,
+// so no string value can hold a byte that looks like a hash prefix.
 func (w *writer) esc(b byte) {
 	if w.mute == 0 {
 		w.buf = append(w.buf, lutStringEscapeSeq[b][0], lutStringEscapeSeq[b][1])

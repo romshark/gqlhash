@@ -572,7 +572,9 @@ func TestParseStringValue(t *testing.T) {
 		f(t, "\r", `"\r"`)
 		// A backslash and the control bytes the hash prefixes are taken from are
 		// escaped again, so no string value can imitate a prefix.
-		f(t, `\\`, `"\\"`)
+		// Every one of them is written differently,
+		// see [TestParseStringEscapesAreDistinct].
+		f(t, `\|`, `"\\"`)
 		f(t, `\H`, `"\b"`, `"\u0008"`, `"\u{8}"`)
 		f(t, `\L`, `"\f"`, `"\u000C"`, `"\u{c}"`)
 		f(t, `\@`, `"\u0000"`, `"\u{0}"`)
@@ -595,8 +597,9 @@ func TestParseStringValue(t *testing.T) {
 
 	{ // BlockStringValue
 		// (https://spec.graphql.org/September2025/#BlockStringValue()).
-		// Escape sequences aren't interpreted, only `\"""` is.
-		f(t, `\\n`, `"""\n"""`)
+		// Escape sequences aren't interpreted, only `\"""` is. The backslash is
+		// still escaped on the way out, so it reads as `\|` and the 'n' stands alone.
+		f(t, `\|n`, `"""\n"""`)
 		f(t, `"""`, `"""\""""""`)
 		// A pair of quotes is ordinary content, and so is a quote that opens no
 		// delimiter, even as the first byte of the block.
@@ -623,6 +626,65 @@ func TestParseStringValue(t *testing.T) {
 		// GraphQL WhiteSpace is only space and tab, so U+00A0 is content.
 		f(t, "\u00a0", "\"\"\"\u00a0\"\"\"")
 	}
+}
+
+// TestParseStringEscapesAreDistinct asserts that writing a string value into
+// the canonical form is injective: no two values that differ are written alike.
+//
+// Two values sharing a canonical form is a hash collision between documents
+// carrying different arguments, which for an allowlist means one document
+// standing in for another.
+func TestParseStringEscapesAreDistinct(t *testing.T) {
+	f := func(t *testing.T, spell func(b int) (input string, ok bool)) {
+		t.Helper()
+		seen := make(map[string]int, 0x80)
+		for b := range 0x80 {
+			input, ok := spell(b)
+			if !ok {
+				continue
+			}
+			written := stringValueOf(t, input)
+			if prev, ok := seen[written]; ok {
+				t.Errorf("U+%04X and U+%04X are both written as %q; input: %q",
+					prev, b, written, input)
+				continue
+			}
+			seen[written] = b
+		}
+	}
+
+	t.Run("single line", func(t *testing.T) {
+		// Every byte is spelled as a fixed-width escape, so the source says
+		// nothing about how the value comes out.
+		f(t, func(b int) (string, bool) {
+			return fmt.Sprintf(`"\u%04X"`, b), true
+		})
+	})
+
+	t.Run("block string", func(t *testing.T) {
+		// A block string takes a control byte as it is, and the same table
+		// escapes it on the way out. Wrapped in letters so no byte lands next to
+		// a delimiter or at the edge of a line.
+		f(t, func(b int) (string, bool) {
+			if b == '\t' || b == '\n' || b == '\r' {
+				// WhiteSpace and LineTerminators carry the block string
+				// semantics of their own and are meant to collide:
+				// a line is indented, and CR, LF and CRLF all join as one line feed.
+				return "", false
+			}
+			return fmt.Sprintf(`"""a%cb"""`, b), true
+		})
+	})
+
+	// The backslash reaches the escape table by its own spelling rather than as
+	// a code point, which neither sweep above covers. U+001C is the byte whose
+	// name it comes closest to taking, see [parser.lutStringEscapeSeq].
+	t.Run("backslash", func(t *testing.T) {
+		a, b := stringValueOf(t, `"\u001C"`), stringValueOf(t, `"\\"`)
+		if a == b {
+			t.Errorf("U+001C and the backslash are both written as %q", a)
+		}
+	})
 }
 
 // TestParseValueErrors covers the lexical rules of the individual values. Each
@@ -1437,6 +1499,12 @@ func TestIgnoreDocExamples(t *testing.T) {
 	differ(t, parser.IgnoreVariables, `{ f(x: 1) }`, `{ f }`)
 }
 
+// errorVariable holds e the way a caller's error variable does. The conversion
+// sits behind a call so the comparison it feeds stays a comparison:
+// written out, nilness folds it to a constant and reports the
+// impossible condition that is the whole point of the assertion.
+func errorVariable(e parser.Error) error { return e }
+
 // TestErrorValueSemantics pins what [parser.Error] is and why it satisfies
 // error, since the two pull against each other: the zero value means no error,
 // and an interface holding a zero value isn't nil.
@@ -1444,10 +1512,9 @@ func TestIgnoreDocExamples(t *testing.T) {
 // Whoever reads the trap below and reaches for the fix — deleting Error — takes
 // errors.Is and the offset in %v with it, which the rest of this covers.
 func TestErrorValueSemantics(t *testing.T) {
-	// The trap the doc names. This is what an error variable does with it, not
-	// what anyone should write.
-	//nolint:staticcheck // SA4023 proving this never nil is the point of the trap
-	if asInterface := error(parser.Error{}); asInterface == nil {
+	// The trap the doc names. This is what an error variable does with it,
+	// not what anyone should write.
+	if asInterface := errorVariable(parser.Error{}); asInterface == nil {
 		t.Error("expected an interface holding a zero value not to be nil")
 	}
 	// Which is why the value answers for itself.

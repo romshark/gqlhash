@@ -694,12 +694,29 @@ var lutStringEscape = func() (t [256]bool) {
 	return t
 }()
 
-// lutStringEscapeSeq holds the escape sequence of every byte.
-// Adding 0x40 turns a control byte into a printable character.
+// lutStringEscapeSeq holds the escape sequence of every byte [lutStringEscape]
+// marks: a backslash (0x5C) followed by one byte naming what was escaped.
+//
+//	control byte b  ->  0x5C, b+0x40  naming it in 0x40 ('@') to 0x5F ('_')
+//	backslash       ->  0x5C, '|'     naming it 0x7C
+//
+// No two bytes may share a name. Two string values that differ would then be
+// written the same way, and the documents holding them would hash alike.
+// The backslash and the control byte 0x1C are the pair this comes closest on,
+// because 0x5C is both a backslash and 0x1C+0x40:
+//
+//	in the document   value   written as
+//	"\u001C"          0x1C    0x5C 0x5C   named 0x1C+0x40 == 0x5C
+//	"\\"              0x5C    0x5C 0x7C   named '|'
+//
+// Naming the backslash 0x5C, a second backslash, writes it 0x5C 0x5C, which is
+// what 0x1C is written as. The two documents holding these values would hash alike,
+// though one carries U+001C (INFORMATION SEPARATOR FOUR, a C0 control
+// character) and the other a backslash.
 var lutStringEscapeSeq = func() (t [256][2]byte) {
 	for i := range t {
 		t[i] = [2]byte{'\\', byte(i) + 0x40}
 	}
-	t['\\'] = [2]byte{'\\', '\\'}
+	t['\\'] = [2]byte{'\\', '|'}
 	return t
 }()
