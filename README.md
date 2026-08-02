@@ -16,6 +16,9 @@ It's shipped as:
 
 Generating a gqlhash is [faster](#performance) than parsing a document into an AST and comparing the ASTs.
 
+> [!IMPORTANT]
+> Coming from v1? Some documents hash differently, so stored hashes need rebuilding. See [MIGRATION.md](MIGRATION.md).
+
 On a 24-thread Xeon, sharing the machine with the load generator that drives it, `gqlhash-proxy` turns away **~928,000** unknown documents a second at a median of **140 µs**, and forwards **~211,000** allowed ones.
 
 `gqlhash-proxy` at `GOGC=800`, wrk at 200 connections for 20s, generator and proxy on the same Xeon w5-2455X — 12 physical cores, 24 hardware threads:
