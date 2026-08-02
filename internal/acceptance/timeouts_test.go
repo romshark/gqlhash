@@ -77,10 +77,9 @@ func TestReadTimeoutBoundsTheBody(t *testing.T) {
 }
 
 // TestIdleTimeoutClosesAnIdleConnection covers a keep-alive connection nobody is using.
-// A proxy that never closes one and a proxy that closes every connection at once
-// both passed before this: the flag had no test anywhere,
-// and it's operational contract against the idle timeout of whatever load
-// balancer sits in front.
+// It pins both edges: a proxy that never closes one and a proxy that closes every
+// connection at once are each wrong. The timeout is operational contract against
+// the idle timeout of whatever load balancer sits in front.
 func TestIdleTimeoutClosesAnIdleConnection(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := newEnv(t, tgt, []string{allowedDoc}, "-server.idle-timeout", "500ms")

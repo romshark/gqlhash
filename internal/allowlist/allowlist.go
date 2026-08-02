@@ -321,7 +321,7 @@ func diff(previous *list, docs map[string]struct{}) (added, removed int) {
 }
 
 // documentError points at the syntax error of a document in the allowlist.
-func documentError(name string, src []byte, e gqlhash.Error) error {
-	line, column := gqlhash.Position(src, e.Offset)
+func documentError(name string, src []byte, e gqlhash.Result) error {
+	line, column := gqlhash.Position(src, e.ErrOffset)
 	return fmt.Errorf("%s:%d:%d: %w", name, line, column, e.Err)
 }

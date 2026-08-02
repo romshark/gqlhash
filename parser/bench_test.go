@@ -14,6 +14,11 @@ var benchDocuments = []string{
 	"nesting-attack.graphql", "nesting-attack.min.graphql",
 }
 
+// benchOptions admit every document of [benchDocuments]. The nesting attack
+// reaches 129, one past [parser.DefaultDepthLimit],
+// so the default rejects it and the benchmark measures nothing.
+var benchOptions = parser.Options{DepthLimit: 10_000}
+
 func readTestdata(tb testing.TB, name string) string {
 	tb.Helper()
 	b, err := os.ReadFile("../testdata/" + name)
@@ -23,13 +28,13 @@ func readTestdata(tb testing.TB, name string) string {
 	return string(b)
 }
 
-// BenchmarkParse measures the parser without a hash function: [io.Discard] takes
-// the writes.
+// BenchmarkParse measures the parser without a hash function:
+// [io.Discard] takes the writes.
 func BenchmarkParse(b *testing.B) {
 	for _, name := range benchDocuments {
 		src := readTestdata(b, name)
 		b.Run(name, func(b *testing.B) {
-			p, h, o := parser.NewParser[string](0), io.Discard, parser.Options{}
+			p, h, o := parser.NewParser[string](0), io.Discard, benchOptions
 			b.SetBytes(int64(len(src)))
 			b.ReportAllocs()
 			for b.Loop() {
@@ -47,7 +52,7 @@ func BenchmarkParseBytes(b *testing.B) {
 	for _, name := range benchDocuments {
 		src := []byte(readTestdata(b, name))
 		b.Run(name, func(b *testing.B) {
-			p, h, o := parser.NewParser[[]byte](0), io.Discard, parser.Options{}
+			p, h, o := parser.NewParser[[]byte](0), io.Discard, benchOptions
 			b.SetBytes(int64(len(src)))
 			b.ReportAllocs()
 			for b.Loop() {
@@ -65,7 +70,7 @@ func BenchmarkParsePooled(b *testing.B) {
 	for _, name := range benchDocuments {
 		src := readTestdata(b, name)
 		b.Run(name, func(b *testing.B) {
-			h, o := io.Discard, parser.Options{}
+			h, o := io.Discard, benchOptions
 			b.SetBytes(int64(len(src)))
 			b.ReportAllocs()
 			for b.Loop() {

@@ -247,6 +247,14 @@ Hashing `testdata/big.graphql` (2854 bytes), sorted fastest first.
 Measured with `go test . -bench BenchmarkHashFunctions` on an Apple M4 Pro, Go 1.26.5, `GOMAXPROCS=1`, over 8 runs.
 </details>
 
+### Depth Limit
+
+`-depth-limit` is how deeply selection sets, list values and input object values may nest before a document is refused. The default is 128, past what a document written for an API reaches and far below what one costs to attack with. Below 1 takes the default.
+
+```sh
+echo '{ a { b { c } } }' | gqlhash -depth-limit 2   # too deep
+```
+
 ### Ignoring Input Values
 
 `-ignore` selects what to leave out of the hash: `nothing` (the default), `inputs` or `variables`. Each one leaves out what the one before it leaves out, and more.

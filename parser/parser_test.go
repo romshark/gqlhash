@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -53,7 +54,7 @@ func (r *recorder) String() string { return string(r.stream) }
 var _ io.Writer = new(recorder)
 
 // parse reads input and returns its canonical form and the error.
-func parse(o parser.Options, input string) (string, parser.Error) {
+func parse(o parser.Options, input string) (string, parser.Result) {
 	r := new(recorder)
 	err := parser.Parse(r, o, input)
 	return r.String(), err
@@ -894,7 +895,7 @@ func TestParseTypeFormatting(t *testing.T) {
 	}
 }
 
-// TestErrorPosition pins the character the offset of a [parser.Error] points at,
+// TestErrorPosition pins the character the offset of a [parser.Result] points at,
 // as [parser.Position] reports it.
 func TestErrorPosition(t *testing.T) {
 	f := func(t *testing.T, expectLine, expectColumn int, input string) {
@@ -903,16 +904,16 @@ func TestErrorPosition(t *testing.T) {
 		if e.Err == nil {
 			t.Fatalf("expected an error; received none")
 		}
-		if e.Offset < 0 || e.Offset > len(input) {
-			t.Errorf("offset %d out of range for %q", e.Offset, input)
+		if e.ErrOffset < 0 || e.ErrOffset > len(input) {
+			t.Errorf("offset %d out of range for %q", e.ErrOffset, input)
 		}
-		line, column := parser.Position(input, e.Offset)
+		line, column := parser.Position(input, e.ErrOffset)
 		if line != expectLine || column != expectColumn {
 			t.Errorf("expected line %d, column %d; received line %d, column %d;"+
 				" input: %q", expectLine, expectColumn, line, column, input)
 		}
 		// Both input types report the same position.
-		if l, c := parser.Position([]byte(input), e.Offset); l != line || c != column {
+		if l, c := parser.Position([]byte(input), e.ErrOffset); l != line || c != column {
 			t.Errorf("[]byte: expected line %d, column %d; received line %d,"+
 				" column %d", line, column, l, c)
 		}
@@ -1203,7 +1204,7 @@ func TestParseInputTypes(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	check := func(name, got string, e parser.Error) {
+	check := func(name, got string, e parser.Result) {
 		t.Helper()
 		if e.Err != nil {
 			t.Errorf("%s: unexpected error: %v", name, e)
@@ -1230,7 +1231,7 @@ func TestParseInputTypes(t *testing.T) {
 	}
 
 	// An empty input is no document, whatever its type.
-	for _, e := range []parser.Error{
+	for _, e := range []parser.Result{
 		parser.Parse(new(recorder), parser.Options{}, ""),
 		parser.Parse(new(recorder), parser.Options{}, []byte(nil)),
 		parser.Parse(new(recorder), parser.Options{}, []byte{}),
@@ -1349,18 +1350,18 @@ func TestParseWriteError(t *testing.T) {
 		if e.Err != wantErr {
 			t.Errorf("expected %v; received: %v; input: %.32q", wantErr, e, input)
 		}
-		if !errors.Is(e, wantErr) {
+		if !errors.Is(e.Err, wantErr) {
 			t.Error("expected errors.Is to match the write error")
 		}
 		// A write error has no position, so the message stays the message of the writer.
-		if e.Offset != -1 {
+		if e.ErrOffset != -1 {
 			t.Errorf("expected offset -1; received %+v", e)
 		}
-		if line, column := parser.Position(input, e.Offset); line != 0 || column != 0 {
+		if line, column := parser.Position(input, e.ErrOffset); line != 0 || column != 0 {
 			t.Errorf("expected no position; received line %d, column %d", line, column)
 		}
-		if e.Error() != wantErr.Error() {
-			t.Errorf("expected message %q; received %q", wantErr, e.Error())
+		if e.String() != wantErr.Error() {
+			t.Errorf("expected message %q; received %q", wantErr, e.String())
 		}
 	}
 
@@ -1418,16 +1419,16 @@ func TestParseDepthLimit(t *testing.T) {
 
 	// The error carries the offset it gave up at, like every other one.
 	e := parser.Parse(io.Discard, parser.Options{DepthLimit: 2}, nest(3))
-	if e.Err != parser.ErrTooDeep || e.Offset < 1 {
+	if e.Err != parser.ErrTooDeep || e.ErrOffset < 1 {
 		t.Errorf("expected an offset with the error; received %v", e)
 	}
-	if line, column := parser.Position(nest(3), e.Offset); line != 1 || column < 1 {
+	if line, column := parser.Position(nest(3), e.ErrOffset); line != 1 || column < 1 {
 		t.Errorf("expected a position; received %d:%d", line, column)
 	}
 }
 
 // TestPosition covers the offsets [parser.Position] takes that no
-// [parser.Error] carries.
+// [parser.Result] carries.
 func TestPosition(t *testing.T) {
 	const src = "{\n\tf\n}"
 
@@ -1477,7 +1478,6 @@ func TestIgnoreDocExamples(t *testing.T) {
 		}
 	}
 
-	// [parser.IgnoreInputs].
 	equal(t, parser.IgnoreInputs,
 		`{ user(id: 1, role: ADMIN) { name } }`,
 		`{ user(id: 42, role: GUEST) { name } }`,
@@ -1488,7 +1488,6 @@ func TestIgnoreDocExamples(t *testing.T) {
 	// The name of an argument is kept, so dropping the argument still differs.
 	differ(t, parser.IgnoreInputs, `{ f(x: 1) }`, `{ f }`)
 
-	// [parser.IgnoreVariables].
 	equal(t, parser.IgnoreVariables,
 		`query Q($x: Int = 1) { f(a: $x) }`,
 		`query Q($y: String) { f(a: $y) }`,
@@ -1499,47 +1498,51 @@ func TestIgnoreDocExamples(t *testing.T) {
 	differ(t, parser.IgnoreVariables, `{ f(x: 1) }`, `{ f }`)
 }
 
-// errorVariable holds e the way a caller's error variable does. The conversion
-// sits behind a call so the comparison it feeds stays a comparison:
-// written out, nilness folds it to a constant and reports the
-// impossible condition that is the whole point of the assertion.
-func errorVariable(e parser.Error) error { return e }
-
-// TestErrorValueSemantics pins what [parser.Error] is and why it satisfies
-// error, since the two pull against each other: the zero value means no error,
-// and an interface holding a zero value isn't nil.
+// TestResultSemantics pins what [parser.Result] is: a value saying whether
+// parsing failed and where, and deliberately not an error.
 //
-// Whoever reads the trap below and reaches for the fix — deleting Error — takes
-// errors.Is and the offset in %v with it, which the rest of this covers.
-func TestErrorValueSemantics(t *testing.T) {
-	// The trap the doc names. This is what an error variable does with it,
-	// not what anyone should write.
-	if asInterface := errorVariable(parser.Error{}); asInterface == nil {
-		t.Error("expected an interface holding a zero value not to be nil")
+// An interface holding a zero value isn't nil, so a Result that satisfied error
+// would read as a failure for every document, the ones that parsed included.
+// Not satisfying it makes that unspellable, and Err carries what an error is
+// wanted for.
+func TestResultSemantics(t *testing.T) {
+	errorType := reflect.TypeOf((*error)(nil)).Elem()
+	if reflect.TypeOf(parser.Result{}).Implements(errorType) {
+		t.Error("expected Result not to satisfy error")
 	}
-	// Which is why the value answers for itself.
-	if (parser.Error{}).IsErr() {
+	if reflect.TypeOf(&parser.Result{}).Implements(errorType) {
+		t.Error("expected *Result not to satisfy error either")
+	}
+
+	// The zero value holds nothing and says so.
+	zero := parser.Result{}
+	if zero.IsErr() {
 		t.Error("expected the zero value to hold no error")
 	}
-	if got := (parser.Error{}).Error(); got != "no error" {
+	if got := zero.String(); got != "no error" {
 		t.Errorf("expected the zero value to say so; received %q", got)
 	}
 
-	// Why the method stays: errors.Is reaches the sentinel through Unwrap.
-	e := parser.Error{Err: parser.ErrUnexpectedToken, Offset: 7}
-	if !errors.Is(e, parser.ErrUnexpectedToken) {
-		t.Error("expected errors.Is to reach the sentinel")
+	// A failure carries the sentinel in Err, which is what errors.Is takes,
+	// and the offset in the message, which Err alone doesn't.
+	e := parser.Result{Err: parser.ErrUnexpectedToken, ErrOffset: 7}
+	if !errors.Is(e.Err, parser.ErrUnexpectedToken) {
+		t.Error("expected Err to hold the sentinel")
 	}
-	if errors.Is(e, parser.ErrUnexpectedEOF) {
-		t.Error("expected errors.Is not to match another sentinel")
+	if errors.Is(e.Err, parser.ErrUnexpectedEOF) {
+		t.Error("expected Err not to match another sentinel")
 	}
-	// And because %v carries the offset, which Err alone doesn't.
 	if got := fmt.Sprintf("%v", e); !strings.Contains(got, "offset 7") {
 		t.Errorf("expected the offset in the message; received %q", got)
 	}
-	// An error with no position says only what happened.
-	if got := (parser.Error{Err: parser.ErrUnexpectedEOF, Offset: -1}).Error(); got !=
-		parser.ErrUnexpectedEOF.Error() {
+	// Wrapping keeps the sentinel reachable, which is how a failure travels on.
+	if !errors.Is(fmt.Errorf("hashing: %w", e.Err), parser.ErrUnexpectedToken) {
+		t.Error("expected errors.Is to reach the sentinel through a wrap")
+	}
+
+	// A failure with no position says only what happened.
+	noPos := parser.Result{Err: parser.ErrUnexpectedEOF, ErrOffset: -1}
+	if got := noPos.String(); got != parser.ErrUnexpectedEOF.Error() {
 		t.Errorf("expected no offset where there is none; received %q", got)
 	}
 }

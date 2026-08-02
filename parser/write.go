@@ -15,9 +15,8 @@ import (
 // Buffered rather than written token by token because a hash consumes
 // fixed-size blocks — 64 bytes for SHA-1 — so small writes keep it in its
 // partial-block path, copying every fragment first. One large write lets its
-// block loop run over buf directly: token-by-token measures 38% slower for
-// testdata/big.graphql with SHA-1 (2355 ns against 3256 ns),
-// and no different with [io.Discard], so the Write calls themselves are not the cost.
+// block loop run over buf directly: token by token measured over twice as slow
+// for testdata/big.graphql with SHA-1.
 type writer struct {
 	dst io.Writer
 	buf []byte

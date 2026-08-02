@@ -25,9 +25,9 @@ var (
 	// ErrTooDeep is a document nesting deeper than [Options.DepthLimit] allows.
 	ErrTooDeep = errors.New("too deep")
 
-	// ErrInvalidEscape is a broken escape sequence in a string value: an
-	// unknown escape character, a bad hexadecimal digit, or a Unicode escape
-	// that is no scalar value.
+	// ErrInvalidEscape is a broken escape sequence in a string value:
+	// an unknown escape character, a bad hexadecimal digit,
+	// or a Unicode escape that is no scalar value.
 	// Reference:
 	//
 	//   - https://spec.graphql.org/September2025/#EscapedCharacter
@@ -36,8 +36,8 @@ var (
 		ErrUnexpectedToken)
 
 	// ErrMalformedNumber is an IntValue or FloatValue that breaks a lexical
-	// rule: a leading zero, a '-' or a fraction or exponent without digits, or
-	// a digit, '.' or NameStart right after the number.
+	// rule: a leading zero, a '-' or a fraction or exponent without digits,
+	// or a digit, '.' or NameStart right after the number.
 	// Reference:
 	//
 	//   - https://spec.graphql.org/September2025/#IntValue
@@ -60,63 +60,53 @@ var (
 		ErrUnexpectedToken)
 )
 
-// Error says where in the document parsing stopped. Its zero value means no
-// error, so callers check [Error.Err] instead of comparing to nil.
+// Result says where in the document parsing stopped. Its zero value means no
+// error, so callers check [Result.Err], nil when nothing failed.
 //
-// A value and no error: boxing one allocates on every rejected document.
-//
-// WARNING: never hold an Error in an error interface variable. It satisfies
-// error so [errors.Is] reaches the sentinel through [Error.Unwrap] and %v prints
-// the offset, but an interface holding a zero value isn't nil:
-//
-//	var err error = someError   // never nil, whatever it holds
-//
-// reads as a failure for every document, the ones that parsed included.
-// Where an error is wanted, pass [Error.Err], nil exactly when nothing failed.
-type Error struct {
+// [Result.Err] is an error like any other:
+// pass it to [errors.Is], or wrap it with %w where a failure travels on.
+type Result struct {
 	// Err is nil when there's no error. Otherwise it's [ErrUnexpectedEOF],
 	// [ErrUnexpectedToken], one of the errors wrapping [ErrUnexpectedToken],
 	// [ErrTooDeep], or the error of the [io.Writer].
 	Err error
 
-	// Offset is the byte index where parsing stopped, and -1 where there is no position,
-	// which is the error of an [io.Writer]. Offset 0 is the first byte of the document,
-	// so it can't stand for "no position".
+	// ErrOffset is the byte index where parsing stopped,
+	// and -1 where there is no position, which is the error of an [io.Writer].
+	// Offset 0 is the first byte of the document, so it can't stand for "no position".
 	//
 	// [Position] turns it into a line and a column.
-	Offset int
+	ErrOffset int
 }
 
-// IsErr returns true if e holds an error.
-func (e Error) IsErr() bool { return e.Err != nil }
+// IsErr returns true if the result is an error.
+func (e Result) IsErr() bool { return e.Err != nil }
 
-// Error reads the value. The zero one says so rather than pretending to be a failure.
-// See the requirement on [Error].
-func (e Error) Error() string {
+// String reads the value, so %v carries the offset, which [Result.Err] alone doesn't.
+// The zero value names itself: an empty string would leave a hole where a log
+// line expects a value, and read the same as a failure with no message.
+func (e Result) String() string {
 	switch {
 	case e.Err == nil:
 		return "no error"
-	case e.Offset < 0:
+	case e.ErrOffset < 0:
 		return e.Err.Error()
 	}
-	return fmt.Sprintf("%v (offset %d)", e.Err, e.Offset)
+	return fmt.Sprintf("%v (offset %d)", e.Err, e.ErrOffset)
 }
 
-func (e Error) Unwrap() error { return e.Err }
-
-// newError points err at offset, the position where the state machine stopped.
-func newError(src string, offset int, err error) Error {
-	return Error{Err: err, Offset: min(max(offset, 0), len(src))}
+// errResult is the Result for err at offset, where the state machine stopped.
+func errResult(src string, offset int, err error) Result {
+	return Result{Err: err, ErrOffset: min(max(offset, 0), len(src))}
 }
 
 // Position returns the 1-based line and column of offset in s.
 // A column counts characters, not bytes: a malformed byte counts as one,
 // as it does for the parser. A negative offset,
-// which is what an [Error] without a position carries, returns 0, 0.
+// which is what a [Result] without a position carries, returns 0, 0.
 //
-// Not a method of [Error]: finding a line and a column scans the document up to offset,
-// which belongs where the message is formatted rather than on the path
-// that rejects a document.
+// It scans s up to offset, so call it where a message is formatted,
+// not on the path that rejects a document.
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#LineTerminator
@@ -239,9 +229,6 @@ const (
 	// Past what a document written for an API reaches — a Relay-style query
 	// costs two levels per page, a filter of nested input objects a few more —
 	// and far below what a document costs to attack with.
-	//
-	// Also the stack a fresh parser holds: one byte per open ListValue or
-	// InputObjectValue, so taking this depth without growing costs 128 bytes.
 	DefaultDepthLimit = 128
 
 	// maxRetainedBufferSize is the largest buffer a parser keeps between calls,
@@ -249,8 +236,8 @@ const (
 	maxRetainedBufferSize = 1 << 20
 )
 
-// state holds the buffers a [Parser] reuses across calls. Not generic: the
-// state machine works on a string, whatever the input type.
+// state holds the buffers a [Parser] reuses across calls.
+// Not generic: the state machine works on a string, whatever the input type.
 type state struct {
 	// buf holds the canonical token stream until it's written out.
 	buf []byte
@@ -277,12 +264,10 @@ var pool = sync.Pool{New: func() any {
 // Parse reads a Document, which is one or many ExecutableDefinitions,
 // and writes its canonical form to w, applying options.
 //
-// The canonical form leaves out comments, spaces, tabs, line-breaks,
-// carriage-returns and descriptions, so two documents differing only in
-// formatting produce the same bytes. w receives it in a single Write,
+// w receives the canonical form in a single Write,
 // and nothing at all for a document that turns out to be invalid.
 //
-// The returned [Error] is the zero value if s is a valid document, and carries
+// The returned [Result] is the zero value if s is a valid document, and carries
 // the error of w if the write failed. Parse never resets w,
 // so several documents can be written into one sum.
 //
@@ -295,7 +280,7 @@ var pool = sync.Pool{New: func() any {
 //
 //   - https://spec.graphql.org/September2025/#Document
 //   - https://spec.graphql.org/September2025/#ExecutableDefinition
-func Parse[S string | []byte](w io.Writer, options Options, s S) Error {
+func Parse[S string | []byte](w io.Writer, options Options, s S) Result {
 	p := pool.Get().(*state)
 	err := parse(p, w, options, asString(s))
 	pool.Put(p)
@@ -311,14 +296,12 @@ type Parser[S string | []byte] struct{ s *state }
 // NewParser creates a new reusable parser instance.
 //
 // bufferSize is the buffer's starting size; below 1 takes [DefaultBufferSize].
-// The stack a value nests on takes [DefaultDepthLimit] frames,
-// which no document under that limit exceeds.
 func NewParser[S string | []byte](bufferSize int) *Parser[S] {
 	return &Parser[S]{s: newState(bufferSize)}
 }
 
 // Parse is identical to the [Parse] function.
-func (p *Parser[S]) Parse(w io.Writer, options Options, s S) Error {
+func (p *Parser[S]) Parse(w io.Writer, options Options, s S) Result {
 	return parse(p.s, w, options, asString(s))
 }
 

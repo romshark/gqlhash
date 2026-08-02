@@ -37,43 +37,43 @@ import (
 var errDiffer = errors.New("documents differ")
 
 // compare is [gqlhash.Compare] with equal=false folded into [errDiffer].
-func compare[S string | []byte](h gqlhash.Hash, o gqlhash.Options, a, b S) gqlhash.Error {
+func compare[S string | []byte](h gqlhash.Hash, o gqlhash.Options, a, b S) gqlhash.Result {
 	equal, err := gqlhash.Compare(h, o, a, b)
 	if err.IsErr() {
 		return err
 	}
 	if !equal {
-		return gqlhash.Error{Err: errDiffer, Offset: -1}
+		return gqlhash.Result{Err: errDiffer, ErrOffset: -1}
 	}
-	return gqlhash.Error{}
+	return gqlhash.Result{}
 }
 
 // compareWithBuffer is [compare] for [gqlhash.CompareWithBuffer].
 func compareWithBuffer[S string | []byte](
 	buffer []byte, h gqlhash.Hash, o gqlhash.Options, a, b S,
-) gqlhash.Error {
+) gqlhash.Result {
 	equal, err := gqlhash.CompareWithBuffer(buffer, h, o, a, b)
 	if err.IsErr() {
 		return err
 	}
 	if !equal {
-		return gqlhash.Error{Err: errDiffer, Offset: -1}
+		return gqlhash.Result{Err: errDiffer, ErrOffset: -1}
 	}
-	return gqlhash.Error{}
+	return gqlhash.Result{}
 }
 
 // hasherCompare is [compare] for [gqlhash.Hasher.Compare].
 func hasherCompare[S string | []byte](
 	h *gqlhash.Hasher[S], a, b S,
-) gqlhash.Error {
+) gqlhash.Result {
 	equal, err := h.Compare(a, b)
 	if err.IsErr() {
 		return err
 	}
 	if !equal {
-		return gqlhash.Error{Err: errDiffer, Offset: -1}
+		return gqlhash.Result{Err: errDiffer, ErrOffset: -1}
 	}
-	return gqlhash.Error{}
+	return gqlhash.Result{}
 }
 
 // bom is the UTF-8 encoding of U+FEFF, which is Ignored
@@ -165,7 +165,7 @@ var fuzzSeeds = []string{
 func TestCompare(t *testing.T) {
 	f := func(t *testing.T, expect error, a, b string) {
 		t.Helper()
-		check := func(name string, received gqlhash.Error) {
+		check := func(name string, received gqlhash.Result) {
 			t.Helper()
 			if expect != received.Err {
 				t.Errorf("%s: expected %v; received: %v", name, expect, received)
@@ -199,8 +199,8 @@ func TestCompare(t *testing.T) {
 		sumBytes, errBytes := gqlhash.AppendHash(
 			nil, sha1.New(), gqlhash.Options{}, []byte(a),
 		)
-		// Compared by message: a [parser.SyntaxError] is a pointer,
-		// so two equal errors are still two values.
+		// Compared by message rather than ==, which panics where Err holds a
+		// non-comparable error.
 		if fmt.Sprint(errString) != fmt.Sprint(errBytes) ||
 			!bytes.Equal(sumString, sumBytes) {
 			t.Errorf(
@@ -341,8 +341,8 @@ func TestCompareErr(t *testing.T) {
 	if !err.IsErr() {
 		t.Fatal("expected an error")
 	}
-	expectLine, expectColumn := parser.Position(src, err.Offset)
-	if line, column := gqlhash.Position(src, err.Offset); line != expectLine ||
+	expectLine, expectColumn := parser.Position(src, err.ErrOffset)
+	if line, column := gqlhash.Position(src, err.ErrOffset); line != expectLine ||
 		column != expectColumn {
 		t.Errorf("expected line %d, column %d; received line %d, column %d",
 			expectLine, expectColumn, line, column)
@@ -395,7 +395,7 @@ func TestHasher(t *testing.T) {
 			for _, doc := range fuzzSeeds {
 				want, errWant := gqlhash.AppendHash(nil, sha1.New(), options, doc)
 				got, errGot := hasher.Append(nil, doc)
-				if errWant.Err != errGot.Err || errWant.Offset != errGot.Offset {
+				if errWant.Err != errGot.Err || errWant.ErrOffset != errGot.ErrOffset {
 					t.Fatalf("pass %d %q: expected error %v; received %v",
 						pass, doc, errWant, errGot)
 				}
@@ -446,7 +446,7 @@ func TestHasherAllocations(t *testing.T) {
 	}
 
 	if n := testing.AllocsPerRun(100, func() {
-		var e gqlhash.Error
+		var e gqlhash.Result
 		if sum, e = hasher.Append(sum[:0], doc); e.IsErr() {
 			t.Fatal(e)
 		}
@@ -732,7 +732,7 @@ func BenchmarkReferenceSHA1(b *testing.B) {
 						o := gqlhash.Options{Ignore: m.ignore}
 						for range b.N {
 							hashBuffer = hashBuffer[:0]
-							var err gqlhash.Error
+							var err gqlhash.Result
 							hashBuffer, err = gqlhash.AppendHash(
 								hashBuffer, h, o, inputBytes,
 							)
@@ -802,22 +802,22 @@ func FuzzHashing(f *testing.F) {
 			nil, h, gqlhash.Options{Ignore: gqlhash.IgnoreInputs}, in,
 		)
 
-		var first error
+		var first parser.Result
 		for i, o := range opts {
 			err := parser.Parse(h, o, in)
 			if i == 0 {
 				first = err
 			} else if fmt.Sprint(err) != fmt.Sprint(first) {
-				// Compared by message: a [parser.SyntaxError] is a pointer,
-				// so two equal errors are still two values.
+				// Compared by message rather than ==, which panics where Err holds
+				// a non-comparable error.
 				t.Fatalf("options %+v returned %v; want %v", o, err, first)
 			}
 		}
 
 		// A valid query must never differ from itself, for any options.
 		// This exercises hashing determinism and buffer reuse and needs a real hash
-		// (NoopHash has a constant sum). Skip invalid inputs (first != nil).
-		if first == nil {
+		// (NoopHash has a constant sum). Skip invalid inputs (first holds an error).
+		if !first.IsErr() {
 			sh := sha1.New()
 			for _, o := range opts {
 				if err := compare(sh, o, in, in); err.Err != nil {
@@ -882,7 +882,7 @@ func BenchmarkHashFunctions(b *testing.B) {
 			for b.Loop() {
 				// errHash is no error:
 				// assigning it to one would make it non-nil even when there's no error.
-				var errHash gqlhash.Error
+				var errHash gqlhash.Result
 				buf, errHash = gqlhash.AppendHash(
 					buf[:0], h, gqlhash.Options{}, query,
 				)

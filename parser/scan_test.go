@@ -131,42 +131,22 @@ func TestParseHugeDocument(t *testing.T) {
 	}
 }
 
-// TestError covers the [parser.Error] methods.
-func TestError(t *testing.T) {
-	var zero parser.Error
-	if s := zero.Error(); s != "no error" {
-		t.Errorf("expected %q; received %q", "no error", s)
-	}
-	if err := zero.Unwrap(); err != nil {
-		t.Errorf("expected nil; received %v", err)
-	}
-
-	if zero.IsErr() {
-		t.Error("expected the zero value to hold no error")
-	}
-
-	// An error without a position, like the hash mismatch of the root package.
-	noPos := parser.Error{Err: parser.ErrUnexpectedToken, Offset: -1}
-	if s := noPos.Error(); s != parser.ErrUnexpectedToken.Error() {
-		t.Errorf("expected %q; received %q", parser.ErrUnexpectedToken, s)
-	}
-
+// TestResult covers a [parser.Result] as parsing hands it back.
+// [TestResultSemantics] covers the type itself.
+func TestResult(t *testing.T) {
 	_, err := parse(parser.Options{}, "{\n\t?}")
 	if !err.IsErr() {
 		t.Error("expected an error")
 	}
-	if s := err.Error(); s != "unexpected token (offset 3)" {
+	if s := err.String(); s != "unexpected token (offset 3)" {
 		t.Errorf("unexpected message: %q", s)
 	}
-	if line, column := parser.Position("{\n\t?}", err.Offset); line != 2 || column != 2 {
+	if line, column := parser.Position("{\n\t?}", err.ErrOffset); line != 2 || column != 2 {
 		t.Errorf("expected line 2, column 2; received line %d, column %d",
 			line, column)
 	}
-	if !errors.Is(err, parser.ErrUnexpectedToken) {
+	if !errors.Is(err.Err, parser.ErrUnexpectedToken) {
 		t.Error("expected errors.Is to match the sentinel")
-	}
-	if err.Unwrap() != parser.ErrUnexpectedToken {
-		t.Error("expected Unwrap to return the sentinel")
 	}
 }
 
