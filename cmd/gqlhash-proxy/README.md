@@ -24,6 +24,17 @@ Two files whose documents hash alike are both skipped: which one a request meant
 
 A document that doesn't parse is skipped with an error log, at startup and on reload alike, so one broken file doesn't keep the rest from being served. A directory with no usable document serves an empty allowlist, rejects everything.
 
+Most deployments put the proxy beside the API — same host, same pod, or a segment no client of the API reaches — and `http` is what that hop wants: TLS costs a handshake per connection to protect a wire nobody else is on. Reach for `https` where the upstream sits across a boundary you don't control: another cluster, another network, or a hosted GraphQL service.
+
+An `https` upstream has its certificate verified against the host's trust store. `-upstream.tls.ca` names a PEM file to verify it against instead, which is what an upstream behind a private CA needs. It replaces that trust store rather than adding to it, so only the CA you name can vouch for the API; a deployment that needs more than one — a private CA in production and a public one in staging — puts them in the same file. The file is read at startup, so one that's missing or holds no certificate stops the proxy there rather than surfacing later as an upstream that can't be reached.
+
+Naming a CA doesn't relax anything else: the certificate still has to carry the host `-upstream.url` names. There is no flag to skip the check either — a proxy that skipped it is one any machine on the path can stand in for, and every allowed document would go to whoever answered.
+
+```sh
+gqlhash-proxy -upstream.url https://api.internal/graphql -allowlist ./queries \
+  -upstream.tls.ca /etc/ssl/private-ca.pem
+```
+
 `-control.listen 127.0.0.1:9090` serves the control server on that address, which is separate from the port that serves traffic. It provides [Prometheus](https://prometheus.io/) metrics on `/metrics` and rereads the allowlist on `POST /reload`.
 
 `/status` answers what the proxy has decided so far: the size of the allowlist, when it was loaded, and the counters for every decision and for upstream failures. Each refusal is counted apart: `rejected` for a document that isn't on the list, `malformed` for a request that carries none, `too_large` past `-server.max-body`, `ambiguous` for one naming its document twice, `too_deep` past the depth limit. Like the metrics it needs no token, and like them it isn't served on the traffic port — it's operational state, not something a client of the API should see.
@@ -75,6 +86,7 @@ Every flag of the proxy, with its default:
 | `-upstream.max-idle-conns` | 256 | ceiling over the per-host pool, 0 for none |
 | `-upstream.max-conn-lifetime` | off | retire an upstream connection once it's this old |
 | `-upstream.http2` | on | allow HTTP/2 to an `https` upstream |
+| `-upstream.tls.ca` | host trust store | PEM file of the certificates that may sign an `https` upstream's |
 | `-server.read-header-timeout` | 10s | how long a client may take to send the headers |
 | `-server.read-timeout` | 30s | how long a client may take to send the request |
 | `-server.write-timeout` | `-upstream.timeout` + 10s | how long answering may take |

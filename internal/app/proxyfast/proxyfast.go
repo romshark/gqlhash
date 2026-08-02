@@ -159,6 +159,9 @@ func newHostClient(
 	return &fasthttp.HostClient{
 		Addr:  upstream.Host,
 		IsTLS: upstream.Scheme == "https",
+		// The same trust the net/http underlay uses,
+		// so -upstream.tls.ca means one thing whichever binary is serving.
+		TLSConfig: config.TLSClientConfig(cfg.Upstream.TLSCA),
 		// fasthttp has no separate limit for connections opened, so MaxConns is
 		// both and a request past it fails with ErrNoFreeConns rather than
 		// being redialed the way net/http does. MaxConnWaitTimeout keeps

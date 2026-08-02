@@ -1,6 +1,15 @@
 package config_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -417,6 +426,7 @@ func TestFlagInventory(t *testing.T) {
 		"upstream.max-idle-conns-per-host": "64",
 		"upstream.max-conn-lifetime":       "",
 		"upstream.http2":                   "true",
+		"upstream.tls.ca":                  "",
 	})
 }
 
@@ -563,5 +573,90 @@ func TestParseProxyMaxConnLifetime(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "-upstream.max-conn-lifetime must be 0 or more") {
 		t.Errorf("unexpected message: %s", errOut.String())
+	}
+}
+
+// TestParseProxyTLSCA covers -upstream.tls.ca: the certificates are read at startup,
+// so a file that can't be used is a start failure and not an upstream
+// that turns out to be unreachable at the first forward.
+func TestParseProxyTLSCA(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "ca.pem")
+	writeCA(t, good)
+	notPEM := filepath.Join(dir, "not.pem")
+	if err := os.WriteFile(notPEM, []byte("this is no certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A readable PEM against an https upstream is the case the flag exists for.
+	var errOut strings.Builder
+	cfg, code, run := config.ParseProxy("gqlhash-proxy", proxyArgs(
+		"-upstream.url", "https://api/graphql", "-allowlist", "./q",
+		"-upstream.tls.ca", good,
+	), &errOut)
+	if !run || code != 0 {
+		t.Fatalf("expected a PEM file to parse; code %d, stderr: %s", code, errOut.String())
+	}
+	if cfg.Upstream.TLSCA == nil {
+		t.Error("expected the certificates to be read")
+	}
+	if config.TLSClientConfig(cfg.Upstream.TLSCA) == nil {
+		t.Error("expected a TLS config carrying them")
+	}
+
+	// Unset, the host's trust store answers, which both underlays read as a nil
+	// config rather than an empty pool trusting nothing.
+	cfg, _, _ = config.ParseProxy("gqlhash-proxy", proxyArgs(
+		"-upstream.url", "https://api/graphql", "-allowlist", "./q",
+	), &strings.Builder{})
+	if cfg.Upstream.TLSCA != nil || config.TLSClientConfig(cfg.Upstream.TLSCA) != nil {
+		t.Error("expected no CA and no TLS config without the flag")
+	}
+
+	f := func(t *testing.T, expectStderr string, a ...string) {
+		t.Helper()
+		var errOut strings.Builder
+		_, code, run := config.ParseProxy("gqlhash-proxy", proxyArgs(a...), &errOut)
+		if run || code != 2 {
+			t.Errorf("expected a start failure; code %d, args %v", code, a)
+		}
+		if !strings.Contains(errOut.String(), expectStderr) {
+			t.Errorf("expected %q in stderr; received %q", expectStderr, errOut.String())
+		}
+	}
+	const url, list = "-upstream.url", "-allowlist"
+	f(t, "-upstream.tls.ca", url, "https://api/graphql", list, "./q",
+		"-upstream.tls.ca", filepath.Join(dir, "absent.pem"))
+	f(t, "holds no PEM certificate", url, "https://api/graphql", list, "./q",
+		"-upstream.tls.ca", notPEM)
+	// Nothing is verified over http, so naming a CA there is a mistake worth
+	// reporting rather than a setting that quietly does nothing.
+	f(t, "no https URL", url, "http://api/graphql", list, "./q",
+		"-upstream.tls.ca", good)
+}
+
+// writeCA writes a self-signed certificate to path,
+// which is all the flag reads: it never has to verify anything.
+func writeCA(t *testing.T, path string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "gqlhash test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

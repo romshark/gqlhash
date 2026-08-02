@@ -143,6 +143,7 @@ func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: cfg.Upstream.Timeout,
 		ForceAttemptHTTP2:     cfg.Upstream.HTTP2,
+		TLSClientConfig:       config.TLSClientConfig(cfg.Upstream.TLSCA),
 		// The proxy asks for no encoding of its own. Without this net/http adds
 		// Accept-Encoding: gzip to a request that carried none and gunzips the answer,
 		// so the client reads a different envelope than the API sent.
