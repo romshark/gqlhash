@@ -2,9 +2,6 @@
 // net/http. It takes the same flags, makes the same decision and answers the
 // same way; what differs is the HTTP implementation carrying it.
 //
-// It's a binary of its own rather than a flag on gqlhash-proxy so that the
-// default proxy links no HTTP implementation it doesn't serve with.
-//
 // EXPERIMENTAL, AND NOT FOR PRODUCTION USE. Run gqlhash-proxy in front of
 // anything that matters. This one is for benchmarking, and for proving the
 // acceptance suite holds two implementations to the same rules rather than

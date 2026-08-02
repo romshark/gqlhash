@@ -69,7 +69,7 @@ func Run(
 	if errHash.IsErr() {
 		// A hash never fails a write, so this carries a position.
 		// The format is the one editors and CI annotations parse.
-		line, column := gqlhash.Position(input, errHash.Offset)
+		line, column := gqlhash.Position(input, errHash.ErrOffset)
 		_, _ = fmt.Fprintf(stderr, "%s:%d:%d: syntax error: %v\n",
 			source, line, column, errHash.Err)
 		return 1

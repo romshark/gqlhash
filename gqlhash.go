@@ -10,11 +10,8 @@ import (
 	"github.com/romshark/gqlhash/v2/parser"
 )
 
-// Error is a [parser.Error]. Its zero value means no error,
-// so callers check [Error.Err] instead of comparing to nil.
-//
-// Requirement: never hold one in an error variable, see [parser.Error].
-type Error = parser.Error
+// Result says whether hashing failed and where (see [parser.Result]).
+type Result = parser.Result
 
 var (
 	ErrUnexpectedEOF      = parser.ErrUnexpectedEOF
@@ -30,9 +27,8 @@ var (
 	ErrTooDeep = parser.ErrTooDeep
 )
 
-// The defaults an [Options] with no value of its own takes, and the size a
-// [Hasher] starts at. Re-exported from [parser] so reasoning about Options
-// takes no second import.
+// The defaults an [Options] with no value of its own takes,
+// and the size a [Hasher] starts at.
 const (
 	// DefaultDepthLimit is the nesting an [Options] with no DepthLimit takes.
 	DefaultDepthLimit = parser.DefaultDepthLimit
@@ -75,12 +71,12 @@ func Position[S string | []byte](s S, offset int) (line, column int) {
 // Compare reports whether the documents a and b have the same hash.
 //
 // Two valid documents that differ are no error: equal is false and the returned
-// [Error] is the zero value. equal is false whenever the [Error] holds one.
+// [Result] is the zero value. equal is false whenever the [Result] holds one.
 //
 // Order is significant: the same fields in a different order differ.
 func Compare[S string | []byte](
 	h Hash, options Options, a, b S,
-) (equal bool, err Error) {
+) (equal bool, err Result) {
 	return CompareWithBuffer(nil, h, options, a, b)
 }
 
@@ -88,7 +84,7 @@ func Compare[S string | []byte](
 // A buffer of capacity h.Size()*2 avoids the allocation.
 func CompareWithBuffer[S string | []byte](
 	buffer []byte, h Hash, options Options, a, b S,
-) (equal bool, err Error) {
+) (equal bool, err Result) {
 	size := h.Size()
 	if cap(buffer) < size*2 {
 		buffer = make([]byte, 0, size*2)
@@ -99,7 +95,7 @@ func CompareWithBuffer[S string | []byte](
 	if buffer, err = AppendHash(buffer, h, options, b); err.Err != nil {
 		return false, err
 	}
-	return bytes.Equal(buffer[:size], buffer[size:]), Error{}
+	return bytes.Equal(buffer[:size], buffer[size:]), Result{}
 }
 
 // Hasher hashes and compares documents without allocating.
@@ -136,16 +132,16 @@ func NewHasherWithBuffer[S string | []byte](
 
 // Append reads the document s and appends its hash to buffer, resetting the hash of h.
 // A rejected document leaves buffer as it was, as the AppendX convention promises.
-func (h *Hasher[S]) Append(buffer []byte, s S) ([]byte, Error) {
+func (h *Hasher[S]) Append(buffer []byte, s S) ([]byte, Result) {
 	h.hash.Reset()
 	if err := h.parser.Parse(h.hash, h.options, s); err.Err != nil {
 		return buffer, err
 	}
-	return h.hash.Sum(buffer), Error{}
+	return h.hash.Sum(buffer), Result{}
 }
 
 // Compare is [Compare] with the hash and the options of h.
-func (h *Hasher[S]) Compare(a, b S) (equal bool, err Error) {
+func (h *Hasher[S]) Compare(a, b S) (equal bool, err Result) {
 	h.hash.Reset()
 	if err = h.parser.Parse(h.hash, h.options, a); err.Err != nil {
 		return false, err
@@ -163,7 +159,7 @@ func (h *Hasher[S]) Compare(a, b S) (equal bool, err Error) {
 	sums = h.hash.Sum(sums)
 	h.sums = sums
 
-	return bytes.Equal(sums[:size], sums[size:]), Error{}
+	return bytes.Equal(sums[:size], sums[size:]), Result{}
 }
 
 // AppendHash reads the document s and appends its hash to buffer,
@@ -173,10 +169,10 @@ func (h *Hasher[S]) Compare(a, b S) (equal bool, err Error) {
 // On a per-request path use a [Hasher], which allocates nothing.
 func AppendHash[S string | []byte](
 	buffer []byte, h Hash, options Options, s S,
-) ([]byte, Error) {
+) ([]byte, Result) {
 	h.Reset()
 	if err := parser.Parse(h, options, s); err.Err != nil {
 		return buffer, err
 	}
-	return h.Sum(buffer), Error{}
+	return h.Sum(buffer), Result{}
 }

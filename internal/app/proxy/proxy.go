@@ -32,9 +32,9 @@ type bufferPool struct{ pool sync.Pool }
 func (b *bufferPool) Get() []byte  { return b.pool.Get().([]byte) }
 func (b *bufferPool) Put(p []byte) { b.pool.Put(p) } //nolint:staticcheck // the interface takes a slice
 
-// counters of what the proxy decided, one per cache line. Packed, two cores
-// raising different counters bounce one line between them: ~10.7ns against
-// ~8.6ns per raise. A flood of one decision contends whatever the layout.
+// counters of what the proxy decided, one per cache line.
+// Packed, two cores raising different counters bounce one line between them.
+// A flood of one decision contends whatever the layout.
 type counters struct {
 	allowed   paddedCounter
 	rejected  paddedCounter
@@ -119,8 +119,8 @@ func (p *proxy) StartDraining() {
 	p.drainOnce.Do(func() { close(p.draining) })
 }
 
-// The buffers a pooled state starts with, sized for the request the proxy mostly
-// sees: a document of a few hundred bytes carrying a handful of them.
+// The buffers a pooled state starts with, sized for the request the proxy mostly sees:
+// a document of a few hundred bytes carrying a handful of them.
 const (
 	defaultBodyBuffer    = 8192
 	defaultScratchBuffer = 4096

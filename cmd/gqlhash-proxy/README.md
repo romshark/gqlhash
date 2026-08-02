@@ -63,6 +63,7 @@ Every flag of the proxy, with its default:
 | `-hash` | `sha2` | `sha2`, `sha3`, `blake2b`, `blake2s` or `blake3` |
 | `-ignore` | `nothing` | what to leave out of the hash, see [Ignoring Input Values](../../README.md#ignoring-input-values) |
 | `-server.max-body` | 1 MiB | largest request body accepted |
+| `-depth-limit` | 128 | how deeply a document may nest before it's refused, counted as `too_deep` |
 | `-allow-batch` | off | accept batches, where every document has to be allowed |
 | `-opaque-errors` | off | answer every rejection with 403 and no detail |
 | `-trust-forwarded` | off | keep the `X-Forwarded-*` headers a request arrives with |

@@ -44,7 +44,7 @@ const (
 // Reference:
 //
 //   - https://spec.graphql.org/September2025/#Document
-func parse(p *state, dst io.Writer, o Options, src string) Error {
+func parse(p *state, dst io.Writer, o Options, src string) Result {
 	if o.DepthLimit < 1 {
 		o.DepthLimit = DefaultDepthLimit
 	}
@@ -56,7 +56,7 @@ func parse(p *state, dst io.Writer, o Options, src string) Error {
 		j      int   // Index of a byte read ahead of i.
 		start  int   // Start of the token being read.
 		e      error // Sentinel error, set before goto ERROR.
-		errPos int   // Offset the error is reported at.
+		errPos int   // ErrOffset the error is reported at.
 
 		// depthLimit is how deeply selection sets and values may nest, see
 		// [Options.DepthLimit].
@@ -780,9 +780,9 @@ DONE:
 	p.buf = w.buf
 	if e != nil {
 		// A write error is no syntax error and has no position in src.
-		return Error{Err: e, Offset: -1}
+		return Result{Err: e, ErrOffset: -1}
 	}
-	return Error{}
+	return Result{}
 
 ERROR:
 	p.stack = stack
@@ -790,5 +790,5 @@ ERROR:
 		w.buf = make([]byte, 0, DefaultBufferSize)
 	}
 	p.buf = w.buf
-	return newError(src, errPos, e)
+	return errResult(src, errPos, e)
 }
