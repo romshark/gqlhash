@@ -304,7 +304,9 @@ func ParseProxyFor(
 
 		fControl = cli.String("control.listen", "127.0.0.1:9090",
 			"Address to serve the control server on. It answers Prometheus\n"+
-				"metrics on /metrics and rereads the allowlist on POST /reload.\n"+
+				"metrics on /metrics, what the proxy has decided on /status,\n"+
+				"a liveness probe on /healthz, and rereads the allowlist on\n"+
+				"POST /reload.\n"+
 				"Keep the address off any network a client of the API can reach,\n"+
 				"which is what the loopback default does.\n"+
 				"Set "+EnvName("control.token")+" to require it as a bearer\n"+

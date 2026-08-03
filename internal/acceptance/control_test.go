@@ -667,3 +667,47 @@ func TestReloadServesThroughout(t *testing.T) {
 		}
 	})
 }
+
+// TestControlHealthz covers /healthz: the liveness probe a deployment points at.
+// It takes no token, since a kubelet carries no Authorization header, and it
+// answers on the control port alone — the traffic port belongs to the API.
+func TestControlHealthz(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		t.Setenv(controlTokenEnv, "s3cret")
+		e := newEnv(t, tgt, []string{allowedDoc})
+
+		code, body := control(t, e.server, http.MethodGet, "/healthz", "")
+		if code != http.StatusOK {
+			t.Errorf("expected 200 without the token; received %d: %s", code, body)
+		}
+		if body != "ok\n" {
+			t.Errorf("expected a body a probe can read; received %q", body)
+		}
+		// HEAD is what a probe configured for one sends, and net/http answers it
+		// from the same handler with the body dropped.
+		if code, _ := control(
+			t, e.server, http.MethodHead, "/healthz", "",
+		); code != http.StatusOK {
+			t.Errorf("expected 200 for HEAD; received %d", code)
+		}
+
+		code, body, header := controlFor(t, e.server, http.MethodPost, "/healthz", "")
+		if code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405 for POST; received %d: %s", code, body)
+		}
+		if got := header.Get("Allow"); got != "GET, HEAD" {
+			t.Errorf("expected the methods named; received %q", got)
+		}
+
+		// The traffic port serves the API and nothing else:
+		// /healthz there is a request carrying no document, not a probe.
+		req, err := http.NewRequest(http.MethodGet,
+			"http://"+e.address+"/healthz", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code, _ := send(t, req); code == http.StatusOK {
+			t.Error("expected the traffic port to answer no probe")
+		}
+	})
+}

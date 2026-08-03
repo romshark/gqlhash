@@ -51,9 +51,13 @@ gqlhash-proxy -upstream.url https://api.internal/graphql -allowlist ./queries \
   -upstream.tls.ca /etc/ssl/private-ca.pem
 ```
 
-`-control.listen 127.0.0.1:9090` serves the control server on that address, which is separate from the port that serves traffic. It provides [Prometheus](https://prometheus.io/) metrics on `/metrics` and rereads the allowlist on `POST /reload`.
+`-control.listen 127.0.0.1:9090` serves the control server on that address, which is separate from the port that serves traffic. It provides [Prometheus](https://prometheus.io/) metrics on `/metrics`, a liveness probe on `/healthz`, and rereads the allowlist on `POST /reload`.
 
 `/status` answers what the proxy has decided so far: the size of the allowlist, when it was loaded, and the counters for every decision and for upstream failures. Each refusal is counted apart: `rejected` for a document that isn't on the list, `malformed` for a request that carries none, `too_large` past `-server.max-body`, `ambiguous` for one naming its document twice, `too_deep` past the depth limit, `batch_too_large` past `-server.max-batch`, `method_not_allowed` for a method other than `GET` or `POST`. Like the metrics it needs no token, and like them it isn't served on the traffic port — it's operational state, not something a client of the API should see.
+
+`/healthz` answers `200 ok` while the proxy serves, for a liveness probe. It takes `GET` or `HEAD` and no token, since a probe carries no `Authorization` header. It computes nothing: a proxy that can't load its allowlist fails to start, so there is no state in which it answers and something is wrong. What a probe reads is the endpoint going away — a shutdown closes the control server first and drains the traffic port afterwards, so the pod stops being ready while it finishes the requests in flight. A load that skipped files doesn't change the answer: one malformed document would take every replica out of service, and the proxy keeps serving the documents that did load, which `/status` and the metrics report.
+
+**The traffic port belongs entirely to the API.** No health endpoint is served there, and none will be: the proxy forwards on any path, so reserving one would take a path a client may already be posting GraphQL to. Point liveness and readiness at the control port, and use a TCP check against `-server.listen` if you want the traffic listener itself covered.
 
 `GQLHASH_PROXY_CONTROL_TOKEN` requires `Authorization: Bearer <token>` on `/reload`, compared in constant time. Metrics are served without it. There is no flag for the token: a process argument is readable by anyone on the host through `ps` or `/proc/<pid>/cmdline`, the environment of a process isn't.
 
@@ -88,7 +92,7 @@ Every flag of the proxy, with its default:
 | `-server.listen` | `:8080` | where the traffic is served |
 | `-server.tls.cert` | off | PEM certificate to serve the traffic port over HTTPS with, needs `-server.tls.key` |
 | `-server.tls.key` | off | PEM private key for `-server.tls.cert` |
-| `-control.listen` | `127.0.0.1:9090` | where `/metrics`, `/status` and `/reload` are served |
+| `-control.listen` | `127.0.0.1:9090` | where `/metrics`, `/status`, `/healthz` and `/reload` are served |
 | `-hash` | `sha2` | `sha2`, `sha3`, `blake2b`, `blake2s` or `blake3` |
 | `-ignore` | `nothing` | what to leave out of the hash, see [Ignoring Input Values](../../README.md#ignoring-input-values) |
 | `-server.max-body` | 1 MiB | largest request body accepted |

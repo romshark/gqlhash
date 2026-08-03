@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -30,6 +31,26 @@ type control struct {
 func (c *control) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/reload", c.reload)
 	mux.HandleFunc("/status", c.status)
+	mux.HandleFunc("/healthz", c.healthz)
+}
+
+// healthz answers 200 while the proxy serves, for a liveness probe.
+//
+// It computes nothing: [build] fails the start where the allowlist can't load,
+// and the data plane serves before this listener exists, so a 503 would take no request.
+// A probe reads the shutdown instead — the control server closes
+// before the data plane drains, which is the order an eviction wants.
+//
+// A load that skipped files isn't reported here: one bad document would take
+// every replica out of service. /status and the metrics carry it.
+func (c *control) healthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "healthz takes GET or HEAD", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = io.WriteString(w, "ok\n")
 }
 
 // status answers with the state of the allowlist and the decisions made.
