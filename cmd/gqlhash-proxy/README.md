@@ -31,6 +31,10 @@ Two files whose documents hash alike are both skipped: which one a request meant
 
 A document that doesn't parse is skipped with an error log, at startup and on reload alike, so one broken file doesn't keep the rest from being served. A directory with no usable document serves an empty allowlist, rejects everything.
 
+`-opaque-errors` answers every rejection with `403` and `OPERATION_NOT_ALLOWED`, so a caller can't tell a document that isn't on the list from one that's too deep, too large, malformed or ambiguous. It hides **why** a request was refused, not **whether** a document is on the list. Nothing can hide the latter: an allowed document is forwarded and comes back with the API's own answer, so a prober separates the two on any working deployment without needing an error to read. What the flag is for is the detail — the refusals name their reason otherwise, and that reason maps the shape of your allowlist and your limits.
+
+It applies to the proxy's own rejections and to nothing else. An upstream that can't be reached is still `502 UPSTREAM_UNAVAILABLE`, a timeout still `504`, because neither is a rejection and answering them as one would leave a client unable to tell a refused request from a broken API while closing nothing a forwarded document doesn't already reveal.
+
 `-server.tls.cert` and `-server.tls.key` serve the traffic port over HTTPS: a PEM certificate, the leaf first and any intermediates after it, and its key. Both or neither — one alone is a start failure, as is a pair that can't be loaded, so a proxy never binds a port it can't serve. Without them the traffic port is plain HTTP, which is what belongs behind a load balancer terminating TLS itself.
 
 ```sh

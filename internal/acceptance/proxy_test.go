@@ -221,8 +221,16 @@ func TestMaxBody(t *testing.T) {
 }
 
 // TestOpaqueErrors makes sure -opaque-errors withholds the same detail
-// everywhere: what a refusal says is a rule of its own, not a property of the
-// server carrying it.
+// everywhere: what a refusal says is a rule of its own,
+// not a property of the server carrying it.
+//
+// It also pins what the flag doesn't cover. An upstream failure keeps its status,
+// so the same server answers 502 for an allowed document and an opaque
+// 403 for one that isn't on the list — the flag hides why a request was refused,
+// not whether its document is on the list. The second can't be hidden by anything:
+// an allowed document is forwarded and comes back with the API's own answer.
+// Collapsing the 502 into the 403 would only cost a client the
+// difference between a refused request and a broken API.
 func TestOpaqueErrors(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := newEnv(t, tgt, []string{allowedDoc}, "-opaque-errors")
@@ -237,6 +245,29 @@ func TestOpaqueErrors(t *testing.T) {
 				strings.Contains(answer, "BAD_REQUEST") {
 				t.Errorf("expected no detail; received %s", answer)
 			}
+		}
+
+		// The same flag, against a port nothing listens on.
+		dir := t.TempDir()
+		writeDoc(t, dir, "a.graphql", allowedDoc)
+		down := serve(t, tgt, "-opaque-errors",
+			"-upstream.url", "http://127.0.0.1:1/graphql", "-allowlist", dir)
+
+		code, answer := post(t, down, docAllowed)
+		if code != http.StatusBadGateway {
+			t.Errorf("expected an upstream failure to keep its 502; received %d: %s",
+				code, answer)
+		}
+		if !strings.Contains(answer, "UPSTREAM_UNAVAILABLE") {
+			t.Errorf("expected the upstream failure named; received %s", answer)
+		}
+
+		// And a rejection on that same server is still opaque,
+		// which is what makes the two distinguishable.
+		if code, answer := post(t, down, docRejected); code != http.StatusForbidden ||
+			!strings.Contains(answer, "OPERATION_NOT_ALLOWED") {
+			t.Errorf("expected an opaque rejection beside it; received %d: %s",
+				code, answer)
 		}
 	})
 }
