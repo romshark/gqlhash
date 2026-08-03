@@ -33,17 +33,17 @@ func Run(
 	args []string,
 	stdout, stderr io.Writer,
 ) (exitCode int) {
-	return RunWith(ctx, name, version, args, stdout, stderr, Underlay{})
+	return RunWith(ctx, name, version, args, stdout, stderr, ServerImpl{})
 }
 
-// RunWith is [Run] on the given underlay. A zero [Underlay] serves with
+// RunWith is [Run] on the given implementation. A zero [ServerImpl] serves with
 // net/http, which is what [Run] passes.
 func RunWith(
 	ctx context.Context,
 	name, version string,
 	args []string,
 	stdout, stderr io.Writer,
-	underlay Underlay,
+	impl ServerImpl,
 ) (exitCode int) {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -54,8 +54,7 @@ func RunWith(
 		stop()
 	}()
 
-	cfg, code, run := config.ParseProxyFor(underlay.Name, underlay.HTTP1Only,
-		args[0], args, stderr)
+	cfg, code, run := config.ParseProxyFor(impl.HTTP1Only, args[0], args, stderr)
 	if !run {
 		return code
 	}
@@ -68,7 +67,7 @@ func RunWith(
 	if !ok {
 		return 2
 	}
-	c, err := build(cfg, log, underlay)
+	c, err := build(cfg, log, impl)
 	if err != nil {
 		log.Error().Err(err).Msg("loading the allowlist")
 		return 1
@@ -108,13 +107,16 @@ type components struct {
 	// has both, since the control server has no off switch.
 	//
 	// dataPlane is whichever HTTP implementation the command carries, see
-	// [Underlay]. control is net/http under every one of them.
+	// [ServerImpl]. control is net/http under every one of them.
 	dataPlane dataPlaneServer
 	control   *http.Server
+
+	// httpImpl names what serves the traffic, for the startup log.
+	httpImpl string
 }
 
 // build assembles the components and loads the allowlist.
-func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components, error) {
+func build(cfg config.Proxy, log zerolog.Logger, impl ServerImpl) (*components, error) {
 	options := gqlhash.Options{Ignore: cfg.Ignore, DepthLimit: cfg.DepthLimit}
 	// Checked once here rather than per request: a proxy that can't hash serves nothing,
 	// so it's a start failure and not a nil at the first request.
@@ -173,14 +175,18 @@ func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// The underlay is used here and nowhere else: past this point a run holds a
+	// [ServerImpl] is used here and nowhere else: past this point a run holds a
 	// [dataPlaneServer] and doesn't ask which one it got.
+	implName := impl.Name
+	if implName == "" {
+		implName = "nethttp"
+	}
 	var server dataPlaneServer
 	var recycle func()
-	if underlay.New != nil {
-		// An underlay owns its client, so retiring its connections is its own to do.
-		// fasthttp takes the lifetime as a setting.
-		server = underlay.New(p.Core(), cfg, cfg.Upstream.URL, log)
+	if impl.New != nil {
+		// An implementation owns its client, so retiring its connections is its
+		// own to do. fasthttp takes the lifetime as a setting.
+		server = impl.New(p.Core(), cfg, cfg.Upstream.URL, log)
 	} else {
 		if cfg.Upstream.MaxConnLifetime > 0 {
 			// http.Transport has no lifetime of its own, and a connection can't
@@ -198,12 +204,13 @@ func build(cfg config.Proxy, log zerolog.Logger, underlay Underlay) (*components
 			ReadTimeout:       cfg.Server.ReadTimeout,
 			WriteTimeout:      cfg.Server.WriteTimeout,
 			IdleTimeout:       cfg.Server.IdleTimeout,
+			TLSConfig:         config.TLSServerConfig(cfg.Server.TLSCert),
 		}}
 	}
 	return &components{
 		allowlist: list, proxy: p,
 		recycle: recycle, recycleEvery: cfg.Upstream.MaxConnLifetime,
-		dataPlane: server, control: controlServer,
+		dataPlane: server, control: controlServer, httpImpl: implName,
 	}, nil
 }
 
@@ -267,7 +274,7 @@ func (c *components) serveOn(
 		// logged where a deployment can see them.
 		Int("upstream_max_idle_conns_per_host", cfg.Upstream.MaxIdleConnsPerHost).
 		Bool("upstream_http2", cfg.Upstream.HTTP2).
-		Str("underlay", cfg.Server.Underlay).
+		Str("http", c.httpImpl).
 		Str("control", controlAddress)
 	listening.Msg("listening")
 
@@ -276,7 +283,7 @@ func (c *components) serveOn(
 	var failed bool
 	select {
 	case err := <-errServe:
-		// An ordinary shutdown is reported as nil whichever underlay served,
+		// An ordinary shutdown is reported as nil whichever implementation served,
 		// see [dataPlaneServer].
 		if err != nil {
 			log.Error().Err(err).Msg("serving")

@@ -316,7 +316,7 @@ func TestGETBodyOverMaxBody(t *testing.T) {
 // TestMaxBodyDoesNotBoundAGETQueryString covers the other half of that flag:
 // it bounds bodies, and a GET carries its document in the request line,
 // which -server.max-body has never bounded. What bounds that is the header limit of
-// the underlay, which differs between the two on purpose.
+// the implementation, which differs between the two on purpose.
 func TestMaxBodyDoesNotBoundAGETQueryString(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		// A document far past the limit set below, so an implementation

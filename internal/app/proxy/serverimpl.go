@@ -14,7 +14,7 @@ import (
 
 // dataPlaneServer takes requests from clients, decides on them and forwards
 // what's allowed. Which HTTP implementation depends on the command a run was
-// started as, see [Underlay].
+// started as, see [ServerImpl].
 //
 // Its counterpart, the control server on -control.listen, is net/http under
 // every command and sits on no hot path, so it's behind no interface at all.
@@ -23,7 +23,7 @@ import (
 // so what a request is answered with doesn't depend on which carried it.
 type dataPlaneServer interface {
 	// Serve takes the traffic on listener until Shutdown: nil where it was shut down,
-	// an error where it failed. The underlays differ here and this hides it.
+	// an error where it failed. net/http and fasthttp differ here and this hides it.
 	Serve(listener net.Listener) error
 
 	// Shutdown stops taking requests and waits for the ones in flight,
@@ -31,16 +31,16 @@ type dataPlaneServer interface {
 	Shutdown(ctx context.Context) error
 }
 
-// DataPlaneServer is [dataPlaneServer] under a name an underlay in another
-// package can implement.
+// DataPlaneServer is [dataPlaneServer] under a name another package can implement.
 type DataPlaneServer = dataPlaneServer
 
-// Underlay is an HTTP implementation a command can serve with.
-// A command that passes none serves with net/http.
+// ServerImpl is the HTTP implementation serving the traffic. The zero value is
+// net/http, which is what gqlhash-proxy runs and what a deployment should.
+// gqlhash-proxy-fhttp passes fasthttp, see [github.com/romshark/gqlhash/v2/internal/app/proxyfast].
 //
 // Given rather than chosen by a flag, since the choice is what a binary is
-// built out of: only the command naming an underlay links it.
-type Underlay struct {
+// built out of: only the command naming an implementation links it.
+type ServerImpl struct {
 	// Name goes in the startup log, so an operator can see which binary is running.
 	Name string
 
@@ -55,13 +55,20 @@ type Underlay struct {
 	) DataPlaneServer
 }
 
-// netHTTPServer is the net/http underlay, the default. [http.Server.Serve]
+// netHTTPServer is the net/http implementation, the default. [http.Server.Serve]
 // answers an ordinary shutdown with [http.ErrServerClosed] where fasthttp answers nil,
 // so that difference is flattened here rather than at every call.
 type netHTTPServer struct{ server *http.Server }
 
 func (s netHTTPServer) Serve(listener net.Listener) error {
-	err := s.server.Serve(listener)
+	serve := s.server.Serve
+	if s.server.TLSConfig != nil {
+		// ServeTLS and not a TLS listener: it's what negotiates h2 over ALPN,
+		// which a wrapped listener leaves at HTTP/1.1.
+		// The certificate is in TLSConfig already, so it takes no file names.
+		serve = func(l net.Listener) error { return s.server.ServeTLS(l, "", "") }
+	}
+	err := serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

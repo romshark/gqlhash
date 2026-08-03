@@ -109,7 +109,9 @@ and let it reach the upstream over HTTP/1.1. Set -upstream.http2=false to run
 with this command.
 ```
 
-Unset, the flag defaults to true and is forced off, so the startup log reports what is served. Neither command serves HTTP/2 to clients: there are no TLS flags, so h2 is never negotiated on the listening side.
+Unset, the flag defaults to true and is forced off, so the startup log reports what is served.
+
+The listening side differs too, once `-server.tls.cert` and `-server.tls.key` are given: `gqlhash-proxy` negotiates HTTP/2 over ALPN and falls back to HTTP/1.1, where `gqlhash-proxy-fhttp` serves HTTP/1.1 whatever the client offers. Without those flags both serve plain HTTP/1.1, since h2 is never negotiated without TLS.
 
 ### Protocol upgrades
 
@@ -133,7 +135,7 @@ An answer that is `text/event-stream` is the one this command does not buffer, s
 
 Two things follow from fasthttp having no per-request deadline that stops at the headers. The streaming client carries no read deadline at all, because fasthttp computes one before reading the headers and it covers the body too — so the wait for the headers is bounded by a timer in `server.within` instead, and a forward that outlives it is *abandoned* rather than cancelled: nothing interrupts a fasthttp client mid-request, so the 504 is answered without it and its request and answer are released when the goroutine ends. And `-server.write-timeout` is replaced per request through the `HeaderReceived` hook, which takes a positive duration only, so "not bounded" is spelled as a bound no process outlives.
 
-The rule both commands keep: an answer whose `Content-Type` is `text/event-stream` is relayed as it arrives, and the deadlines that bound an exchange don't apply to it — `-upstream.timeout` still bounds the wait for the answer's headers, but not the stream, and `-server.write-timeout` doesn't reach it at all. What the client asks for decides how the forward is carried, since an underlay must choose before there is an answer to look at; what the API answers decides how it's relayed, so a client that asks for a stream and receives JSON gets an ordinary, bounded exchange. A stream is timed to its headers rather than to its end, so an hour-long subscription isn't an hour of proxy latency in `request_duration_seconds`.
+The rule both commands keep: an answer whose `Content-Type` is `text/event-stream` is relayed as it arrives, and the deadlines that bound an exchange don't apply to it — `-upstream.timeout` still bounds the wait for the answer's headers, but not the stream, and `-server.write-timeout` doesn't reach it at all. What the client asks for decides how the forward is carried, since an implementation must choose before there is an answer to look at; what the API answers decides how it's relayed, so a client that asks for a stream and receives JSON gets an ordinary, bounded exchange. A stream is timed to its headers rather than to its end, so an hour-long subscription isn't an hour of proxy latency in `request_duration_seconds`.
 
 ## HTTP/1.1 conformance
 

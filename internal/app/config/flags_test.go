@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,7 +169,6 @@ func TestParseProxy(t *testing.T) {
 		AllowBatch:   true, OpaqueErrors: true, TrustForwarded: true,
 		Server: config.ProxyServer{
 			Listen:            "127.0.0.1:1",
-			Underlay:          "nethttp",
 			MaxBody:           4096,
 			ShutdownTimeout:   2 * time.Second,
 			ReadHeaderTimeout: 3 * time.Second,
@@ -412,6 +412,8 @@ func TestFlagInventory(t *testing.T) {
 		"server.max-body":            "1048576",
 		"opaque-errors":              "",
 		"server.shutdown-timeout":    "10s",
+		"server.tls.cert":            "",
+		"server.tls.key":             "",
 		"upstream.timeout":           "30s",
 		"server.read-header-timeout": "10s",
 		"server.read-timeout":        "30s",
@@ -481,29 +483,26 @@ func TestVersionPrecedence(t *testing.T) {
 	}
 }
 
-// TestParseProxyForHTTP1Only covers a command whose underlay can't speak h2.
+// TestParseProxyForHTTP1Only covers a command whose
+// HTTP implementation can't speak h2.
 // Asking for it stops the run rather than quietly serving something else, and
 // leaving the flag alone turns it off so what's logged is what's served.
 func TestParseProxyForHTTP1Only(t *testing.T) {
 	var errOut strings.Builder
-	cfg, code, run := config.ParseProxyFor("fasthttp", true, "gqlhash-proxy-fhttp",
+	cfg, code, run := config.ParseProxyFor(true, "gqlhash-proxy-fhttp",
 		proxyArgs("-upstream.url", "http://api/graphql", "-allowlist", "./q"),
 		&errOut)
 	if !run || code != 0 {
 		t.Fatalf("expected it to parse without -upstream.http2; code %d, stderr: %s",
 			code, errOut.String())
 	}
-	if cfg.Server.Underlay != "fasthttp" {
-		t.Errorf("expected the underlay to be reported; received %q",
-			cfg.Server.Underlay)
-	}
 	if cfg.Upstream.HTTP2 {
-		t.Error("expected h2 off where the underlay can't speak it")
+		t.Error("expected h2 off where the server can't speak it")
 	}
 
 	// Asking for it explicitly stops the run and says where h2 belongs.
 	errOut.Reset()
-	if _, code, run = config.ParseProxyFor("fasthttp", true, "gqlhash-proxy-fhttp",
+	if _, code, run = config.ParseProxyFor(true, "gqlhash-proxy-fhttp",
 		proxyArgs("-upstream.url", "http://api/graphql", "-allowlist", "./q",
 			"-upstream.http2=true"), &errOut); run || code != 2 {
 		t.Fatalf("expected -upstream.http2 to be refused; code %d run %t", code, run)
@@ -519,14 +518,14 @@ func TestParseProxyForHTTP1Only(t *testing.T) {
 
 	// Turning it off explicitly is the way to ask for this command knowingly.
 	errOut.Reset()
-	if _, code, run = config.ParseProxyFor("fasthttp", true, "gqlhash-proxy-fhttp",
+	if _, code, run = config.ParseProxyFor(true, "gqlhash-proxy-fhttp",
 		proxyArgs("-upstream.url", "http://api/graphql", "-allowlist", "./q",
 			"-upstream.http2=false"), &errOut); !run || code != 0 {
 		t.Fatalf("expected -upstream.http2=false to parse; code %d, stderr: %s",
 			code, errOut.String())
 	}
 
-	// The default command has neither restriction and still reports its underlay.
+	// The default command has no such restriction.
 	errOut.Reset()
 	cfg, code, run = config.ParseProxy("gqlhash-proxy",
 		proxyArgs("-upstream.url", "http://api/graphql", "-allowlist", "./q"),
@@ -535,7 +534,7 @@ func TestParseProxyForHTTP1Only(t *testing.T) {
 		t.Fatalf("expected the default to parse; code %d, stderr: %s",
 			code, errOut.String())
 	}
-	if cfg.Server.Underlay != "nethttp" || !cfg.Upstream.HTTP2 {
+	if !cfg.Upstream.HTTP2 {
 		t.Errorf("expected nethttp with h2 left on; received %+v", cfg.Server)
 	}
 }
@@ -604,8 +603,8 @@ func TestParseProxyTLSCA(t *testing.T) {
 		t.Error("expected a TLS config carrying them")
 	}
 
-	// Unset, the host's trust store answers, which both underlays read as a nil
-	// config rather than an empty pool trusting nothing.
+	// Unset, the host's trust store answers,
+	// which is a nil config rather than an empty pool trusting nothing.
 	cfg, _, _ = config.ParseProxy("gqlhash-proxy", proxyArgs(
 		"-upstream.url", "https://api/graphql", "-allowlist", "./q",
 	), &strings.Builder{})
@@ -659,4 +658,92 @@ func writeCA(t *testing.T, path string) {
 	if err := os.WriteFile(path, encoded, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestParseProxyServerTLS covers -server.tls.cert and -server.tls.key:
+// they go together, and the pair is loaded at startup so a proxy that can't
+// serve what it was told to serve never binds.
+func TestParseProxyServerTLS(t *testing.T) {
+	dir := t.TempDir()
+	cert, key := filepath.Join(dir, "s.pem"), filepath.Join(dir, "s.key")
+	writeKeyPair(t, cert, key)
+	otherCert, otherKey := filepath.Join(dir, "o.pem"), filepath.Join(dir, "o.key")
+	writeKeyPair(t, otherCert, otherKey)
+
+	var errOut strings.Builder
+	cfg, code, run := config.ParseProxy("gqlhash-proxy", proxyArgs(
+		"-upstream.url", "http://api/graphql", "-allowlist", "./q",
+		"-server.tls.cert", cert, "-server.tls.key", key,
+	), &errOut)
+	if !run || code != 0 {
+		t.Fatalf("expected a key pair to parse; code %d, stderr: %s", code, errOut.String())
+	}
+	if cfg.Server.TLSCert == nil {
+		t.Error("expected the certificate to be loaded")
+	}
+	if config.TLSServerConfig(cfg.Server.TLSCert) == nil {
+		t.Error("expected a TLS config carrying it")
+	}
+
+	// Neither flag is plain HTTP, which is the default and no error.
+	cfg, _, _ = config.ParseProxy("gqlhash-proxy", proxyArgs(
+		"-upstream.url", "http://api/graphql", "-allowlist", "./q",
+	), &strings.Builder{})
+	if cfg.Server.TLSCert != nil || config.TLSServerConfig(cfg.Server.TLSCert) != nil {
+		t.Error("expected no certificate and no TLS config without the flags")
+	}
+
+	f := func(t *testing.T, expectStderr string, a ...string) {
+		t.Helper()
+		var errOut strings.Builder
+		_, code, run := config.ParseProxy("gqlhash-proxy", proxyArgs(a...), &errOut)
+		if run || code != 2 {
+			t.Errorf("expected a start failure; code %d, args %v", code, a)
+		}
+		if !strings.Contains(errOut.String(), expectStderr) {
+			t.Errorf("expected %q in stderr; received %q", expectStderr, errOut.String())
+		}
+	}
+	const url, list = "-upstream.url", "-allowlist"
+	base := []string{url, "http://api/graphql", list, "./q"}
+	// One without the other serves neither HTTP nor HTTPS as asked for.
+	f(t, "go together", append(append([]string{}, base...), "-server.tls.cert", cert)...)
+	f(t, "go together", append(append([]string{}, base...), "-server.tls.key", key)...)
+	f(t, "-server.tls.cert", append(append([]string{}, base...),
+		"-server.tls.cert", filepath.Join(dir, "absent.pem"), "-server.tls.key", key)...)
+	// A certificate and a key that aren't a pair.
+	f(t, "-server.tls.cert", append(append([]string{}, base...),
+		"-server.tls.cert", cert, "-server.tls.key", otherKey)...)
+}
+
+// writeKeyPair writes a self-signed certificate for 127.0.0.1 and its key.
+func writeKeyPair(t *testing.T, certPath, keyPath string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "gqlhash test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, blockType string, b []byte) {
+		if err := os.WriteFile(path,
+			pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: b}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(certPath, "CERTIFICATE", der)
+	write(keyPath, "PRIVATE KEY", keyDER)
 }

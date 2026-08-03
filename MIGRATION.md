@@ -1,8 +1,6 @@
 # Migrating from v1 to v2
 
-v2 changes the hash of some documents, refuses some documents v1 accepted, and
-renames most of the Go API. Read [Hashes](#hashes) before upgrading anything
-that stored one.
+v2 changes the hash of some documents, refuses some documents v1 accepted, and renames most of the Go API. Read [Hashes](#hashes) before upgrading anything that stored one.
 
 The import path carries the major version, so nothing moves until you change it:
 
@@ -12,6 +10,12 @@ import "github.com/romshark/gqlhash/v2"
 
 ```sh
 go install github.com/romshark/gqlhash/v2/cmd/gqlhash@latest
+```
+
+`gqlhash-proxy` is new in v2 — v1 shipped the hashing command alone — so nothing
+below is a migration step for it, only what to know if you start serving one:
+
+```sh
 go install github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy@latest
 ```
 
@@ -34,7 +38,8 @@ v1 hashed a string as it was spelled; v2 hashes the value it stands for, so
 What that means where a hash was kept:
 
 - **An allowlist directory needs nothing.** `gqlhash-proxy` hashes the `.graphql`
-  files itself at startup, so the entries are rebuilt from the documents.
+  files itself at startup, so its entries are always built with the version
+  that's running.
 - **A stored hash needs rebuilding**: a persisted query registry, a cache key
   written to a shared cache, a hash committed to a repository for a CI check.
   Rehash the documents with v2 before serving with it, or the entries stop
@@ -58,9 +63,7 @@ The depth limit is new and on by default. It's past what a document written for
 an API reaches, but a generated or deeply nested one may need `-depth-limit`
 raised.
 
-In the proxy this shows up as a **skipped allowlist entry**, logged at startup
-and on reload, not as a failure to start. Read the reload output — `POST
-/reload` answers with `skipped.errors` naming every file left out.
+In the proxy this shows up as a **skipped allowlist entry**, logged at startup and on reload, not as a failure to start. Read the reload output — `POST /reload` answers with `skipped.errors` naming every file left out.
 
 ## The gqlhash command
 
@@ -82,9 +85,7 @@ v2: <stdin>:1:8: syntax error: unexpected EOF
 
 ## The Go API
 
-Every entry point takes `Options` and a `string` or `[]byte`, and reports
-failure as a [`Result`](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Result)
-value rather than an `error`.
+Every entry point takes `Options` and a `string` or `[]byte`, and reports failure as a [`Result`](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Result) value rather than an `error`.
 
 | v1 | v2 |
 | --- | --- |
@@ -111,34 +112,24 @@ if err.IsErr() {
 if !equal { /* differ */ }
 ```
 
-`Result` is not an `error`. Its zero value means nothing failed, so check
-`Err` or `IsErr`, and pass `Result.Err` to `errors.Is`:
+`Result` is not an `error`. Its zero value means nothing failed, so check `Err` or `IsErr`, and pass `Result.Err` to `errors.Is`:
 
 ```go
 if errors.Is(err.Err, gqlhash.ErrTooDeep) { /* ... */ }
 ```
 
-[`Position`](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Position) turns
-`Result.ErrOffset` into a line and a column where a message needs one — v1
-carried them in the error, v2 computes them only where they're printed.
+[`Position`](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Position) turns `Result.ErrOffset` into a line and a column where a message needs one — v1 carried them in the error, v2 computes them only where they're printed.
 
-There are five more sentinels to match on: `ErrUnexpectedVariable`,
-`ErrInvalidEscape`, `ErrMalformedNumber`, `ErrMalformedUTF8` and
-`ErrUnescapedControlChar`. Each wraps `ErrUnexpectedToken`, so code matching
-only that one keeps working.
+There are five more sentinels to match on: `ErrUnexpectedVariable`, `ErrInvalidEscape`, `ErrMalformedNumber`, `ErrMalformedUTF8` and `ErrUnescapedControlChar`. Each wraps `ErrUnexpectedToken`, so code matching only that one keeps working.
 
 ### The parser package
 
-`parser` no longer exposes the reader functions v1 had — `ReadDocument`,
-`ReadDefinition`, `ReadSelectionSet`, the `Is*` predicates and the rest. v2
-reads a document with one call:
+`parser` no longer exposes the reader functions v1 had — `ReadDocument`, `ReadDefinition`, `ReadSelectionSet`, the `Is*` predicates and the rest. v2 reads a document with one call:
 
 ```go
 err := parser.Parse(w, parser.Options{}, document) // w is an io.Writer
 ```
 
-Use [`parser.Parser`](https://pkg.go.dev/github.com/romshark/gqlhash/v2/parser#Parser)
-where this runs per request; it reuses its buffers and allocates nothing.
+Use [`parser.Parser`](https://pkg.go.dev/github.com/romshark/gqlhash/v2/parser#Parser) where this runs per request; it reuses its buffers and allocates nothing.
 
-The `HPref*` prefixes are still there and are now `byte` constants rather than
-`[]byte` variables.
+The `HPref*` prefixes are still there and are now `byte` constants rather than `[]byte` variables.

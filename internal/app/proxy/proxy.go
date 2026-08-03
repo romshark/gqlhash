@@ -111,7 +111,7 @@ type proxy struct {
 	draining chan struct{}
 }
 
-// Draining is closed when the shutdown starts, for an underlay in another
+// Draining is closed when the shutdown starts, for an implementation in another
 // package to end its streams on. See [proxy.draining].
 func (c *Core) Draining() <-chan struct{} { return c.p.draining }
 
@@ -375,7 +375,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// A GET's body was read only to see whether it had one,
 		// and one that had is refused before this. Nothing to send on,
 		// and the framing it was declared under goes with it,
-		// as under the fasthttp underlay.
+		// as under fasthttp.
 		r.Body, r.ContentLength, r.TransferEncoding = http.NoBody, 0, nil
 	}
 	// -upstream.timeout bounds the exchange, not the wait for its first byte:
@@ -496,9 +496,9 @@ func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
 }
 
 // decide is the whole decision and the only copy of it. It takes what a request
-// carries rather than a request, so every underlay reaches the same answer.
+// carries rather than a request, so every implementation reaches the same answer.
 //
-// req.Body is read and not kept, so an underlay can pass its own buffers.
+// req.Body is read and not kept, so an implementation can pass its own buffers.
 // Allocates nothing: the document is a subslice of that body,
 // and the allowlist is looked up by that subslice.
 func (p *proxy) decide(st *state, req Request) (allowed bool, err error) {
@@ -619,7 +619,7 @@ func (p *proxy) reject(w http.ResponseWriter, code int, message, extension strin
 }
 
 // rejection applies -opaque-errors. The one copy of that rule:
-// every underlay asks here, so none can leak a detail this is meant to withhold.
+// every implementation asks here, so none can leak a detail this is meant to withhold.
 func (p *proxy) rejection(
 	code int, message, extension string,
 ) (int, string, string) {
@@ -645,7 +645,7 @@ func writeError(w http.ResponseWriter, code int, message, extension string) {
 }
 
 // writeErrorBody writes the envelope alone. The status and the content type are
-// the underlay's to set; the shape is the same under all of them.
+// the implementation's to set; the shape is the same under all of them.
 func writeErrorBody(w io.Writer, message, extension string) {
 	_, _ = io.WriteString(w, `{"errors":[{"message":"`)
 	writeJSONString(w, message)
