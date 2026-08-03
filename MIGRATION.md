@@ -67,7 +67,20 @@ In the proxy this shows up as a **skipped allowlist entry**, logged at startup a
 
 ## The gqlhash command
 
-Everything v1 took still works and means the same thing. What's new:
+Everything v1 took still works and means the same thing. One thing it writes differs:
+
+**The hash ends with a newline.** v1 wrote the hash and nothing after it, so
+`gqlhash > hash.txt` produced a file of no lines: `read h < hash.txt` handed the hash
+over and reported failure, a `while read` over it ran no iteration, and two hashes
+appended to one file ran together. v2 writes the line, as `shasum`, `md5`,
+`git hash-object` and `openssl dgst` do.
+
+`$(gqlhash …)` is unaffected — command substitution strips trailing newlines — and so is
+anything comparing the output as a string. What needs the newline added is a comparison
+of the bytes: a golden file, or `gqlhash | cmp - expected`. `-version` is a line too,
+and carries the copyright and the licence under it.
+
+What's new:
 
 | flag | |
 | --- | --- |
