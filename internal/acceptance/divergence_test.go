@@ -178,6 +178,33 @@ func TestUpstreamTimeoutBoundsTheExchange(t *testing.T) {
 	})
 }
 
+// TestUpstreamTimeoutOff covers -upstream.timeout 0, which is the flag off:
+// the forward carries no bound of its own and an API slower than any default
+// still answers through the proxy.
+//
+// fasthttp has no duration meaning "no limit" — 0 is a deadline already past —
+// so this is a row where the two commands could disagree and don't.
+func TestUpstreamTimeoutOff(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		s := serveUpstream(t, tgt, func(w http.ResponseWriter, _ *http.Request) {
+			// Longer than the client of a bounded forward would wait for,
+			// short enough to keep the suite quick.
+			time.Sleep(300 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":{"ok":true}}`)
+		}, "-upstream.timeout", "0", "-server.write-timeout", "0")
+
+		code, answer := post(t, s, docAllowed)
+		if code != http.StatusOK {
+			t.Errorf("expected the forward unbounded and served; received %d: %s",
+				code, answer)
+		}
+		if answer != `{"data":{"ok":true}}` {
+			t.Errorf("expected the answer of the API; received %q", answer)
+		}
+	})
+}
+
 // TestOversizedRequestIsTimed covers a request refused before a handler saw it.
 // It's answered, so it's counted and timed like every other answer:
 // a dashboard that reads the histogram must see every request the proxy served.

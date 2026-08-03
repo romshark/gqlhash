@@ -57,6 +57,8 @@ In fasthttp v1.73.0, `RequestCtx.Done()` closes only on server shutdown, never o
 
 This is the disconnect signal specifically, not request-level control in general: fasthttp has `DoTimeout` and `DoDeadline`, and the forward is issued through `DoTimeout` under `-upstream.timeout`, as it is under net/http. A forward that outlives its budget is cut off either way — except an event stream, which has no budget to outlive under either command, see *Event streams* below. What cannot be cut off early is one whose client has already left.
 
+`-upstream.timeout 0` turns the bound off under both commands. fasthttp has no duration that means "no limit": `DoTimeout` with `0` is a deadline already past, and `MaxConnWaitTimeout` at `0` waits for no connection at all, so this command spells the flag being off as a bound no process outlives. `TestUpstreamTimeoutOff` pins that both serve an API slower than any default.
+
 ### Framing is normalized
 
 An allowed document sent with `Transfer-Encoding: chunked`, as the upstream receives it:
