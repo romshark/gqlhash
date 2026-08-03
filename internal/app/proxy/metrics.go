@@ -26,18 +26,20 @@ const (
 	decisionAmbiguous
 	decisionTooDeep
 	decisionBatchTooLarge
+	decisionMethodNotAllowed
 	decisionCount
 )
 
 // decisionLabels is what a dashboard groups by, in the order of the decisions.
 var decisionLabels = [decisionCount]string{
-	decisionAllowed:       "allowed",
-	decisionRejected:      "rejected",
-	decisionMalformed:     "malformed",
-	decisionTooLarge:      "too_large",
-	decisionAmbiguous:     "ambiguous",
-	decisionTooDeep:       "too_deep",
-	decisionBatchTooLarge: "batch_too_large",
+	decisionAllowed:          "allowed",
+	decisionRejected:         "rejected",
+	decisionMalformed:        "malformed",
+	decisionTooLarge:         "too_large",
+	decisionAmbiguous:        "ambiguous",
+	decisionTooDeep:          "too_deep",
+	decisionBatchTooLarge:    "batch_too_large",
+	decisionMethodNotAllowed: "method_not_allowed",
 }
 
 func (d decision) String() string { return decisionLabels[d] }
@@ -160,6 +162,7 @@ func (c *proxyCollector) Collect(ch chan<- prometheus.Metric) {
 	count(made.ambiguous, decisionAmbiguous)
 	count(made.tooDeep, decisionTooDeep)
 	count(made.batchBig, decisionBatchTooLarge)
+	count(made.methodBad, decisionMethodNotAllowed)
 	ch <- prometheus.MustNewConstMetric(descUpstreamErrors,
 		prometheus.CounterValue, float64(made.upstream))
 

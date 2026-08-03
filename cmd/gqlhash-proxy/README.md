@@ -12,7 +12,7 @@ gqlhash-proxy \
   -control.listen 127.0.0.1:9090
 ```
 
-`-server.listen` serves the proxy on every path: the request path is never routed on, and `-upstream.url` is the endpoint the forwarded request reaches. The document is read where [GraphQL over HTTP](https://graphql.github.io/graphql-over-http/draft/) puts it: the `query` parameter of a `GET`, or the `query` member of an `application/json` body. That specification is a working draft and defines neither an `application/graphql` body nor batching; the proxy reads both anyway, the first as the document itself, the second under `-max-batch`.
+`-server.listen` serves the proxy on every path: the request path is never routed on, and `-upstream.url` is the endpoint the forwarded request reaches. The method is another matter — `GET` and `POST` are served and every other method is answered `405` with `Allow: GET, POST`, before the document is read at all. Those are the two [GraphQL over HTTP](https://graphql.github.io/graphql-over-http/draft/) defines, and a `DELETE` carrying an allowed document would otherwise reach the API as a shape no entry of the allowlist describes. The document is read where that specification puts it: the `query` parameter of a `GET`, or the `query` member of an `application/json` body. That specification is a working draft and defines neither an `application/graphql` body nor batching; the proxy reads both anyway, the first as the document itself, the second under `-max-batch`.
 
 `-upstream.url` is that endpoint whole, its query included: an API reached as `https://api.example/graphql?env=staging` gets `env=staging` on every forwarded request, ahead of whatever the client sent. Only the path and the query of the incoming request are the proxy's to decide — the path is replaced by the endpoint's, the query is joined onto the endpoint's — so nothing else of the URL is dropped on the way. Two shapes are refused at startup rather than taken and ignored:
 
@@ -53,7 +53,7 @@ gqlhash-proxy -upstream.url https://api.internal/graphql -allowlist ./queries \
 
 `-control.listen 127.0.0.1:9090` serves the control server on that address, which is separate from the port that serves traffic. It provides [Prometheus](https://prometheus.io/) metrics on `/metrics` and rereads the allowlist on `POST /reload`.
 
-`/status` answers what the proxy has decided so far: the size of the allowlist, when it was loaded, and the counters for every decision and for upstream failures. Each refusal is counted apart: `rejected` for a document that isn't on the list, `malformed` for a request that carries none, `too_large` past `-server.max-body`, `ambiguous` for one naming its document twice, `too_deep` past the depth limit, `batch_too_large` past `-max-batch`. Like the metrics it needs no token, and like them it isn't served on the traffic port — it's operational state, not something a client of the API should see.
+`/status` answers what the proxy has decided so far: the size of the allowlist, when it was loaded, and the counters for every decision and for upstream failures. Each refusal is counted apart: `rejected` for a document that isn't on the list, `malformed` for a request that carries none, `too_large` past `-server.max-body`, `ambiguous` for one naming its document twice, `too_deep` past the depth limit, `batch_too_large` past `-max-batch`, `method_not_allowed` for a method other than `GET` or `POST`. Like the metrics it needs no token, and like them it isn't served on the traffic port — it's operational state, not something a client of the API should see.
 
 `GQLHASH_PROXY_CONTROL_TOKEN` requires `Authorization: Bearer <token>` on `/reload`, compared in constant time. Metrics are served without it. There is no flag for the token: a process argument is readable by anyone on the host through `ps` or `/proc/<pid>/cmdline`, the environment of a process isn't.
 
@@ -158,6 +158,6 @@ curl -N -H 'Accept: text/event-stream' -H 'Content-Type: application/json' \
   -d '{"query":"subscription { ticks }"}' http://localhost:8080/graphql
 ```
 
-**Single connection mode is not supported.** Its `PUT` reservation, its stream-opening `GET` and its `DELETE` carry no GraphQL document, and forwarding a request the allowlist never saw is the one thing this proxy is for. All three are answered `400`.
+**Single connection mode is not supported.** Its `PUT` reservation, its stream-opening `GET` and its `DELETE` carry no GraphQL document, and forwarding a request the allowlist never saw is the one thing this proxy is for. The `PUT` and the `DELETE` are answered `405`, the `GET` `400`.
 
 **WebSocket** (`graphql-ws`) can't work here at all: after the upgrade the frames are opaque, so one allowlisted handshake would buy an unhashed channel. Route it around the proxy at your ingress if you need it.

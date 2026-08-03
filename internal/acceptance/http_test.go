@@ -8,56 +8,72 @@ import (
 	"testing"
 )
 
-// TestMethods covers what the data plane makes of the method. It routes on none:
-// the document is read from the query string of a GET and from the body
-// of anything else, and which methods the API answers is the API's business.
-// A conformance suite pins that, so a server that started refusing methods
-// would be a change made on purpose rather than a difference nobody noticed.
+// TestMethods covers what the data plane makes of the method. It routes on no path,
+// and it serves two methods: GraphQL over HTTP defines the document in the
+// query string of a GET and in the body of a POST, and a request arriving as
+// anything else is refused with 405 before its document is read.
+//
+// A DELETE carrying an allowed document would otherwise reach the API as a shape
+// no entry of the allowlist describes, and what an API makes of one is the API's
+// business.
 func TestMethods(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := shared(t, tgt)
-		e.allow(t, allowedDoc)
+		e := newEnv(t, tgt, []string{allowedDoc})
 
-		// A body-carrying method reaches the API with the document it carried.
+		// The two that are served, each reading the document where it belongs.
+		if code, answer := post(t, e.server, docAllowed); code != http.StatusOK ||
+			answer != upstreamAnswer {
+			t.Errorf("POST: expected the upstream answer; received %d: %s",
+				code, answer)
+		}
+		if code, answer := get(t, e.server,
+			"query="+url.QueryEscape(allowedText)); code != http.StatusOK ||
+			answer != upstreamAnswer {
+			t.Errorf("GET: expected the upstream answer; received %d: %s",
+				code, answer)
+		}
+		if n := e.api.count(); n != 2 {
+			t.Fatalf("expected two forwarded requests; received %d", n)
+		}
+
+		// Every other method, carrying the same allowed document: the method is
+		// read before the document, so the answer is the same either way.
 		for _, method := range []string{
-			http.MethodPost, http.MethodPut, http.MethodPatch,
-			http.MethodDelete, http.MethodOptions,
+			http.MethodPut, http.MethodPatch, http.MethodDelete,
+			http.MethodOptions, http.MethodHead,
 		} {
-			req, err := http.NewRequest(method, "http://"+e.address+"/graphql",
-				strings.NewReader(docAllowed))
-			if err != nil {
-				t.Fatal(err)
-			}
-			req.Header.Set("Content-Type", "application/json")
-			code, answer := send(t, req)
-			if code != http.StatusOK || answer != upstreamAnswer {
-				t.Errorf("%s: expected the upstream answer; received %d: %s",
-					method, code, answer)
-			}
+			t.Run(method, func(t *testing.T) {
+				req, err := http.NewRequest(method,
+					"http://"+e.address+"/graphql", strings.NewReader(docAllowed))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Content-Type", "application/json")
+				code, answer, header := sendFor(t, req)
+				if code != http.StatusMethodNotAllowed {
+					t.Errorf("expected 405; received %d: %s", code, answer)
+				}
+				// RFC 9110 asks a 405 to name what is allowed.
+				if got := header.Get("Allow"); got != "GET, POST" {
+					t.Errorf("expected Allow: GET, POST; received %q", got)
+				}
+				// A HEAD carries no body to say it in.
+				if method != http.MethodHead &&
+					!strings.Contains(answer, "METHOD_NOT_ALLOWED") {
+					t.Errorf("expected the reason in the body; received %s", answer)
+				}
+			})
 		}
 
-		// A HEAD carries the same decision and no body to answer with.
-		req, err := http.NewRequest(http.MethodHead, "http://"+e.address+"/graphql",
-			strings.NewReader(docAllowed))
-		if err != nil {
-			t.Fatal(err)
+		// Nothing of them reached the API, and each is counted apart from every
+		// other refusal: a client using the wrong verb is its own event.
+		if n := e.api.count(); n != 2 {
+			t.Errorf("a refused method must not reach upstream; the API saw %d", n)
 		}
-		req.Header.Set("Content-Type", "application/json")
-		if code, answer := send(t, req); code != http.StatusOK || answer != "" {
-			t.Errorf("HEAD: expected 200 and no body; received %d: %q", code, answer)
-		}
-
-		// A document that isn't allowed is refused whatever carries it.
-		for _, method := range []string{http.MethodPut, http.MethodDelete} {
-			req, err := http.NewRequest(method, "http://"+e.address+"/graphql",
-				strings.NewReader(docRejected))
-			if err != nil {
-				t.Fatal(err)
-			}
-			req.Header.Set("Content-Type", "application/json")
-			if code, _ := send(t, req); code != http.StatusForbidden {
-				t.Errorf("%s: expected 403; received %d", method, code)
-			}
+		_, exposition := control(t, e.server, http.MethodGet, "/metrics", "")
+		if v := metricValue(t, exposition,
+			`gqlhash_proxy_requests_total{decision="method_not_allowed"}`); v != 5 {
+			t.Errorf("expected five counted method_not_allowed; received %v", v)
 		}
 	})
 }

@@ -18,11 +18,32 @@ type Core struct{ p *proxy }
 
 func (p *proxy) Core() *Core { return &Core{p: p} }
 
+// Method is the request method, as much of it as the decision needs:
+// where the document is read from, and whether the request is served at all.
+type Method uint8
+
+const (
+	// MethodOther is every method that is neither GET nor POST, and the zero
+	// value so that a Request built without one is refused rather than served.
+	//
+	// GraphQL over HTTP defines those two. Anything else carrying an allowed
+	// document would reach the API as a shape no entry of the allowlist describes,
+	// and what an API makes of a DELETE holding a query is the API's business.
+	MethodOther Method = iota
+	MethodGET
+	MethodPOST
+)
+
+// AllowedMethods is the Allow header of the 405 that answers [MethodOther],
+// which RFC 9110 requires of one.
+const AllowedMethods = "GET, POST"
+
 // Request is what the decision needs of a request, which is less than an HTTP
 // implementation carries. Each fills it from whatever types it holds.
 type Request struct {
-	// IsGET selects the query string over the body as the source of the document.
-	IsGET bool
+	// Method decides where the document is read from, and that a request is
+	// refused where it's [MethodOther].
+	Method Method
 
 	// RawQuery is the query string, unparsed. Filled whatever the method:
 	// a GET reads its document from it,
@@ -63,10 +84,17 @@ const (
 	// VerdictBatchTooLarge answers alone: the batch carries more documents than
 	// -max-batch allows, see decisionBatchTooLarge.
 	VerdictBatchTooLarge
+	// VerdictMethodNotAllowed answers alone: the method is neither GET nor POST,
+	// see [MethodOther] and decisionMethodNotAllowed.
+	VerdictMethodNotAllowed
 )
 
 // Answer is what to write when a request isn't forwarded.
 // It has already been through -opaque-errors, so an implementation writes it as it is.
+//
+// A 405 carries the Allow header of [AllowedMethods], which every implementation
+// sets from the status: RFC 9110 requires it of a 405, and under -opaque-errors
+// the status is a 403 that names nothing.
 type Answer struct {
 	Code               int
 	Message, Extension string
@@ -82,7 +110,7 @@ func (c *Core) Decide(req Request) (Verdict, Answer) {
 		p.states.Put(st)
 	}()
 
-	if !req.IsGET && int64(len(req.Body)) > p.maxBody {
+	if req.Method != MethodGET && int64(len(req.Body)) > p.maxBody {
 		p.counters.tooLarge.Add(1)
 		return VerdictTooLarge, c.answer(http.StatusRequestEntityTooLarge,
 			"request body too large", "REQUEST_TOO_LARGE")
@@ -90,6 +118,12 @@ func (c *Core) Decide(req Request) (Verdict, Answer) {
 
 	allowed, err := p.decide(st, req)
 	switch {
+	case errors.Is(err, errMethodNotAllowed):
+		p.counters.methodBad.Add(1)
+		// The Allow header belongs to the answer and is the implementation's to set,
+		// since it goes out only where the status stays a 405, see [Answer].
+		return VerdictMethodNotAllowed, c.answer(http.StatusMethodNotAllowed,
+			err.Error(), "METHOD_NOT_ALLOWED")
 	case errors.Is(err, errTooLarge):
 		p.counters.tooLarge.Add(1)
 		return VerdictTooLarge, c.answer(http.StatusRequestEntityTooLarge,
@@ -171,6 +205,8 @@ func (c *Core) Observe(v Verdict, start time.Time) {
 		c.p.metrics.Observe(decisionTooDeep, start)
 	case VerdictBatchTooLarge:
 		c.p.metrics.Observe(decisionBatchTooLarge, start)
+	case VerdictMethodNotAllowed:
+		c.p.metrics.Observe(decisionMethodNotAllowed, start)
 	default:
 		c.p.metrics.Observe(decisionMalformed, start)
 	}

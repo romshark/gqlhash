@@ -262,13 +262,23 @@ func (s *server) handle(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
+	// Asked of ctx rather than converted from the method name, which would cost a
+	// string per request. What the answer means is the core's, see [proxy.Method].
+	method := proxy.MethodOther
+	switch {
+	case ctx.IsGet():
+		method = proxy.MethodGET
+	case ctx.IsPost():
+		method = proxy.MethodPOST
+	}
+
 	req := proxy.Request{
-		IsGET: ctx.IsGet(),
+		Method: method,
 		// Read whatever the method: a request whose document is its body and
 		// that names a query parameter too is refused, not forwarded.
 		RawQuery: string(ctx.URI().QueryString()),
 	}
-	if req.IsGET {
+	if method == proxy.MethodGET {
 		// fasthttp reads the body whatever the method, so a body on a GET is
 		// there to be seen. The decision refuses it: the document is in the
 		// query string and a body is a second place it could be.
@@ -299,7 +309,7 @@ func (s *server) handle(ctx *fasthttp.RequestCtx) {
 	if s.core.LogRequests() {
 		s.log.Debug().Str("remote", ctx.RemoteAddr().String()).Msg("forwarding")
 	}
-	s.forward(ctx, req.Body, req.IsGET)
+	s.forward(ctx, req.Body, method == proxy.MethodGET)
 	// Includes the upstream answer,
 	// so a dashboard can tell the proxy apart from the API behind it.
 	s.core.Observe(proxy.VerdictAllowed, start)
@@ -334,6 +344,11 @@ func (s *server) handleReadError(ctx *fasthttp.RequestCtx, err error) {
 func (s *server) answer(ctx *fasthttp.RequestCtx, a proxy.Answer) {
 	ctx.SetStatusCode(a.Code)
 	ctx.SetContentType(s.core.ContentType())
+	// RFC 9110 asks a 405 to name what is allowed. The status decides,
+	// so -opaque-errors — which answers 403 — names nothing, as under net/http.
+	if a.Code == fasthttp.StatusMethodNotAllowed {
+		ctx.Response.Header.Set("Allow", proxy.AllowedMethods)
+	}
 	proxy.WriteErrorBody(ctx, a.Message, a.Extension)
 }
 

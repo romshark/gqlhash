@@ -17,7 +17,8 @@ import (
 // series of its own, since an operator reading a spike does something different
 // for each: an allowlist out of date, a client sending nonsense,
 // a client and -server.max-body disagreeing, somebody probing, a nesting attack,
-// and a client batching past -max-batch.
+// a client batching past -max-batch,
+// and a client using a method the proxy doesn't serve.
 //
 // On a server of its own, since what's asserted is the count.
 func TestDecisionsAreCounted(t *testing.T) {
@@ -54,10 +55,21 @@ func TestDecisionsAreCounted(t *testing.T) {
 			}
 		}
 
+		// The one refusal that isn't a POST: the method is read before the body.
+		req, err := http.NewRequest(http.MethodPut, "http://"+e.address+"/graphql",
+			strings.NewReader(docAllowed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if code, answer := send(t, req); code != http.StatusMethodNotAllowed {
+			t.Fatalf("method_not_allowed: expected 405; received %d: %s", code, answer)
+		}
+
 		_, exposition := control(t, e.server, http.MethodGet, "/metrics", "")
 		for _, decision := range []string{
 			"allowed", "rejected", "malformed", "too_large", "ambiguous", "too_deep",
-			"batch_too_large",
+			"batch_too_large", "method_not_allowed",
 		} {
 			for _, metric := range []string{
 				`gqlhash_proxy_requests_total{decision=%q} 1`,
@@ -80,13 +92,14 @@ func TestDecisionsAreCounted(t *testing.T) {
 			Ambiguous int `json:"ambiguous"`
 			TooDeep   int `json:"too_deep"`
 			BatchBig  int `json:"batch_too_large"`
+			MethodBad int `json:"method_not_allowed"`
 		}
 		if err := json.Unmarshal([]byte(body), &status); err != nil {
 			t.Fatalf("answering no JSON: %v: %s", err, body)
 		}
 		if status.Allowed != 1 || status.Rejected != 1 || status.Malformed != 1 ||
 			status.TooLarge != 1 || status.Ambiguous != 1 || status.TooDeep != 1 ||
-			status.BatchBig != 1 {
+			status.BatchBig != 1 || status.MethodBad != 1 {
 			t.Errorf("expected one of each; received %s", body)
 		}
 	})

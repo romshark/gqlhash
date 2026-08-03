@@ -43,6 +43,7 @@ type counters struct {
 	ambiguous paddedCounter
 	tooDeep   paddedCounter
 	batchBig  paddedCounter
+	methodBad paddedCounter
 	upstream  paddedCounter
 }
 
@@ -62,6 +63,7 @@ type decisions struct {
 	ambiguous uint64
 	tooDeep   uint64
 	batchBig  uint64
+	methodBad uint64
 	upstream  uint64
 }
 
@@ -74,6 +76,7 @@ func (c *counters) snapshot() decisions {
 		ambiguous: c.ambiguous.Load(),
 		tooDeep:   c.tooDeep.Load(),
 		batchBig:  c.batchBig.Load(),
+		methodBad: c.methodBad.Load(),
 		upstream:  c.upstream.Load(),
 	}
 }
@@ -334,6 +337,20 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"operation not allowed", "OPERATION_NOT_ALLOWED")
 		p.metrics.Observe(decisionTooDeep, start)
 		return
+	case errors.Is(err, errMethodNotAllowed):
+		p.counters.methodBad.Add(1)
+		code, message, extension := p.rejection(http.StatusMethodNotAllowed,
+			err.Error(), "METHOD_NOT_ALLOWED")
+		// RFC 9110 asks a 405 to name what is allowed. Under -opaque-errors the
+		// answer is a 403 that names nothing, so the header follows the status.
+		if code == http.StatusMethodNotAllowed {
+			// Assigned rather than Set, so a refusal builds no slice,
+			// as writeError does with the content type.
+			w.Header()["Allow"] = allowHeader
+		}
+		writeError(w, code, message, extension)
+		p.metrics.Observe(decisionMethodNotAllowed, start)
+		return
 	case errors.Is(err, errBatchTooLarge):
 		p.counters.batchBig.Add(1)
 		p.reject(w, http.StatusRequestEntityTooLarge,
@@ -481,7 +498,14 @@ var errUpstreamSwitchedProtocols = errors.New(
 // It allocates nothing: the body lands in the buffer of st, the document is a
 // subslice of that buffer, and the allowlist is looked up by that subslice.
 func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
-	if r.Method == http.MethodGet {
+	method := methodOf(r.Method)
+	if method == MethodOther {
+		// Refused for the method alone, so the body is never read: whatever a
+		// PUT carries, no allowlist entry describes a request that reaches the
+		// API as one.
+		return p.decide(st, Request{Method: method})
+	}
+	if method == MethodGET {
 		// A body is bytes, not a framing: `Content-Length: 0` and an empty
 		// chunked body both name no document. A length of 0 is net/http for
 		// "no bytes under either framing", so only an unknown or non-zero one
@@ -493,13 +517,14 @@ func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
 			}
 		}
 		return p.decide(st, Request{
-			IsGET: true, RawQuery: r.URL.RawQuery, HasBody: len(st.body) > 0,
+			Method: MethodGET, RawQuery: r.URL.RawQuery, HasBody: len(st.body) > 0,
 		})
 	}
 	if err = p.readBody(st, r); err != nil {
 		return false, err
 	}
 	return p.decide(st, Request{
+		Method:         MethodPOST,
 		RawQuery:       r.URL.RawQuery,
 		BodyIsDocument: isGraphQLContentType(r.Header.Get("Content-Type")),
 		Body:           st.body,
@@ -515,7 +540,15 @@ func (p *proxy) check(st *state, r *http.Request) (allowed bool, err error) {
 func (p *proxy) decide(st *state, req Request) (allowed bool, err error) {
 	var value []byte
 
-	if req.IsGET {
+	switch req.Method {
+	case MethodGET, MethodPOST:
+	default:
+		// Neither of the two GraphQL over HTTP defines, so there's nothing to
+		// read and nothing an allowlist could say about it, see [MethodOther].
+		return false, errMethodNotAllowed
+	}
+
+	if req.Method == MethodGET {
 		// A GET carries its document in the query string, so a body on one is a
 		// second place it could be, and which an API reads is the API's
 		// business. Same question a duplicate query member asks, same answer:
@@ -670,6 +703,9 @@ func writeErrorBody(w io.Writer, message, extension string) {
 // contentTypeJSON is shared, so writing an error answer allocates no slice.
 var contentTypeJSON = []string{"application/json; charset=utf-8"}
 
+// allowHeader is the same for the Allow of a 405, see [AllowedMethods].
+var allowHeader = []string{AllowedMethods}
+
 // jsonEscape is the escape for every byte a JSON string can't carry as it is.
 // A quote and a backslash are handled apart, being the only two above 0x1F.
 var jsonEscape = func() (table [0x20]string) {
@@ -745,6 +781,18 @@ func setForwarded(r *httputil.ProxyRequest, trust bool) {
 	if proto != "" {
 		r.Out.Header.Set("X-Forwarded-Proto", proto)
 	}
+}
+
+// methodOf is the [Method] a net/http request name stands for.
+// The fasthttp server asks its own request, which carries the method as bytes.
+func methodOf(name string) Method {
+	switch name {
+	case http.MethodGet:
+		return MethodGET
+	case http.MethodPost:
+		return MethodPOST
+	}
+	return MethodOther
 }
 
 func isGraphQLContentType(ct string) bool {
