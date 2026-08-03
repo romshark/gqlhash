@@ -277,7 +277,8 @@ func (c *components) serveOn(
 			log.Error().Err(err).Msg("serving the control server")
 		}
 	}()
-	log.Info().Str("address", controlAddress).Msg("serving /metrics and /reload")
+	log.Info().Str("address", controlAddress).
+		Msg("serving /metrics, /status, /healthz and /reload")
 	listening := log.Info().
 		Str("address", listener.Addr().String()).
 		Str("upstream", cfg.Upstream.URL.String()).
