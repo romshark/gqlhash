@@ -288,6 +288,15 @@ func TestParseProxyErrors(t *testing.T) {
 		ok, "http://x", "-allowlist", ".", "-server.read-timeout", "1s")
 	f(t, 2, "-server.idle-timeout must be 0 or more",
 		ok, "http://x", "-allowlist", ".", "-server.idle-timeout", "-1s")
+	// A negative upstream timeout would reach the write timeout derived from it.
+	f(t, 2, "-upstream.timeout must be 0 or more",
+		ok, "http://x", "-allowlist", ".", "-upstream.timeout", "-5s")
+
+	// A body limit below 1 refuses every POST, an empty one included.
+	f(t, 2, "-server.max-body must be 1 or more",
+		ok, "http://x", "-allowlist", ".", "-server.max-body", "0")
+	f(t, 2, "-server.max-body must be 1 or more",
+		ok, "http://x", "-allowlist", ".", "-server.max-body", "-1")
 
 	// An idle pool of zero would fall back to the two connections of the standard
 	// library, which is no pool at this rate.

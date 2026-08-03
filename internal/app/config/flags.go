@@ -506,6 +506,9 @@ func ParseProxyFor(
 	}
 	cfg.DepthLimit = *fDepthLimit
 
+	// Every timeout is a duration to wait, so a negative one asks for nothing this
+	// can do. Refused rather than read as 0 — the two mean opposite things here,
+	// 0 being no bound at all, and a deployment that wrote one by accident is told.
 	for _, t := range []struct {
 		name  string
 		value time.Duration
@@ -514,11 +517,21 @@ func ParseProxyFor(
 		{"server.read-timeout", cfg.Server.ReadTimeout},
 		{"server.write-timeout", cfg.Server.WriteTimeout},
 		{"server.idle-timeout", cfg.Server.IdleTimeout},
+		// Checked here rather than where it's used, so it can't reach the write
+		// timeout below and take that one negative with it.
+		{"upstream.timeout", cfg.Upstream.Timeout},
 	} {
 		if t.value < 0 {
 			_, _ = fmt.Fprintf(stderr, "-%s must be 0 or more\n", t.name)
 			return cfg, 2, false
 		}
+	}
+	// A body of 0 bytes is no request the proxy can read a document out of,
+	// so anything below 1 refuses every POST there is — including an empty one,
+	// which is a 413 for a request that carried nothing.
+	if cfg.Server.MaxBody < 1 {
+		_, _ = fmt.Fprintln(stderr, "-server.max-body must be 1 or more")
+		return cfg, 2, false
 	}
 	// An unset write timeout follows the upstream timeout, and is off where that
 	// one is: a bound of its own would then be the shorter of the two,

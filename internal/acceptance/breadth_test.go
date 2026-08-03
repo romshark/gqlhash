@@ -1091,24 +1091,32 @@ func TestFlagsThatAreOnlyEverParsed(t *testing.T) {
 	})
 }
 
-// TestMaxBodyZeroRefusesEveryBody covers -server.max-body 0, which every other
-// duration and size flag reads as "no limit" and which here is a limit of zero.
+// TestMaxBodyBelowOneIsRefused covers -server.max-body below 1,
+// which every other size and duration flag reads as "no limit" and
+// which here is a limit no body can be under.
 //
-// It starts and then refuses every request carrying a body, while a GET whose
-// document is in the query string is still served. An unguarded comparison
-// rather than a design, pinned so changing it is a decision somebody took.
-func TestMaxBodyZeroRefusesEveryBody(t *testing.T) {
+// Refused at startup, where a value nothing can be served under belongs.
+// It used to be taken: the proxy started and answered 413 to every POST there is,
+// an empty one included, while a GET carrying its document in the query string was
+// still served.
+func TestMaxBodyBelowOneIsRefused(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc}, "-server.max-body", "0")
+		dir := t.TempDir()
+		writeDoc(t, dir, "a.graphql", allowedDoc)
 
-		if code, answer := post(t, e.server, docAllowed); code !=
-			http.StatusRequestEntityTooLarge {
-			t.Errorf("expected 413 for any body; received %d: %s", code, answer)
-		}
-		// The query string isn't a body, so a GET is unaffected.
-		if code, answer := get(t, e.server,
-			"query="+url.QueryEscape(allowedText)); code != http.StatusOK {
-			t.Errorf("expected the GET served; received %d: %s", code, answer)
+		for _, value := range []string{"0", "-1"} {
+			t.Run(value, func(t *testing.T) {
+				code, _, stderr := run(t, tgt,
+					"-upstream.url", "http://api:4000/graphql", "-allowlist", dir,
+					"-server.max-body", value)
+				if code != exitBadArgs {
+					t.Errorf("expected exit %d; received %d: %s",
+						exitBadArgs, code, stderr)
+				}
+				if !strings.Contains(stderr, "-server.max-body must be 1 or more") {
+					t.Errorf("expected the reason named; received %s", stderr)
+				}
+			})
 		}
 	})
 }
