@@ -92,10 +92,19 @@ func Run(
 		return 1
 	}
 
+	// The hash and a newline, which is what every tool of this kind writes —
+	// shasum, md5, git hash-object, openssl dgst — and what makes the output a
+	// line: without it `read h < hash.txt` hands the hash over and reports
+	// failure, a `while read` over the file runs no iteration at all, and two
+	// hashes appended to one file run together. Command substitution strips it,
+	// so `$(gqlhash …)` reads the same either way.
+	//
+	// One write, so a hash reaches a pipe whole.
+	//
 	// A failed write is what a closed pipe looks like: `gqlhash -file q.graphql
 	// | head -1` leaves nobody to read the answer. An exit code like every other
 	// failure here, rather than a goroutine dump over what the reader did get.
-	if _, err = io.WriteString(stdout, encoded); err != nil {
+	if _, err = io.WriteString(stdout, encoded+"\n"); err != nil {
 		_, _ = fmt.Fprintf(stderr, "writing the hash: %v\n", err)
 		return 1
 	}

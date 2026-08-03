@@ -32,7 +32,22 @@ func (r *IORecorder) Write(data []byte) (int, error) {
 
 func args(a ...string) []string { return append([]string{"gqlhash"}, a...) }
 func stderr(w ...string) Stderr { return Stderr(w) }
-func stdout(w ...string) Stdout { return Stdout(w) }
+
+// printed is the hash a run wrote, without the newline it ends with.
+// TestRun pins that newline for every format and function;
+// the tests using this are about the hash itself.
+func printed(out *IORecorder) string {
+	return strings.TrimSuffix(strings.Join(*out, ""), "\n")
+}
+
+// stdout is what a run writes to stdout. The newline the hash ends with is added
+// here rather than repeated in every row below, so the tables stay hashes.
+func stdout(w ...string) Stdout {
+	if len(w) > 0 {
+		w[len(w)-1] += "\n"
+	}
+	return Stdout(w)
+}
 
 func TestRun(t *testing.T) {
 	f := func(
@@ -140,6 +155,35 @@ func TestRun(t *testing.T) {
 		args(`-file`, "non-existing-file.graphql"), "this must not be read")
 }
 
+// TestRunEndsTheHashWithANewline covers the byte after the hash, which makes the
+// output a line rather than a fragment: without it `read h < hash.txt` hands the
+// hash over and reports failure, a `while read` over that file runs no iteration,
+// and two hashes appended to one file run together. Every tool of this kind writes
+// it — shasum, md5, git hash-object, openssl dgst.
+//
+// One write, so a hash reaches a pipe whole.
+func TestRunEndsTheHashWithANewline(t *testing.T) {
+	for _, format := range []string{"hex", "base32", "base64", "base64url"} {
+		t.Run(format, func(t *testing.T) {
+			out, errOut := new(IORecorder), new(IORecorder)
+			if code := hasher.Run("gqlhash", "dev", args("-format", format),
+				out, errOut, strings.NewReader("{foo}")); code != 0 {
+				t.Fatalf("code %d; stderr: %v", code, *errOut)
+			}
+			if len(*out) != 1 {
+				t.Errorf("expected one write; received %d: %v", len(*out), *out)
+			}
+			got := strings.Join(*out, "")
+			if !strings.HasSuffix(got, "\n") {
+				t.Errorf("expected the hash to end with a newline; received %q", got)
+			}
+			if strings.Count(got, "\n") != 1 {
+				t.Errorf("expected one newline and no more; received %q", got)
+			}
+		})
+	}
+}
+
 // TestRunOutputEncodings checks that base32 and base64 output decodes back to
 // the same digest as hex, across several hash functions (i.e. digest lengths).
 func TestRunOutputEncodings(t *testing.T) {
@@ -150,7 +194,7 @@ func TestRunOutputEncodings(t *testing.T) {
 			strings.NewReader("{foo}")); code != 0 {
 			t.Fatalf("hash %s format %s: code %d; stderr %v", hf, format, code, *errOut)
 		}
-		return strings.Join(*out, "")
+		return printed(out)
 	}
 
 	for hf := range strings.SplitSeq(config.SupportedHashFunctions, ", ") {
@@ -221,7 +265,7 @@ func TestRunIgnoreOptions(t *testing.T) {
 				out, errOut, strings.NewReader(doc)); code != 0 {
 				t.Fatalf("code %d; stderr: %v", code, *errOut)
 			}
-			if received := strings.Join(*out, ""); received != expected[m.flag] {
+			if received := printed(out); received != expected[m.flag] {
 				t.Errorf("expected the hash of Ignore %v (%s); received %s",
 					m.expect, expected[m.flag], received)
 			}
