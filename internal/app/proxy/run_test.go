@@ -193,7 +193,7 @@ func TestBuildWiring(t *testing.T) {
 	if !ok {
 		t.Fatal("expected the log level to parse")
 	}
-	c, err := build(cfg, log, Underlay{})
+	c, err := build(cfg, log, ServerImpl{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,10 +221,10 @@ func TestBuildWiring(t *testing.T) {
 		t.Error("expected the allowlist to be keyed by -hash and -ignore")
 	}
 
-	// The servers. net/http is the default underlay, so these are its fields.
+	// The servers. net/http is the default implementation, so these are its fields.
 	under, okU := c.dataPlane.(netHTTPServer)
 	if !okU {
-		t.Fatalf("expected the net/http underlay by default; received %T", c.dataPlane)
+		t.Fatalf("expected the net/http server by default; received %T", c.dataPlane)
 	}
 	srv := under.server
 	if srv.Addr != cfg.Server.Listen {
@@ -342,7 +342,7 @@ func TestRunProxyServeFails(t *testing.T) {
 		},
 		Upstream: config.ProxyUpstream{URL: upstream, Timeout: 5 * time.Second},
 	}
-	c, err := build(cfg, log, Underlay{})
+	c, err := build(cfg, log, ServerImpl{})
 	if err != nil {
 		t.Fatal(err)
 	}

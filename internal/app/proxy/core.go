@@ -13,7 +13,7 @@ import (
 // The types here name no HTTP implementation, so what a request is answered
 // with can't depend on which one served it.
 //
-// The net/http underlay lives in this package and uses the unexported form
+// The net/http server lives in this package and uses the unexported form
 // directly. Core exists for the ones that don't, see
 // [github.com/romshark/gqlhash/v2/internal/app/proxyfast].
 type Core struct{ p *proxy }
@@ -21,7 +21,7 @@ type Core struct{ p *proxy }
 func (p *proxy) Core() *Core { return &Core{p: p} }
 
 // Request is what the decision needs of a request, which is less than an HTTP
-// implementation carries. An underlay fills it from whatever types it holds.
+// implementation carries. Each fills it from whatever types it holds.
 type Request struct {
 	// IsGET selects the query string over the body as the source of the document.
 	IsGET bool
@@ -32,11 +32,11 @@ type Request struct {
 	RawQuery string
 
 	// BodyIsDocument says the body is the document itself rather than a JSON
-	// request carrying one. The underlay decides it with [IsGraphQLContentType].
+	// request carrying one. The implementation decides it with [IsGraphQLContentType].
 	BodyIsDocument bool
 
 	// Body is the whole request body, already read. Read and not kept,
-	// so an underlay owning the bytes can pass its own.
+	// so an implementation owning the bytes can pass its own.
 	Body []byte
 
 	// HasBody is asked only of a GET: one carrying a body names its document twice.
@@ -65,7 +65,7 @@ const (
 )
 
 // Answer is what to write when a request isn't forwarded.
-// It has already been through -opaque-errors, so an underlay writes it as it is.
+// It has already been through -opaque-errors, so an implementation writes it as it is.
 type Answer struct {
 	Code               int
 	Message, Extension string
@@ -120,14 +120,14 @@ func (c *Core) Decide(req Request) (Verdict, Answer) {
 	return VerdictAllowed, Answer{Code: http.StatusOK}
 }
 
-// answer applies -opaque-errors, the one rule every underlay asks for rather
+// answer applies -opaque-errors, the one rule every implementation asks for rather
 // than carrying a copy of.
 func (c *Core) answer(code int, message, extension string) Answer {
 	code, message, extension = c.p.rejection(code, message, extension)
 	return Answer{Code: code, Message: message, Extension: extension}
 }
 
-// ReadError is the answer for a request an underlay couldn't read at all.
+// ReadError is the answer for a request an implementation couldn't read at all.
 // One refused for its size counts as too_large, the rest as malformed.
 func (c *Core) ReadError(tooLarge bool) (Verdict, Answer) {
 	if tooLarge {
@@ -145,7 +145,7 @@ func (c *Core) ReadError(tooLarge bool) (Verdict, Answer) {
 //
 // No [Answer]: the status is 417 with an empty body,
 // matching what net/http's own server writes,
-// so a client sees the same answer whichever underlay carried the request.
+// so a client sees the same answer whichever implementation carried the request.
 func (c *Core) ExpectationFailed() Verdict {
 	c.p.counters.malformed.Add(1)
 	return VerdictMalformed
@@ -173,7 +173,7 @@ func (c *Core) Observe(v Verdict, start time.Time) {
 // didn't answer.
 func (c *Core) CountUpstreamError() { c.p.counters.upstream.Add(1) }
 
-// The settings an underlay needs,
+// The settings an implementation needs,
 // read rather than copied so one source stays the source.
 func (c *Core) MaxBody() int64       { return c.p.maxBody }
 func (c *Core) Debug() bool          { return c.p.debug }
@@ -186,11 +186,11 @@ func (c *Core) Write(w io.Writer, a Answer) {
 }
 
 // IsGraphQLContentType reports whether a body of this content type is the
-// document itself. It's exported for the underlays that fill [Request].
+// document itself. It's exported for the implementations that fill [Request].
 func IsGraphQLContentType(ct string) bool { return isGraphQLContentType(ct) }
 
 // WriteErrorBody writes the GraphQL error envelope, without the status or the
-// headers, which are the underlay's to set.
+// headers, which are the implementation's to set.
 func WriteErrorBody(w io.Writer, message, extension string) {
 	writeErrorBody(w, message, extension)
 }

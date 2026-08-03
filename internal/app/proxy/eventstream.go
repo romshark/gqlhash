@@ -2,7 +2,7 @@ package proxy
 
 import "strings"
 
-// The one rule for what an event stream is, so the two underlays can't disagree
+// The one rule for what an event stream is, so the two implementations can't disagree
 // about which answers escape the ordinary exchange deadlines.
 
 // eventStream is the media type GraphQL over SSE carries its results in.
@@ -11,7 +11,7 @@ const eventStream = "text/event-stream"
 // AcceptsEventStream reports whether a client asked for an event stream,
 // which is what makes a request one the proxy relays as it arrives.
 //
-// The request decides, not the answer: an underlay chooses how to carry the
+// The request decides, not the answer: an implementation chooses how to carry the
 // forward before there is an answer to look at.
 // The answer still has to agree, see [IsEventStream].
 //

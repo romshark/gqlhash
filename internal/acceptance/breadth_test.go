@@ -906,7 +906,7 @@ func TestMetricsIsAWholeExposition(t *testing.T) {
 // A timeout before the headers is a 504 (TestUpstreamTimeout). After them the
 // status is on the wire and can't be taken back, so the truncated-answer rule
 // applies instead: no complete-looking answer, and which of "nothing" and "502"
-// the client sees is the underlay's, as in TestBrokenUpstreamAnswer.
+// the client sees is the implementation's, as in TestBrokenUpstreamAnswer.
 //
 // What both keep: the timeout is an upstream failure and is counted as one.
 func TestUpstreamTimeoutAfterTheHeaders(t *testing.T) {
@@ -1061,7 +1061,7 @@ func TestFlagsThatAreOnlyEverParsed(t *testing.T) {
 			name string
 			args []string
 		}{
-			// -upstream.http2 is refused by the fasthttp underlay and taken by
+			// -upstream.http2 is refused by fasthttp and taken by
 			// the other, so what's shared is that a server given it serves.
 			// each() has no "this target speaks HTTP/2" predicate,
 			// so that's the whole rule this can hold.
@@ -1117,7 +1117,7 @@ func TestMaxBodyZeroRefusesEveryBody(t *testing.T) {
 //
 // A scheme that is neither http nor https is refused at startup, which is where
 // a value nobody can forward over belongs. Accepted, it would be read as one of
-// them anyway and differently by each underlay: an ftp:// upstream is a 502
+// them anyway and differently by each implementation: an ftp:// upstream is a 502
 // under one and a served request under the other.
 func TestUpstreamURLScheme(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {

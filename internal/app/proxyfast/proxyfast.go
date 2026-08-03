@@ -4,7 +4,7 @@
 // It's a package of its own so that only the command naming it links fasthttp,
 // which keeps the default proxy free of an HTTP implementation it never serves
 // with. The decision isn't here: every request goes through [proxy.Core], which
-// is the same code the net/http underlay reaches.
+// is the same code the net/http server reaches.
 //
 // EXPERIMENTAL, AND NOT FOR PRODUCTION USE. It exists for benchmarking,
 // and to prove the acceptance suite holds two implementations to the same rules rather
@@ -46,8 +46,8 @@ import (
 	"github.com/romshark/gqlhash/v2/internal/app/proxy"
 )
 
-// Underlay is what the command hands [proxy.RunWith].
-var Underlay = proxy.Underlay{
+// ServerImpl is what the command hands [proxy.RunWith].
+var ServerImpl = proxy.ServerImpl{
 	Name:      "fasthttp",
 	HTTP1Only: true,
 	New:       New,
@@ -76,6 +76,10 @@ type server struct {
 	scheme, host, path []byte
 	timeout            time.Duration
 	log                zerolog.Logger
+
+	// serveTLS is whether -server.tls.cert was given. Kept here rather than read
+	// off the fasthttp server, which fills its own TLSConfig in on the way up.
+	serveTLS bool
 }
 
 // continue100 is the one expectation the proxy meets: it reads every body,
@@ -94,12 +98,13 @@ func New(
 		path = "/"
 	}
 	s := &server{
-		core:    core,
-		scheme:  []byte(upstream.Scheme),
-		host:    []byte(upstream.Host),
-		path:    []byte(path),
-		timeout: cfg.Upstream.Timeout,
-		log:     log,
+		core:     core,
+		scheme:   []byte(upstream.Scheme),
+		host:     []byte(upstream.Host),
+		path:     []byte(path),
+		timeout:  cfg.Upstream.Timeout,
+		log:      log,
+		serveTLS: cfg.Server.TLSCert != nil,
 	}
 	s.client = newHostClient(cfg, upstream, false)
 	// The same upstream reached the same way, without a read deadline and
@@ -129,8 +134,8 @@ func New(
 		// fasthttp defaults this to 4KiB, past which a GET carrying its document
 		// in the query string is refused, where net/http grows its own.
 		// A buffer per connection rather than a limit, so it's sized for what a GET
-		// carries and not for -server.max-body. GQLHASH_PROXY_FHTTP.md names the
-		// ceiling it leaves.
+		// carries and not for -server.max-body.
+		// GQLHASH_PROXY_FHTTP.md names the ceiling it leaves.
 		ReadBufferSize: readBufferSize,
 		ErrorHandler:   s.handleReadError,
 		// fasthttp answers text/plain where a handler set none.
@@ -139,6 +144,7 @@ func New(
 		Logger:                &logger{log: log},
 		NoDefaultServerHeader: true,
 		CloseOnShutdown:       true,
+		TLSConfig:             config.TLSServerConfig(cfg.Server.TLSCert),
 	}
 	return s
 }
@@ -159,7 +165,7 @@ func newHostClient(
 	return &fasthttp.HostClient{
 		Addr:  upstream.Host,
 		IsTLS: upstream.Scheme == "https",
-		// The same trust the net/http underlay uses,
+		// The same trust the net/http server uses,
 		// so -upstream.tls.ca means one thing whichever binary is serving.
 		TLSConfig: config.TLSClientConfig(cfg.Upstream.TLSCA),
 		// fasthttp has no separate limit for connections opened, so MaxConns is
@@ -190,6 +196,11 @@ func newHostClient(
 }
 
 func (s *server) Serve(listener net.Listener) error {
+	if s.serveTLS {
+		// The certificate is in TLSConfig already, so this takes no file names.
+		// fasthttp wraps the listener; there's no h2 to negotiate either way.
+		return s.server.ServeTLS(listener, "", "")
+	}
 	return s.server.Serve(listener)
 }
 
@@ -371,9 +382,9 @@ var errDraining = errors.New("the proxy is draining")
 
 // maxBufferedAnswer bounds an answer read into memory on the streaming path,
 // where a client asked for a stream and the API answered something else.
-// That's the one place this underlay reads a body the streaming client gave it,
+// That's the one place this implementation reads a body the streaming client gave it,
 // and that client ignores MaxResponseBodySize: without a bound, an API that never
-// stops sending is memory exhaustion one request long. The net/http underlay
+// stops sending is memory exhaustion one request long. The net/http server
 // relays as it arrives rather than holding, so it needs none.
 const maxBufferedAnswer = 64 << 20
 
@@ -624,7 +635,7 @@ type header interface {
 
 // hopByHopHeaders belong to one connection rather than to the message,
 // so they stop here. The same list net/http/httputil carries,
-// so both underlays forward the same headers.
+// so both implementations forward the same headers.
 var hopByHopHeaders = []string{
 	"Connection",
 	"Proxy-Connection",
@@ -681,7 +692,7 @@ func splitTokens(v string) func(func(string) bool) {
 
 // setForwarded tells the upstream who the request came from.
 //
-// It follows the net/http underlay exactly, including what
+// It follows the net/http server exactly, including what
 // [net/http/httputil.ReverseProxy] does before its hook runs:
 // the client's forwarding headers are dropped from the outbound request first,
 // so without -trust-forwarded a client can't put anything of its own in them.

@@ -17,7 +17,7 @@ It's shipped as:
 Generating a gqlhash is [faster](#performance) than parsing a document into an AST and comparing the ASTs.
 
 > [!IMPORTANT]
-> Coming from v1? Some documents hash differently, so stored hashes need rebuilding. See [MIGRATION.md](MIGRATION.md).
+> See [MIGRATION.md](MIGRATION.md) for migrating from v1 to the new v2.
 
 On a 24-thread Xeon, sharing the machine with the load generator that drives it, `gqlhash-proxy` turns away **~928,000** unknown documents a second at a median of **140 µs**, and forwards **~211,000** allowed ones.
 
@@ -116,10 +116,6 @@ The hash ignores formatting, so a client that reformats, minifies or re-indents 
 The hash of a document is a key for a query plan cache or a response cache. Two clients that send the same document formatted differently share the entry.
 
 Keep the default `-ignore=nothing`: under the other modes documents differing in their values hash alike, and a cache would answer one with another's response. The hash covers the document alone, so a response cache key needs the variables and the operation name too.
-
-### Change detection
-
-Comparing the hash of a committed document against a generated one reports a change in the document and not in its layout, which is what a CI check wants to fail on.
 
 ### Grouping operations
 
@@ -284,7 +280,7 @@ echo '{ object(x: 42) { id } }' | gqlhash -ignore=variables
 
 ## Usage: Proxy
 
-[cmd/gqlhash-proxy/README.md](cmd/gqlhash-proxy/README.md) is the proxy: what it serves, how the allowlist and the control server work, every flag with its default, and what a deployment has to know about timeouts, subscriptions and protocol upgrades.
+See [cmd/gqlhash-proxy/README.md](cmd/gqlhash-proxy/README.md) for how to use the `gqlhash-proxy` to protect your GraphQL API using an allowlist of queries.
 
 ## Performance
 
@@ -413,22 +409,4 @@ Both would cost a pass over the document that hashing doesn't otherwise need —
 
 ## Development
 
-### Testing
-
-```sh
-make                               # lint, run all tests, report coverage
-make test                          # tests alone
-make acceptance                    # both proxy binaries, over real HTTP
-make acceptance FHTTP=0            # without the experimental fasthttp build, ~2x faster
-make acceptance PROXY=./my-proxy   # any implementation of the same contract
-```
-
-`./internal/acceptance` starts a real server process and drives it over HTTP, which is what lets a server written in another language be tested the same way. The contract is documented in `internal/acceptance/doc.go`.
-
-The tests that need no flags of their own share one server per binary and load the allowlist they need through the control plane, so `make` runs them with `-shuffle=on`: a test that depends on running after another fails, and the seed to reproduce it is printed.
-
-`FHTTP=0` leaves out `gqlhash-proxy-fhttp`, the experimental fasthttp build, and roughly halves the runtime. Every rule that build keeps is one `gqlhash-proxy` keeps too, so such a run still covers every rule — what it stops covering is whether the two **agree**, which is the reason both are here. Leave it out while working on a rule; leave it in before committing one. It has no effect with `PROXY=`, which names the target outright.
-
-### Coverage
-
-`make` reports it, `make cover` on its own. Two runs, since the acceptance suite drives the proxy as a separate process that `-coverprofile` can't see: `cover-unit` reports what the tests reach in process, `cover-servers` what the running servers reach. The second needs an absolute `GOCOVERDIR` and no `-cover` flag, or it silently collects nothing; the Makefile handles both. `make cover-profile` converts the servers' counters into a profile.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for how to build and test this repository.

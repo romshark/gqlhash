@@ -43,7 +43,7 @@ type streamWriter struct {
 
 	// asked is whether the client named text/event-stream in Accept.
 	// Both the ask and the answer have to hold: a stream nobody asked for is no
-	// subscription, and the fasthttp underlay picks a client before there is an
+	// subscription, and fasthttp picks a client before there is an
 	// answer to look at, so it can only go on this. Deciding on the answer alone
 	// makes the two disagree for the `*/*` client, which is most non-browsers.
 	asked bool

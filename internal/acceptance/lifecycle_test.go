@@ -64,7 +64,7 @@ func postAsync(address, body string) <-chan int {
 
 // TestGracefulShutdown asserts that a request in flight when the shutdown
 // starts is answered instead of being cut off. Which server draws that out is
-// the underlay's own code, so it's asserted of each of them.
+// the implementation's own code, so it's asserted of each of them.
 func TestGracefulShutdown(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		upstream, entered, release := blockingUpstream(t, true)

@@ -76,10 +76,6 @@ type Proxy struct {
 type ProxyServer struct {
 	Listen string
 
-	// Underlay names the HTTP implementation serving the traffic,
-	// a property of the binary rather than a flag. Reported in the startup log.
-	Underlay string
-
 	// MaxBody is the largest request body to accept, in bytes.
 	MaxBody int64
 
@@ -90,6 +86,14 @@ type ProxyServer struct {
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
+
+	// TLSCert is the certificate the proxy serves with, read from
+	// -server.tls.cert and -server.tls.key, and nil where it serves plaintext.
+	//
+	// The key pair and not the file names: loading it is a start failure,
+	// so a proxy that can't serve what it was configured to serve doesn't bind first
+	// and fail every handshake after.
+	TLSCert *tls.Certificate
 }
 
 // ProxyUpstream is the GraphQL API a request is forwarded to.
@@ -124,7 +128,7 @@ type ProxyUpstream struct {
 }
 
 // TLSClientConfig is what an https upstream's certificate is checked against,
-// and nil where that's the host's trust store, which both underlays read as the default.
+// and nil where that's the host's trust store.
 // The certificate is verified either way: nothing here turns that off,
 // and the name is checked too, see TestUpstreamTLSHostname.
 //
@@ -137,6 +141,16 @@ func TLSClientConfig(ca *x509.CertPool) *tls.Config {
 		return nil
 	}
 	return &tls.Config{RootCAs: ca} //nolint:gosec // the default floor, see above
+}
+
+// TLSServerConfig is what the data plane serves with, and nil where it serves
+// plaintext. Only the certificate is set: the protocol versions and cipher
+// suites are what crypto/tls defaults to, the same reasoning as [TLSClientConfig].
+func TLSServerConfig(cert *tls.Certificate) *tls.Config {
+	if cert == nil {
+		return nil
+	}
+	return &tls.Config{Certificates: []tls.Certificate{*cert}} //nolint:gosec // the default floor
 }
 
 // ProxyControl is the server that answers the metrics and the endpoints that
@@ -249,21 +263,15 @@ func EnvName(flag string) string {
 func ParseProxy(
 	name string, args []string, stderr io.Writer,
 ) (cfg Proxy, exitCode int, run bool) {
-	return ParseProxyFor("", false, name, args, stderr)
+	return ParseProxyFor(false, name, args, stderr)
 }
 
-// ParseProxyFor is [ParseProxy] for a binary serving with a named underlay.
-//
-// underlay is reported in the startup log. http1Only refuses -upstream.http2
-// rather than accepting the flag and serving something else.
-// An empty underlay is net/http, which has neither restriction.
+// ParseProxyFor is [ParseProxy] for a binary that serves HTTP/1.1 only, which
+// refuses -upstream.http2 rather than accepting the flag and serving something
+// else. That's gqlhash-proxy-fhttp; net/http has no such restriction.
 func ParseProxyFor(
-	underlay string, http1Only bool,
-	name string, args []string, stderr io.Writer,
+	http1Only bool, name string, args []string, stderr io.Writer,
 ) (cfg Proxy, exitCode int, run bool) {
-	if underlay == "" {
-		underlay = "nethttp"
-	}
 	cli := flag.NewFlagSet(name, flag.ContinueOnError)
 	cli.SetOutput(stderr)
 	var (
@@ -348,6 +356,13 @@ func ParseProxyFor(
 				"connection the proxy is closing. 0 leaves it off.")
 		fShutdown = cli.Duration("server.shutdown-timeout", 10*time.Second,
 			"How long to wait for in-flight requests on shutdown")
+		fTLSCert = cli.String("server.tls.cert", "",
+			"PEM file of the certificate to serve with, the leaf first and any\n"+
+				"intermediates after it. Needs -server.tls.key. Without both the\n"+
+				"proxy serves plain HTTP, which is what belongs behind a load\n"+
+				"balancer that terminates TLS itself.")
+		fTLSKey = cli.String("server.tls.key", "",
+			"PEM file of the private key for -server.tls.cert")
 
 		fVersion = cli.Bool("version", false, "Print the version to stdout and exit")
 	)
@@ -376,7 +391,6 @@ func ParseProxyFor(
 		TrustForwarded: *fTrustForwarded,
 		Server: ProxyServer{
 			Listen:            *fListen,
-			Underlay:          underlay,
 			MaxBody:           *fMaxBody,
 			ShutdownTimeout:   *fShutdown,
 			ReadHeaderTimeout: *fReadHeaderTimeout,
@@ -413,7 +427,7 @@ func ParseProxyFor(
 		return cfg, 2, false
 	}
 	// One of the two schemes a forward goes over. Anything else is read as one
-	// of them anyway, differently by each underlay: an ftp:// upstream reaches
+	// of them anyway, differently by each implementation: an ftp:// upstream reaches
 	// one as a failure and the other as a plain HTTP request that works.
 	if upstream.Scheme != "http" && upstream.Scheme != "https" {
 		_, _ = fmt.Fprintf(stderr,
@@ -422,6 +436,24 @@ func ParseProxyFor(
 		return cfg, 2, false
 	}
 	cfg.Upstream.URL = upstream
+
+	// Loaded here for the same reason as the upstream CA below: a key pair that
+	// can't be read is a configuration error, and one found at the first
+	// handshake would leave the proxy bound and failing every connection.
+	switch {
+	case (*fTLSCert == "") != (*fTLSKey == ""):
+		_, _ = fmt.Fprintln(stderr,
+			"-server.tls.cert and -server.tls.key go together: give both to serve"+
+				" HTTPS, neither to serve HTTP")
+		return cfg, 2, false
+	case *fTLSCert != "":
+		pair, err := tls.LoadX509KeyPair(*fTLSCert, *fTLSKey)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "-server.tls.cert: %v\n", err)
+			return cfg, 2, false
+		}
+		cfg.Server.TLSCert = &pair
+	}
 
 	// Read here rather than at the first forward: a CA file that isn't there or
 	// holds no certificate is a configuration error, and one that surfaced later

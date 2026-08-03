@@ -24,6 +24,15 @@ Two files whose documents hash alike are both skipped: which one a request meant
 
 A document that doesn't parse is skipped with an error log, at startup and on reload alike, so one broken file doesn't keep the rest from being served. A directory with no usable document serves an empty allowlist, rejects everything.
 
+`-server.tls.cert` and `-server.tls.key` serve the traffic port over HTTPS: a PEM certificate, the leaf first and any intermediates after it, and its key. Both or neither — one alone is a start failure, as is a pair that can't be loaded, so a proxy never binds a port it can't serve. Without them the traffic port is plain HTTP, which is what belongs behind a load balancer terminating TLS itself.
+
+```sh
+gqlhash-proxy -upstream.url http://api:4000/graphql -allowlist ./queries \
+  -server.tls.cert /etc/ssl/proxy.pem -server.tls.key /etc/ssl/proxy.key
+```
+
+Served this way `gqlhash-proxy` offers HTTP/2 over ALPN and falls back to HTTP/1.1; [`gqlhash-proxy-fhttp`](../gqlhash-proxy-fhttp/README.md) is HTTP/1.1 only. The control server on `-control.listen` is plain HTTP either way — it belongs on an address a client of the API can't reach.
+
 Most deployments put the proxy beside the API — same host, same pod, or a segment no client of the API reaches — and `http` is what that hop wants: TLS costs a handshake per connection to protect a wire nobody else is on. Reach for `https` where the upstream sits across a boundary you don't control: another cluster, another network, or a hosted GraphQL service.
 
 An `https` upstream has its certificate verified against the host's trust store. `-upstream.tls.ca` names a PEM file to verify it against instead, which is what an upstream behind a private CA needs. It replaces that trust store rather than adding to it, so only the CA you name can vouch for the API; a deployment that needs more than one — a private CA in production and a public one in staging — puts them in the same file. The file is read at startup, so one that's missing or holds no certificate stops the proxy there rather than surfacing later as an upstream that can't be reached.
@@ -70,6 +79,8 @@ Every flag of the proxy, with its default:
 | `-upstream.url` | required | the GraphQL API a request is forwarded to |
 | `-allowlist` | required | the directory the documents are read from |
 | `-server.listen` | `:8080` | where the traffic is served |
+| `-server.tls.cert` | off | PEM certificate to serve the traffic port over HTTPS with, needs `-server.tls.key` |
+| `-server.tls.key` | off | PEM private key for `-server.tls.cert` |
 | `-control.listen` | `127.0.0.1:9090` | where `/metrics`, `/status` and `/reload` are served |
 | `-hash` | `sha2` | `sha2`, `sha3`, `blake2b`, `blake2s` or `blake3` |
 | `-ignore` | `nothing` | what to leave out of the hash, see [Ignoring Input Values](../../README.md#ignoring-input-values) |

@@ -592,7 +592,7 @@ func TestAbandonedStreamLeavesThePoolClean(t *testing.T) {
 // relayed as a stream rather than bounded like an exchange.
 //
 // The client asks and the API agrees. Only the request's Accept is available to
-// both underlays: fasthttp picks a client before there is an answer to look at,
+// both implementations: fasthttp picks a client before there is an answer to look at,
 // so deciding on the answer's Content-Type alone would split the two for an API
 // that streams to a client that never asked.
 //
@@ -673,7 +673,7 @@ func TestStreamTriggerIsTheClientsAccept(t *testing.T) {
 					return
 				}
 				// Not a stream, so the bound applies. Whether the client gets a
-				// refusal or a connection that breaks is the underlay's,
+				// refusal or a connection that breaks is the implementation's,
 				// the same as any answer cut off mid-body; what must not happen is
 				// the bound being escaped by an answer nobody asked for.
 				if last > 700*time.Millisecond {
@@ -801,7 +801,7 @@ func TestStreamAfterAnEarlyHint(t *testing.T) {
 
 		// The rule both keep: a hint is not the answer. Either the stream ran
 		// past the exchange bound — the hint didn't decide it — or the client
-		// was left with no final answer at all, which is what an underlay whose
+		// was left with no final answer at all, which is what an implementation whose
 		// client can't read past a 1xx can offer. What must not happen is the
 		// hint being served as a complete answer.
 		answer := got.String()

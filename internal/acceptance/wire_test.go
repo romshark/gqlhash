@@ -182,7 +182,7 @@ func TestExpectContinue(t *testing.T) {
 // RFC 9110 has a recipient refuse an expectation it doesn't understand rather
 // than pass it on: forwarding one asks the API to answer for a request the
 // proxy is the recipient of. net/http refuses it inside its own server;
-// fasthttp knows only 100-continue, so that underlay refuses it in the handler.
+// fasthttp knows only 100-continue, so that implementation refuses it in the handler.
 // Both answer 417 and neither forwards. What counts differs,
 // as it does for every wire-level refusal.
 func TestExpectationTheProxyCantMeet(t *testing.T) {
@@ -209,7 +209,7 @@ func TestExpectationTheProxyCantMeet(t *testing.T) {
 		// in: RFC 9110 makes it a token.
 		//
 		// Only the final answer is pinned. Whether an interim 100 precedes it
-		// is the underlay's — net/http matches without case and sends one,
+		// is the implementation's — net/http matches without case and sends one,
 		// fasthttp compares byte for byte and doesn't — and both then serve the request.
 		// A client waiting for a continuation it never gets ends the
 		// wait on its own timeout, not on a request answered wrongly.

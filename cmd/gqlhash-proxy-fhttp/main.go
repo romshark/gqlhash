@@ -25,5 +25,5 @@ var Version = "dev"
 
 func main() {
 	os.Exit(proxy.RunWith(context.Background(), "gqlhash-proxy-fhttp", Version,
-		os.Args, os.Stdout, os.Stderr, proxyfast.Underlay))
+		os.Args, os.Stdout, os.Stderr, proxyfast.ServerImpl))
 }
