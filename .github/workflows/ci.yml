@@ -28,6 +28,13 @@ jobs:
         with:
           github-token: ${{ secrets.github_token }}
           path-to-lcov: coverage.lcov
+      # The race detector, on the packages whose tests reach the concurrent
+      # code in process. The acceptance suite is left out: its servers are
+      # separate processes built without -race, so the run would check only
+      # the harness. See the race target in the Makefile.
+      - name: Test with the race detector
+        run: go test -race -count=1 $(go list ./... | grep -v /internal/acceptance)
+
       - name: Run go vet
         continue-on-error: true
         run: go vet ./...
