@@ -82,7 +82,7 @@ const (
 	// see decisionTooDeep.
 	VerdictTooDeep
 	// VerdictBatchTooLarge answers alone: the batch carries more documents than
-	// -max-batch allows, see decisionBatchTooLarge.
+	// -server.max-batch allows, see decisionBatchTooLarge.
 	VerdictBatchTooLarge
 	// VerdictMethodNotAllowed answers alone: the method is neither GET nor POST,
 	// see [MethodOther] and decisionMethodNotAllowed.

@@ -19,7 +19,7 @@ var (
 	// errBatch is a batch of requests where none is expected.
 	errBatch = errors.New("batched request")
 
-	// errBatchTooLarge is a batch carrying more documents than -max-batch allows.
+	// errBatchTooLarge is a batch carrying more documents than -server.max-batch allows.
 	errBatchTooLarge = errors.New("too many documents in the batch")
 
 	errInvalidEscape  = errors.New("invalid escape sequence in query")
@@ -44,7 +44,7 @@ type span struct{ start, end int }
 // span to dst. body is one request object, or an array of them where maxBatch is
 // 1 or more. A span points at the raw JSON string contents, escapes included.
 //
-// maxBatch is -max-batch: how many documents one request may carry,
+// maxBatch is -server.max-batch: how many documents one request may carry,
 // 0 for no batching at all, which makes an array [errBatch]. A batch past it is
 // [errBatchTooLarge] and the scan stops there, so a body holding tens of
 // thousands of documents costs the cap and not the body.
@@ -105,7 +105,7 @@ func extractJSON(dst []span, body []byte, maxBatch int) ([]span, error) {
 		// One past the cap is enough to refuse, so the rest of the array is never
 		// read: a megabyte of documents costs what the cap allows plus one.
 		// Only within an array — a lone request object is one document whatever
-		// -max-batch says.
+		// -server.max-batch says.
 		if level == 2 && len(dst) > maxBatch {
 			flags |= flagTooMany
 			return true

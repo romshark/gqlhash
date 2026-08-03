@@ -95,7 +95,7 @@ type proxy struct {
 	// upstreamTimeout bounds a forward whole, see -upstream.timeout.
 	upstreamTimeout time.Duration
 
-	// maxBatch is -max-batch: how many documents one request may carry,
+	// maxBatch is -server.max-batch: how many documents one request may carry,
 	// 0 for no batch at all.
 	maxBatch int
 

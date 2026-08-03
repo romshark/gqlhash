@@ -162,12 +162,12 @@ func TestBuildWiring(t *testing.T) {
 		AllowlistDir:   dir,
 		HashFunc:       config.HashFunctionBLAKE3,
 		Ignore:         gqlhash.IgnoreInputs,
-		MaxBatch:       7,
 		OpaqueErrors:   true,
 		TrustForwarded: true,
 		Server: config.ProxyServer{
 			Listen:          "127.0.0.1:0",
 			MaxBody:         4096,
+			MaxBatch:        7,
 			ShutdownTimeout: 13 * time.Second,
 			// Every listener timeout differs from the others,
 			// so a field that reads the wrong one is visible.
@@ -208,8 +208,8 @@ func TestBuildWiring(t *testing.T) {
 		t.Errorf("expected debug logging of requests; debug %t requests %t",
 			p.debug, p.logRequests)
 	}
-	if p.maxBatch != cfg.MaxBatch {
-		t.Errorf("MaxBatch: expected %d; received %d", cfg.MaxBatch, p.maxBatch)
+	if p.maxBatch != cfg.Server.MaxBatch {
+		t.Errorf("MaxBatch: expected %d; received %d", cfg.Server.MaxBatch, p.maxBatch)
 	}
 	// The allowlist. A hit for a document of cfg.AllowlistDir under the key of
 	// cfg.HashFunc and cfg.Ignore covers the directory, the hash function and

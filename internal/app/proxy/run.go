@@ -171,7 +171,7 @@ func build(cfg config.Proxy, log zerolog.Logger, impl ServerImpl) (*components, 
 	p := newProxy(list, cfg.Upstream.URL, newHash, proxyConfig{
 		options:         options,
 		upstreamTimeout: cfg.Upstream.Timeout,
-		maxBatch:        cfg.MaxBatch,
+		maxBatch:        cfg.Server.MaxBatch,
 		opaqueErrors:    cfg.OpaqueErrors,
 		logRequests:     cfg.Log.Requests,
 		trustForwarded:  cfg.TrustForwarded,

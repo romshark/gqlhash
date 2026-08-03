@@ -152,8 +152,8 @@ func TestParseProxy(t *testing.T) {
 		t.Errorf("unexpected log defaults: %+v", cfg)
 	}
 	// Batching is off by default, which is 0 documents rather than a switch.
-	if cfg.MaxBatch != 0 {
-		t.Errorf("expected no batching by default; received %d", cfg.MaxBatch)
+	if cfg.Server.MaxBatch != 0 {
+		t.Errorf("expected no batching by default; received %d", cfg.Server.MaxBatch)
 	}
 	for _, off := range []bool{
 		cfg.OpaqueErrors,
@@ -171,7 +171,7 @@ func TestParseProxy(t *testing.T) {
 		"-server.listen", "127.0.0.1:1", "-upstream.url", "https://api/graphql",
 		"-allowlist", "./q", "-control.listen", "127.0.0.1:3",
 		"-hash", "blake3", "-ignore", "inputs",
-		"-server.max-body", "4096", "-max-batch", "5", "-opaque-errors",
+		"-server.max-body", "4096", "-server.max-batch", "5", "-opaque-errors",
 		"-log.requests", "-trust-forwarded", "-log.level", "debug",
 		"-log.json=false", "-upstream.timeout", "1s",
 		"-server.shutdown-timeout", "2s", "-server.read-header-timeout", "3s",
@@ -188,11 +188,11 @@ func TestParseProxy(t *testing.T) {
 		AllowlistDir: "./q",
 		HashFunc:     config.HashFunctionBLAKE3,
 		Ignore:       gqlhash.IgnoreInputs,
-		MaxBatch:     5,
 		OpaqueErrors: true, TrustForwarded: true,
 		Server: config.ProxyServer{
 			Listen:            "127.0.0.1:1",
 			MaxBody:           4096,
+			MaxBatch:          5,
 			ShutdownTimeout:   2 * time.Second,
 			ReadHeaderTimeout: 3 * time.Second,
 			ReadTimeout:       17 * time.Second,
@@ -502,8 +502,8 @@ func TestFlagInventory(t *testing.T) {
 		return code, run
 	}, proxyArgs("-help"), map[string]string{
 		// The flag package prints no default for a zero int,
-		// and the help text says what 0 means, see -max-batch.
-		"max-batch":                  "",
+		// and the help text says what 0 means, see -server.max-batch.
+		"server.max-batch":           "",
 		"allowlist":                  "",
 		"depth-limit":                "128",
 		"hash":                       `"sha2"`,

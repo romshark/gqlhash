@@ -18,12 +18,12 @@ import (
 // behaviour that already holds, so what they buy is that a reimplementation
 // can't get them wrong quietly.
 
-// TestBatchShapes covers -max-batch beyond the well-formed array of two.
+// TestBatchShapes covers -server.max-batch beyond the well-formed array of two.
 // Every shape here is refused with nothing forwarded, and a batch is a JSON
 // array of GraphQL requests or it isn't a batch.
 func TestBatchShapes(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc}, "-max-batch", "8")
+		e := newEnv(t, tgt, []string{allowedDoc}, "-server.max-batch", "8")
 
 		for _, tc := range []struct{ name, body string }{
 			{"an empty array", `[]`},
@@ -711,7 +711,7 @@ func TestTooDeepAcrossCarriers(t *testing.T) {
 		writeDoc(t, dir, "a.graphql", allowedDoc)
 		api := newAPI(t)
 		s := serve(t, tgt, "-upstream.url", api.URL+"/graphql", "-allowlist", dir,
-			"-depth-limit", "4", "-max-batch", "8")
+			"-depth-limit", "4", "-server.max-batch", "8")
 
 		// Nesting well past the limit.
 		deep := "{a{b{c{d{e{f{g{h{i{j{k}}}}}}}}}}}"
@@ -1080,7 +1080,7 @@ func TestFlagsThatAreOnlyEverParsed(t *testing.T) {
 			{"the log flags", []string{
 				"-log.json=false", "-log.requests", "-log.level", "debug"}},
 			{"opaque errors and batching together", []string{
-				"-opaque-errors", "-max-batch", "8"}},
+				"-opaque-errors", "-server.max-batch", "8"}},
 			{"trust-forwarded", []string{"-trust-forwarded"}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
