@@ -100,13 +100,13 @@ Every flag of the proxy, with its default:
 | `-upstream.tls.ca` | host trust store | PEM file of the certificates that may sign an `https` upstream's |
 | `-server.read-header-timeout` | 10s | how long a client may take to send the headers |
 | `-server.read-timeout` | 30s | how long a client may take to send the request |
-| `-server.write-timeout` | `-upstream.timeout` + 10s | how long answering may take |
+| `-server.write-timeout` | `-upstream.timeout` + 10s, off where that is off | how long answering may take |
 | `-server.idle-timeout` | 2m | how long an idle keep-alive connection is held |
 | `-server.shutdown-timeout` | 10s | how long the requests in flight are waited for |
 
 `0` leaves any of the timeouts off. Four of them carry a constraint worth knowing:
 
-- `-server.write-timeout` must stay above `-upstream.timeout`, or the proxy cuts off a response the upstream is still allowed to be sending. It follows that flag unless you set it, and a value at or below it is rejected at startup.
+- `-server.write-timeout` must stay above `-upstream.timeout`, or the proxy cuts off a response the upstream is still allowed to be sending — and cuts it off as a dropped connection rather than a `504`, the write deadline having passed by the time there is an answer to write. It follows that flag unless you set it, and is off where that flag is off; a value at or below it is rejected at startup.
 - `-server.read-timeout` has to fit `-server.max-body` arriving over the slowest link you serve, and must not be below `-server.read-header-timeout`, which would leave that one without effect.
 - `-server.idle-timeout` belongs above the idle timeout of any load balancer in front, or the balancer reuses a connection the proxy is closing.
 - `-upstream.max-idle-conns-per-host` is what caps connection reuse: there is one upstream, so every forwarded request draws from that one pool. It belongs at or above the requests you serve at once, or the surplus connections are dialed again per request, see [tuning](../../TUNING_GQLHASH_PROXY.md).

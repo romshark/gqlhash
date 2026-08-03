@@ -5,8 +5,6 @@ import (
 	"io"
 	"net/http"
 	"time"
-
-	"github.com/rs/zerolog"
 )
 
 // Core is the decision a proxy makes, without the HTTP machinery that carries it.
@@ -175,15 +173,10 @@ func (c *Core) CountUpstreamError() { c.p.counters.upstream.Add(1) }
 
 // The settings an implementation needs,
 // read rather than copied so one source stays the source.
-func (c *Core) MaxBody() int64       { return c.p.maxBody }
 func (c *Core) Debug() bool          { return c.p.debug }
 func (c *Core) LogRequests() bool    { return c.p.logRequests }
 func (c *Core) TrustForwarded() bool { return c.p.trustForwarded }
-func (c *Core) Log() zerolog.Logger  { return c.p.log }
 func (c *Core) ContentType() string  { return contentTypeJSON[0] }
-func (c *Core) Write(w io.Writer, a Answer) {
-	WriteErrorBody(w, a.Message, a.Extension)
-}
 
 // IsGraphQLContentType reports whether a body of this content type is the
 // document itself. It's exported for the implementations that fill [Request].
