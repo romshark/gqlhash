@@ -84,9 +84,10 @@ homebrew_casks:
           end
     # Shared, so an upgrade never says two different things about the same release.
     caveats: &caveats |
-      Upgrading from v1: some documents hash differently and a few v1 accepted
-      are now refused, so anything holding a stored hash has to rebuild it.
-      What changed:
+      Upgrading from v1: gqlhash now hashes with SHA-256 by default where v1 used
+      SHA-1, some documents hash differently under any function, and a few v1
+      accepted are now refused. Anything holding a stored hash has to rebuild it;
+      -hash sha1 keeps what v1 printed. What changed:
       https://github.com/romshark/gqlhash/blob/main/MIGRATION.md
     repository: &tap
       owner: romshark

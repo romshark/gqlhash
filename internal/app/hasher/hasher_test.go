@@ -69,23 +69,25 @@ func TestRun(t *testing.T) {
 		}
 	}
 
-	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
-		args(), "{foo}")
-	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
-		args(), "\n{\n\tfoo\n}\n")
-	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
-		args(`-format`, `hex`), "{foo}")
+	// The digest of `{foo}` under the defaults, which are sha2 and hex.
+	const fooSHA2 = `bb73ddf48baecb383eab5085e72eb325` +
+		`adf990b204b3ae84b0fe82ac77d4704d`
 
-	f(t, 0, nil, stdout(`AHkKRN2e94HSt+VtPHke6Cl6Mq8=`),
+	f(t, 0, nil, stdout(fooSHA2), args(), "{foo}")
+	f(t, 0, nil, stdout(fooSHA2), args(), "\n{\n\tfoo\n}\n")
+	f(t, 0, nil, stdout(fooSHA2), args(`-format`, `hex`), "{foo}")
+	// The same digest under every encoding, and the flag naming the default.
+	f(t, 0, nil, stdout(`u3Pd9Iuuyzg+q1CF5y6zJa35kLIEs66EsP6CrHfUcE0=`),
 		args(`-format`, `base64`), "{foo}")
-	f(t, 0, nil, stdout(`AHkKRN2e94HSt-VtPHke6Cl6Mq8=`),
+	f(t, 0, nil, stdout(`u3Pd9Iuuyzg-q1CF5y6zJa35kLIEs66EsP6CrHfUcE0=`),
 		args(`-format`, `base64url`), "{foo}")
-	f(t, 0, nil, stdout(`AB4QURG5T33YDUVX4VWTY6I65AUXUMVP`),
+	f(t, 0, nil, stdout(`XNZ535ELV3FTQPVLKCC6OLVTEWW7TEFSASZ25BFQ72BKY56UOBGQ====`),
 		args(`-format`, `base32`), "{foo}")
+	f(t, 0, nil, stdout(fooSHA2), args(`-format`, `hex`, `-hash`, `sha2`), "{foo}")
 
-	f(t, 0, nil, stdout(`bb73ddf48baecb383eab5085e72eb325`+
-		`adf990b204b3ae84b0fe82ac77d4704d`),
-		args(`-format`, `hex`, `-hash`, `sha2`), "{foo}")
+	// sha1 is still offered, and is what a v1 pipeline asks for by name.
+	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
+		args(`-format`, `hex`, `-hash`, `sha1`), "{foo}")
 	f(t, 0, nil, stdout(`249c1537af1305b6c33818b23758df6d`+
 		`1d42942959cc03f3703a86838c2e71d1`+
 		`b1666eb5f4d28371d78cd5064cf5f453`+
@@ -136,8 +138,8 @@ func TestRun(t *testing.T) {
 	if err := os.WriteFile(testInputGraphQL, []byte(`{ foo }`), 0o644); err != nil {
 		t.Fatalf("writing test input file: %v", err)
 	}
-	f(t, 0, nil, stdout(`00790a44dd9ef781d2b7e56d3c791ee8297a32af`),
-		args(`-file`, testInputGraphQL), "this must not be read")
+	f(t, 0, nil, stdout(fooSHA2), args(`-file`, testInputGraphQL),
+		"this must not be read")
 
 	// A syntax error in a file names the file, which is what makes the position
 	// resolvable for an editor.
@@ -240,11 +242,11 @@ func TestRunIgnoreOptions(t *testing.T) {
 		{"variables", gqlhash.IgnoreVariables},
 	}
 
-	// -hash defaults to sha1 and -format to hex, so this is what the command
+	// -hash defaults to sha2 and -format to hex, so this is what the command
 	// must print if, and only if, the flag reached Options.
 	expected := make(map[string]string, len(modes))
 	for _, m := range modes {
-		h, _ := config.NewHasher(config.HashFunctionSHA1)
+		h, _ := config.NewHasher(config.HashFunctionSHA2)
 		sum, err := gqlhash.AppendHash(nil, h,
 			gqlhash.Options{Ignore: m.expect}, doc)
 		if err.IsErr() {

@@ -195,7 +195,7 @@ func ParseHasher(
 		fFile   = cli.String("file", "", "Path to a file holding the document")
 		fFormat = cli.String("format", "hex",
 			"Hash format ("+SupportedOutputFormats+")")
-		fHash = cli.String("hash", "sha1",
+		fHash = cli.String("hash", "sha2",
 			"Selects the hash function ("+SupportedHashFunctions+").\n"+
 				"sha2 is SHA-256.\n"+
 				"sha3 is SHA3-512.\n"+

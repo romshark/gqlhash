@@ -161,10 +161,10 @@ func TestNewHasher(t *testing.T) {
 	}
 }
 
-// TestTablesAgree covers the tables the flag vocabulary is derived from. Every
-// name, parser and constructor comes from one row now, and what a row can still
-// get wrong is being inconsistent with itself: a name that doesn't parse back, a
-// value two rows share, a hash function nothing can construct.
+// TestTablesAgree covers the tables the flag vocabulary is derived from.
+// Every name, parser and constructor comes from one row now, and what a row can still
+// get wrong is being inconsistent with itself: a name that doesn't parse back,
+// a value two rows share, a hash function nothing can construct.
 //
 // The help strings are asserted as text because they're read by whoever runs
 // -help, so a row reordered or renamed is a change to the interface and should
@@ -172,8 +172,11 @@ func TestNewHasher(t *testing.T) {
 func TestTablesAgree(t *testing.T) {
 	t.Run("the help strings", func(t *testing.T) {
 		for _, td := range []struct{ got, want string }{
-			{config.SupportedHashFunctions, "sha1, sha2, sha3, md5, blake2b, " +
-				"blake2s, blake3, fnv, fnv1a, xxh64, crc32, crc64"},
+			// The default leads, then the rest of the collision-resistant ones,
+			// then the broken ones, then the collidable ones.
+			// So the proxy's set is the front of this list.
+			{config.SupportedHashFunctions, "sha2, sha3, blake2b, blake2s, " +
+				"blake3, sha1, md5, fnv, fnv1a, xxh64, crc32, crc64"},
 			{config.SupportedProxyHashFunctions, "sha2, sha3, blake2b, blake2s, blake3"},
 			{config.SupportedOutputFormats, "hex, base32, base64, base64url"},
 			{config.SupportedIgnoreModes, "nothing, inputs, variables"},
