@@ -5,9 +5,10 @@
 COVERDIR := $(CURDIR)/covdata
 
 # all is what a change is checked with: lint, then every test, then what they
-# covered. cover runs the tests itself, which is why test isn't in the list.
+# covered, then the race detector. cover runs the tests itself, which is why
+# test isn't in the list.
 .PHONY: all
-all: lint cover
+all: lint cover race
 
 # -shuffle=on runs the tests in a random order and prints the seed it used.
 # The acceptance suite shares a server between the tests that need no flags of their own,
@@ -18,6 +19,17 @@ SHUFFLE := -shuffle=on
 test:
 	@echo "== test =="
 	go test $(SHUFFLE) ./...
+
+# race leaves out the acceptance suite on purpose. -race instruments the test binary,
+# and the suite's servers are separate processes built without it,
+# so the run would cost the full suite's time to check only the harness —
+# which does its own locking. The concurrent code that matters is in the packages
+# below, where the tests reach it in process. To instrument the servers too,
+# resolve() in the harness has to pass -race to the builds it does.
+.PHONY: race
+race:
+	@echo "== test: the race detector =="
+	go test $(SHUFFLE) -race -count=1 $$(go list ./... | grep -v /internal/acceptance)
 
 .PHONY: lint
 lint:
