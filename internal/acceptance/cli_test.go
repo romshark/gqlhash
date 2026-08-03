@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/romshark/gqlhash/v2/internal/app/versioninfo"
 )
 
 // The exit codes the commands use. A deployment reads these to tell a
@@ -25,8 +27,19 @@ func TestCLIVersionAndHelp(t *testing.T) {
 		if code != exitOK {
 			t.Errorf("-version: expected %d; received %d: %s", exitOK, code, stderr)
 		}
-		if strings.TrimSpace(stdout) == "" {
-			t.Error("-version: expected a version on stdout")
+		// The name and the version are alone on the first line, so
+		// `-version | head -1` reads them whichever binary ran, and the notice follows.
+		// A run under -proxy.bin may carry any name, so what's pinned is the shape:
+		// `<name> v<version>` and the two lines under it.
+		lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
+		if len(lines) != 3 || !strings.Contains(lines[0], " v") {
+			t.Errorf("-version: expected `<name> v<version>` and a notice under it;"+
+				" received %q", stdout)
+			return
+		}
+		if lines[1] != versioninfo.Copyright || lines[2] != versioninfo.License {
+			t.Errorf("-version: expected the notice every command answers with;"+
+				" received %q", stdout)
 		}
 		if stderr != "" {
 			t.Errorf("-version: expected nothing on stderr; received %q", stderr)

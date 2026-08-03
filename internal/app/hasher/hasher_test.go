@@ -16,6 +16,7 @@ import (
 	"github.com/romshark/gqlhash/v2"
 	"github.com/romshark/gqlhash/v2/internal/app/config"
 	"github.com/romshark/gqlhash/v2/internal/app/hasher"
+	"github.com/romshark/gqlhash/v2/internal/app/versioninfo"
 )
 
 type (
@@ -252,12 +253,26 @@ func TestRunVersion(t *testing.T) {
 		}
 	}
 
-	// The output names the binary that ran, so a bug report says which one,
-	// and carries the license and the build information a report needs.
+	// The version and the name of the binary that ran, so a bug report says
+	// which one, and the notice under it.
 	f(t, "gqlhash", "1.2.3-test", 0,
-		[]string{"gqlhash v1.2.3-test", "MIT License", "Copyright",
-			"github.com/romshark/gqlhash/v2"},
+		[]string{"gqlhash v1.2.3-test", versioninfo.Copyright, versioninfo.License},
 		args("-version"))
+
+	// The version is alone on the first line, which is what a script reading
+	// `-version | head -1` takes, and the build information is none of it:
+	// `go version -m` prints that for any Go binary, in more detail than this could.
+	stdout, stderr := new(IORecorder), new(IORecorder)
+	if code := hasher.Run("gqlhash", "1.2.3-test", args("-version"),
+		stdout, stderr, nil); code != 0 {
+		t.Errorf("expected code 0; received %d", code)
+	}
+	got := strings.Join(*stdout, "")
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	if len(lines) != 3 || lines[0] != "gqlhash v1.2.3-test" {
+		t.Errorf("expected the version alone on the first line of three; received %q",
+			got)
+	}
 }
 
 // TestRunWriteFails covers a stdout that can't be written to, which is what a

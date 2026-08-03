@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime/debug"
 
 	"github.com/romshark/gqlhash/v2"
 	"github.com/romshark/gqlhash/v2/internal/app/config"
+	"github.com/romshark/gqlhash/v2/internal/app/versioninfo"
 )
 
 // Run hashes the document of stdin or of -file and writes the result to stdout.
@@ -102,14 +102,9 @@ func Run(
 	return 0
 }
 
+// printVersion answers -version, which the proxy command answers the same way,
+// see [versioninfo.Print].
 func printVersion(w io.Writer, name, version string) (exitCode int) {
-	_, _ = fmt.Fprintf(w, "%s v%s\n\n", name, version)
-	_, _ = fmt.Fprintln(w, "MIT License")
-	_, _ = fmt.Fprint(w, "Copyright (c) 2026 Roman Scharkov (github.com/romshark/gqlhash)\n\n")
-
-	if info, ok := debug.ReadBuildInfo(); ok {
-		_, _ = fmt.Fprintf(w, "%v\n", info)
-	}
-
+	versioninfo.Print(w, name, version)
 	return 0
 }
