@@ -102,7 +102,7 @@ func New(
 		scheme:   []byte(upstream.Scheme),
 		host:     []byte(upstream.Host),
 		path:     []byte(path),
-		timeout:  cfg.Upstream.Timeout,
+		timeout:  upstreamTimeout(cfg.Upstream.Timeout),
 		log:      log,
 		serveTLS: cfg.Server.TLSCert != nil,
 	}
@@ -149,6 +149,23 @@ func New(
 	return s
 }
 
+// noBound is how a timeout that's off is spelled where fasthttp takes a duration
+// and reads 0 as no time at all rather than no limit: a bound no process outlives.
+const noBound = 100 * 365 * 24 * time.Hour
+
+// upstreamTimeout is -upstream.timeout as this implementation carries it.
+//
+// The flag is off at 0, which net/http serves as a forward with no bound of its own.
+// fasthttp has no such value: DoTimeout with 0 is a deadline already past,
+// so every forward is a 504, and MaxConnWaitTimeout at 0 waits for no connection at all.
+// Both take [noBound] instead, so the flag means the same thing under either command.
+func upstreamTimeout(d time.Duration) time.Duration {
+	if d <= 0 {
+		return noBound
+	}
+	return d
+}
+
 // newHostClient builds the client a forward is carried with. With stream it
 // reads the answer into a body stream and puts no deadline on the connection,
 // which lets a subscription outlive -upstream.timeout.
@@ -174,7 +191,7 @@ func newHostClient(
 		// -upstream.max-idle-conns-per-host a pool size and not a concurrency limit:
 		// the surplus waits, bounded by -upstream.timeout.
 		MaxConns:            cfg.Upstream.MaxIdleConnsPerHost,
-		MaxConnWaitTimeout:  cfg.Upstream.Timeout,
+		MaxConnWaitTimeout:  upstreamTimeout(cfg.Upstream.Timeout),
 		MaxIdleConnDuration: 90 * time.Second,
 		// A pooled connection may have been closed by the upstream since,
 		// which a restart does to all of them. The request never reached it,
@@ -315,7 +332,7 @@ func (s *server) answer(ctx *fasthttp.RequestCtx, a proxy.Answer) {
 
 // streamWriteTimeout stands in for -server.write-timeout while an event stream
 // is being written. See the HeaderReceived hook in New.
-const streamWriteTimeout = 100 * 365 * 24 * time.Hour
+const streamWriteTimeout = noBound
 
 // upstreamStream is the API's answer, read by the server as it writes it to the client.
 //
