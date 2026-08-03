@@ -182,6 +182,11 @@ func (c *Core) ContentType() string  { return contentTypeJSON[0] }
 // document itself. It's exported for the implementations that fill [Request].
 func IsGraphQLContentType(ct string) bool { return isGraphQLContentType(ct) }
 
+// MergeQuery is the query string a forwarded request carries, given the query of
+// -upstream.url and the client's, see [mergeQuery].
+// Exported so every implementation builds the same one.
+func MergeQuery(upstream, client string) string { return mergeQuery(upstream, client) }
+
 // WriteErrorBody writes the GraphQL error envelope, without the status or the
 // headers, which are the implementation's to set.
 func WriteErrorBody(w io.Writer, message, extension string) {

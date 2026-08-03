@@ -14,6 +14,11 @@ gqlhash-proxy \
 
 `-server.listen` serves the proxy on every path: the request path is never routed on, and `-upstream.url` is the endpoint the forwarded request reaches. The document is read where [GraphQL over HTTP](https://graphql.github.io/graphql-over-http/draft/) puts it: the `query` parameter of a `GET`, or the `query` member of an `application/json` body. That specification is a working draft and defines neither an `application/graphql` body nor batching; the proxy reads both anyway, the first as the document itself, the second under `-allow-batch`.
 
+`-upstream.url` is that endpoint whole, its query included: an API reached as `https://api.example/graphql?env=staging` gets `env=staging` on every forwarded request, ahead of whatever the client sent. Only the path and the query of the incoming request are the proxy's to decide — the path is replaced by the endpoint's, the query is joined onto the endpoint's — so nothing else of the URL is dropped on the way. Two shapes are refused at startup rather than taken and ignored:
+
+- **A `query` parameter.** It would reach the API beside the document the client sent, and which of the two the API reads is the API's business, where the allowlist saw only one of them.
+- **Credentials**, as in `https://user:pass@api.example/graphql`. Nothing forwards them: a reverse proxy builds its request through a transport, and the userinfo of a URL becomes an `Authorization` header only in `http.Client`. Taken, they would reach the log and nothing else. They're also refused for the reason `GQLHASH_PROXY_CONTROL_TOKEN` has no flag: a process argument is readable by anyone on the host. An API that wants credentials takes them from a header the client sends.
+
 `-allowlist` is a directory of `.graphql` and `.gql` files holding the allowed documents. The proxy hashes them itself, so the documents are the source of truth. Formatting and comments may differ between a file and what a client sends. The set of definitions may not: one file is one entry.
 
 A `.graphqls` file in the same directory is read as the schema, and every document is then checked against it: one asking for a field the schema doesn't have is skipped like one that doesn't parse. Without such a file nothing is checked against a schema. Several `.graphqls` files are read as one schema, and a schema that doesn't parse is reported and leaves the documents unchecked rather than unserved.
@@ -76,7 +81,7 @@ Every flag of the proxy, with its default:
 
 | Flag | Default | |
 | --- | --- | --- |
-| `-upstream.url` | required | the GraphQL API a request is forwarded to |
+| `-upstream.url` | required | the GraphQL API a request is forwarded to, its query included |
 | `-allowlist` | required | the directory the documents are read from |
 | `-server.listen` | `:8080` | where the traffic is served |
 | `-server.tls.cert` | off | PEM certificate to serve the traffic port over HTTPS with, needs `-server.tls.key` |

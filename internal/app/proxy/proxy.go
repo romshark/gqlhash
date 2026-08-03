@@ -232,12 +232,13 @@ func newProxy(
 			r.Out.URL.Scheme = upstream.Scheme
 			r.Out.URL.Host = upstream.Host
 			r.Out.URL.Path, r.Out.URL.RawPath = upstream.Path, upstream.RawPath
-			// The client's query string, verbatim. ReverseProxy has already
-			// dropped what net/url can't parse, which for a `;`-separated query
-			// is all of it — an allowed GET reaching the API with no document.
-			// Safe to restore: the reading rule splits on `;` too, so a document
-			// named twice either way is refused rather than forwarded.
-			r.Out.URL.RawQuery = r.In.URL.RawQuery
+			// The endpoint's own parameters and then the client's, verbatim,
+			// see [mergeQuery]. ReverseProxy has already dropped what net/url
+			// can't parse, which for a `;`-separated query is all of it — an
+			// allowed GET reaching the API with no document. Safe to restore:
+			// the reading rule splits on `;` too, so a document named twice
+			// either way is refused rather than forwarded.
+			r.Out.URL.RawQuery = mergeQuery(upstream.RawQuery, r.In.URL.RawQuery)
 			// An empty Host makes the request carry the upstream URL's.
 			r.Out.Host = ""
 			// A protocol upgrade stops here. ReverseProxy strips these with the

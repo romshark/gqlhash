@@ -439,6 +439,26 @@ func ParseProxyFor(
 			*fUpstream, upstream.Scheme)
 		return cfg, 2, false
 	}
+	// Credentials reach no request: a forward is built from the scheme, the host,
+	// the path and the query, and the userinfo of a URL becomes an Authorization
+	// header in [net/http.Client], which a reverse proxy never goes through.
+	// Taken, they would reach the log and nothing else.
+	//
+	// Refused rather than implemented, on the same ground that keeps
+	// GQLHASH_PROXY_CONTROL_TOKEN off the command line: a process argument is
+	// readable by anyone on the host. A secret this proxy sends upstream belongs in
+	// the environment, whenever there's a flag for one.
+	//
+	// Redacted, so the message refusing the password doesn't echo it back.
+	if upstream.User != nil {
+		_, _ = fmt.Fprintf(stderr,
+			"-upstream.url %q must carry no credentials: nothing forwards them,\n"+
+				"and a process argument is readable by anyone on the host.\n",
+			upstream.Redacted())
+		return cfg, 2, false
+	}
+	// A fragment is taken and ignored, as it is by every HTTP client:
+	// no request carries one, so there's nothing here to refuse.
 	cfg.Upstream.URL = upstream
 
 	// Loaded here for the same reason as the upstream CA below: a key pair that

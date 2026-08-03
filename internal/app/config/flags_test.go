@@ -212,6 +212,23 @@ func TestParseProxy(t *testing.T) {
 		t.Errorf("unexpected upstream: %s", cfg.Upstream.URL)
 	}
 
+	// The URL is kept as it was given, the query of an endpoint included:
+	// it's merged into every forwarded request rather than replaced.
+	// A fragment is kept and ignored, as it is by every HTTP client.
+	errOut.Reset()
+	cfg, code, run = config.ParseProxy("gqlhash-proxy", proxyArgs(
+		"-upstream.url", "https://api/graphql?env=staging&key=abc#frag",
+		"-allowlist", "./q",
+	), &errOut)
+	if !run || code != 0 {
+		t.Fatalf("expected an endpoint query to parse; code %d, stderr: %s",
+			code, errOut.String())
+	}
+	if cfg.Upstream.URL.RawQuery != "env=staging&key=abc" {
+		t.Errorf("expected the endpoint query kept; received %q",
+			cfg.Upstream.URL.RawQuery)
+	}
+
 	// A zero timeout is no timeout at all, which is allowed and doesn't fall back
 	// to following -upstream.timeout.
 	errOut.Reset()
@@ -288,6 +305,23 @@ func TestParseProxyErrors(t *testing.T) {
 	f(t, 2, "no absolute URL", "-upstream.url", "not-a-url")
 	f(t, 2, "no absolute URL", "-upstream.url", "/only/a/path")
 	f(t, 2, "-allowlist is required", "-upstream.url", "http://x")
+
+	// Credentials reach no request, so they're refused rather than dropped.
+	f(t, 2, "must carry no credentials",
+		"-upstream.url", "http://user:pass@api/graphql", "-allowlist", ".")
+	f(t, 2, "must carry no credentials",
+		"-upstream.url", "http://user@api/graphql", "-allowlist", ".")
+	// Percent-encoded userinfo is userinfo, and an @ in the path is not.
+	f(t, 2, "must carry no credentials",
+		"-upstream.url", "http://us%65r:p%61ss@api/graphql", "-allowlist", ".")
+	// The message refusing a password doesn't echo it.
+	var errPassword strings.Builder
+	_, _, _ = config.ParseProxy("gqlhash-proxy", proxyArgs(
+		"-upstream.url", "http://user:hunter2@api/graphql", "-allowlist", ".",
+	), &errPassword)
+	if strings.Contains(errPassword.String(), "hunter2") {
+		t.Errorf("expected the password redacted; received %q", errPassword.String())
+	}
 
 	const ok = "-upstream.url"
 
