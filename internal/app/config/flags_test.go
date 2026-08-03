@@ -213,6 +213,23 @@ func TestParseProxy(t *testing.T) {
 		cfg.Server.ReadHeaderTimeout != 0 {
 		t.Errorf("expected every timeout off; received %+v", cfg)
 	}
+
+	// An unbounded upstream leaves the write timeout off too,
+	// rather than deriving the 10s that would cut off every answer slower than that —
+	// and cut it off as a dropped connection, the write deadline having passed.
+	errOut.Reset()
+	cfg, code, run = config.ParseProxy("gqlhash-proxy", proxyArgs(
+		"-upstream.url", "http://api/graphql", "-allowlist", "./q",
+		"-upstream.timeout", "0",
+	), &errOut)
+	if !run || code != 0 {
+		t.Fatalf("expected a zero upstream timeout to parse; code %d, stderr: %s",
+			code, errOut.String())
+	}
+	if cfg.Server.WriteTimeout != 0 {
+		t.Errorf("expected the write timeout off where -upstream.timeout is; "+
+			"received %v", cfg.Server.WriteTimeout)
+	}
 }
 
 func TestParseProxyErrors(t *testing.T) {

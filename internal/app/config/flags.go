@@ -344,12 +344,14 @@ func ParseProxyFor(
 				"one byte at a time. 0 leaves it off.")
 		fReadTimeout = cli.Duration("server.read-timeout", 30*time.Second,
 			"How long a client may take to send the whole request. It has to fit\n"+
-				"-server.max-body arriving over the slowest link you serve. 0 leaves it off.")
+				"-server.max-body arriving over the slowest link you serve. "+
+				"0 leaves it off.")
 		fWriteTimeout = cli.Duration("server.write-timeout", 0,
 			"How long answering a request may take. "+
 				"Unset follows -upstream.timeout with\n"+
 				"10s to spare, since a shorter one would cut off a response the\n"+
-				"upstream is still allowed to be sending. 0 leaves it off.")
+				"upstream is still allowed to be sending, and is off where that\n"+
+				"timeout is off. 0 leaves it off.")
 		fIdleTimeout = cli.Duration("server.idle-timeout", 120*time.Second,
 			"How long an idle keep-alive connection is held. Behind a load\n"+
 				"balancer, keep this above its own idle timeout, or it reuses a\n"+
@@ -518,11 +520,16 @@ func ParseProxyFor(
 			return cfg, 2, false
 		}
 	}
-	// An unset write timeout follows the upstream timeout. Set explicitly,
-	// it has to leave the upstream its full time,
-	// or the proxy cuts off a response still arriving.
+	// An unset write timeout follows the upstream timeout, and is off where that
+	// one is: a bound of its own would then be the shorter of the two,
+	// which is what this rule exists to refuse. It would also be the worse half of it —
+	// a write past the deadline fails, so the answer the upstream did send reaches
+	// the client as a dropped connection rather than as a 504.
+	// Set explicitly, it has to leave the upstream its full time.
 	if !isSet(cli, "server.write-timeout") {
-		cfg.Server.WriteTimeout = cfg.Upstream.Timeout + 10*time.Second
+		if cfg.Upstream.Timeout > 0 {
+			cfg.Server.WriteTimeout = cfg.Upstream.Timeout + 10*time.Second
+		}
 	} else if cfg.Server.WriteTimeout != 0 && cfg.Server.WriteTimeout <= cfg.Upstream.Timeout {
 		_, _ = fmt.Fprintf(stderr,
 			"-server.write-timeout %v must be above -upstream.timeout %v, "+

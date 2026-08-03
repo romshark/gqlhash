@@ -111,10 +111,6 @@ type proxy struct {
 	draining chan struct{}
 }
 
-// Draining is closed when the shutdown starts, for an implementation in another
-// package to end its streams on. See [proxy.draining].
-func (c *Core) Draining() <-chan struct{} { return c.p.draining }
-
 func (p *proxy) StartDraining() {
 	p.drainOnce.Do(func() { close(p.draining) })
 }
