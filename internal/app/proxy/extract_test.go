@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// noBatch is -max-batch off, inBatch a cap above every batch in these tables,
+// noBatch is -server.max-batch off, inBatch a cap above every batch in these tables,
 // so a row says whether batching is on rather than what the cap happens to be.
 // TestExtractJSONBatchCap covers the cap itself.
 const (
@@ -60,7 +60,7 @@ func TestExtractJSON(t *testing.T) {
 	f(t, errNoQuery, nil, `[{"variables":{}}]`, inBatch)
 }
 
-// TestExtractJSONBatchCap covers -max-batch:
+// TestExtractJSONBatchCap covers -server.max-batch:
 // a batch of up to that many documents is read, one past it is refused,
 // and a lone request object is one document whatever the cap says.
 //

@@ -223,7 +223,7 @@ func FuzzExtractJSONAgainstEncodingJSON(f *testing.F) {
 			}
 		}
 
-		// A batch of them, where -max-batch takes an array of up to that many and
+		// A batch of them, where -server.max-batch takes an array of up to that many and
 		// every document of it has to be allowed. The cap is above what a seed carries,
 		// so what's compared is the reading and not the limit.
 		if documents, ok := checked(inBatch); ok {

@@ -17,7 +17,7 @@ import (
 // series of its own, since an operator reading a spike does something different
 // for each: an allowlist out of date, a client sending nonsense,
 // a client and -server.max-body disagreeing, somebody probing, a nesting attack,
-// a client batching past -max-batch,
+// a client batching past -server.max-batch,
 // and a client using a method the proxy doesn't serve.
 //
 // On a server of its own, since what's asserted is the count.
@@ -28,7 +28,7 @@ func TestDecisionsAreCounted(t *testing.T) {
 
 	each(t, func(t *testing.T, tgt target) {
 		e := newEnv(t, tgt, []string{allowedDoc},
-			"-server.max-body", "4096", "-max-batch", "2")
+			"-server.max-body", "4096", "-server.max-batch", "2")
 
 		// One request per decision.
 		for _, tc := range []struct {
@@ -44,7 +44,7 @@ func TestDecisionsAreCounted(t *testing.T) {
 				rejectedText + `"}`, http.StatusBadRequest},
 			{"too_deep", `{"query":` + strconv.Quote(tooDeep) + `}`,
 				http.StatusForbidden},
-			// One past -max-batch, which this run sets to 2.
+			// One past -server.max-batch, which this run sets to 2.
 			{"batch_too_large", `[{"query":"` + allowedText + `"},{"query":"` +
 				allowedText + `"},{"query":"` + allowedText + `"}]`,
 				http.StatusRequestEntityTooLarge},
@@ -273,7 +273,7 @@ func TestMetricsAllowlistTracksReload(t *testing.T) {
 // Counting per document would make a request rate that no client's traffic matches.
 func TestMetricsBatchCountsOnce(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc, "{ b }"}, "-max-batch", "8")
+		e := newEnv(t, tgt, []string{allowedDoc, "{ b }"}, "-server.max-batch", "8")
 
 		batch := `[{"query":"` + allowedText + `"},{"query":"{ b }"}]`
 		if code, answer := post(t, e.server, batch); code != http.StatusOK {

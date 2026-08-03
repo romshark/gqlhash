@@ -241,7 +241,7 @@ func TestOpaqueErrors(t *testing.T) {
 	})
 }
 
-// TestBatch covers -max-batch: an array of requests is refused outright
+// TestBatch covers -server.max-batch: an array of requests is refused outright
 // without it, and every document of one has to be allowed with it.
 func TestBatch(t *testing.T) {
 	const batch = `[{"query":"` + allowedText + `"},{"query":"{ b }"}]`
@@ -249,10 +249,10 @@ func TestBatch(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := newEnv(t, tgt, []string{allowedDoc, "{ b }"})
 		if code, body := post(t, e.server, batch); code != http.StatusBadRequest {
-			t.Errorf("expected 400 without -max-batch; received %d: %s", code, body)
+			t.Errorf("expected 400 without -server.max-batch; received %d: %s", code, body)
 		}
 
-		allowed := newEnv(t, tgt, []string{allowedDoc, "{ b }"}, "-max-batch", "8")
+		allowed := newEnv(t, tgt, []string{allowedDoc, "{ b }"}, "-server.max-batch", "8")
 		if code, body := post(t, allowed.server, batch); code != http.StatusOK {
 			t.Errorf("expected 200; received %d: %s", code, body)
 		}
@@ -262,7 +262,7 @@ func TestBatch(t *testing.T) {
 		}
 
 		// One document of the batch is enough to reject the whole batch.
-		partly := newEnv(t, tgt, []string{allowedDoc}, "-max-batch", "8")
+		partly := newEnv(t, tgt, []string{allowedDoc}, "-server.max-batch", "8")
 		if code, body := post(t, partly.server, batch); code != http.StatusForbidden {
 			t.Errorf("expected 403; received %d: %s", code, body)
 		}
@@ -272,7 +272,7 @@ func TestBatch(t *testing.T) {
 	})
 }
 
-// TestMaxBatch covers the cap -max-batch puts on a batch: a request carrying
+// TestMaxBatch covers the cap -server.max-batch puts on a batch: a request carrying
 // more documents than it allows is refused whole, counted apart from every other
 // refusal, and nothing of it reaches the API.
 //
@@ -292,7 +292,7 @@ func TestMaxBatch(t *testing.T) {
 	}
 
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc}, "-max-batch", "3")
+		e := newEnv(t, tgt, []string{allowedDoc}, "-server.max-batch", "3")
 
 		// At the cap and under it, every document allowed.
 		for _, n := range []int{1, 2, 3} {
@@ -329,7 +329,7 @@ func TestMaxBatch(t *testing.T) {
 
 		// A cap of 1 takes a batch of one: an array is still a batch,
 		// and one document in it is one operation.
-		one := newEnv(t, tgt, []string{allowedDoc}, "-max-batch", "1")
+		one := newEnv(t, tgt, []string{allowedDoc}, "-server.max-batch", "1")
 		if code, body := post(t, one.server, batchOf(1)); code != http.StatusOK {
 			t.Errorf("expected a batch of one served; received %d: %s", code, body)
 		}
@@ -339,7 +339,7 @@ func TestMaxBatch(t *testing.T) {
 		}
 
 		// A lone request object is one document whatever the cap says,
-		// so -max-batch never stands between a client and an ordinary request.
+		// so -server.max-batch never stands between a client and an ordinary request.
 		if code, body := post(t, one.server, docAllowed); code != http.StatusOK {
 			t.Errorf("expected an ordinary request served; received %d: %s", code, body)
 		}

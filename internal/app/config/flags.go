@@ -54,10 +54,6 @@ type Proxy struct {
 	// default here already, see [depthLimit].
 	DepthLimit int
 
-	// MaxBatch is how many documents one request may carry as a batch, every one
-	// of which has to be allowed. 0 takes no batch at all, see -max-batch.
-	MaxBatch int
-
 	// OpaqueErrors answers every rejection with 403 and no detail.
 	// TrustForwarded keeps the X-Forwarded-* headers a request arrives with,
 	// which only a proxy behind a trusted load balancer may do.
@@ -79,8 +75,11 @@ type Proxy struct {
 type ProxyServer struct {
 	Listen string
 
-	// MaxBody is the largest request body to accept, in bytes.
-	MaxBody int64
+	// MaxBody is the largest request body to accept, in bytes, and MaxBatch how
+	// many documents one of them may carry as a batch, every one of which has to
+	// be allowed. 0 takes no batch at all, see -server.max-batch.
+	MaxBody  int64
+	MaxBatch int
 
 	// ShutdownTimeout is how long the requests in flight are waited for on the way out.
 	ShutdownTimeout time.Duration
@@ -289,7 +288,7 @@ func ParseProxyFor(
 				"what one costs. Below 1 takes the default.")
 		fMaxBody = cli.Int64("server.max-body", 1<<20,
 			"Largest request body to accept, in bytes")
-		fMaxBatch = cli.Int("max-batch", 0,
+		fMaxBatch = cli.Int("server.max-batch", 0,
 			"How many documents a batched request may carry, every one of which\n"+
 				"must be allowed. 0 refuses a batch outright, which is the default:\n"+
 				"batching turns one request into as many operations as it holds,\n"+
@@ -394,12 +393,12 @@ func ParseProxyFor(
 
 	cfg = Proxy{
 		AllowlistDir:   *fAllowlist,
-		MaxBatch:       *fMaxBatch,
 		OpaqueErrors:   *fOpaqueErrors,
 		TrustForwarded: *fTrustForwarded,
 		Server: ProxyServer{
 			Listen:            *fListen,
 			MaxBody:           *fMaxBody,
+			MaxBatch:          *fMaxBatch,
 			ShutdownTimeout:   *fShutdown,
 			ReadHeaderTimeout: *fReadHeaderTimeout,
 			ReadTimeout:       *fReadTimeout,
@@ -559,8 +558,8 @@ func ParseProxyFor(
 		_, _ = fmt.Fprintln(stderr, "-server.max-body must be 1 or more")
 		return cfg, 2, false
 	}
-	if cfg.MaxBatch < 0 {
-		_, _ = fmt.Fprintln(stderr, "-max-batch must be 0 or more")
+	if cfg.Server.MaxBatch < 0 {
+		_, _ = fmt.Fprintln(stderr, "-server.max-batch must be 0 or more")
 		return cfg, 2, false
 	}
 	// An unset write timeout follows the upstream timeout, and is off where that

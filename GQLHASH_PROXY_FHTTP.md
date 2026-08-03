@@ -16,7 +16,7 @@ Two commands, same flags, same decision, different HTTP implementation:
 
 Only the command naming fasthttp links it. `gqlhash-proxy` is 12.24 MB stripped and contains no fasthttp symbol; `gqlhash-proxy-fhttp` is 15.03 MB.
 
-Both drive the same `proxy.Core`, so the allowlist, hashing, `-ignore`, `-max-batch` and `-opaque-errors` behave identically. One parity suite runs every assertion against both.
+Both drive the same `proxy.Core`, so the allowlist, hashing, `-ignore`, `-server.max-batch` and `-opaque-errors` behave identically. One parity suite runs every assertion against both.
 
 Measurements below: Xeon w5-2455X — 12 physical cores, 24 hardware threads — loopback, wrk at 200 connections, 58-byte upstream answer. `gqlhash-proxy` is driven at `-threads 8` and `gqlhash-proxy-fhttp` at `-threads 10`, the counts that saturate each. They differ because the faster command needs a bigger generator to be saturated at all; the balance each run prints confirms neither is waiting on wrk. An earlier revision of this page drove both at four threads, which understated `gqlhash-proxy` on the rejected path by 22% and `gqlhash-proxy-fhttp` by 119% — enough to reverse the conclusion, since it read as net/http winning that path by 4%.
 

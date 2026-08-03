@@ -73,12 +73,12 @@ func TestQueryCollisionOnAnyValue(t *testing.T) {
 	})
 }
 
-// TestBatchElementCollision covers -max-batch and the collision rule together:
+// TestBatchElementCollision covers -server.max-batch and the collision rule together:
 // each element of a batch names its document once,
 // and the flag allows a batch rather than requiring one.
 func TestBatchElementCollision(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc, "{ b }"}, "-max-batch", "8")
+		e := newEnv(t, tgt, []string{allowedDoc, "{ b }"}, "-server.max-batch", "8")
 
 		// One element naming the document twice is the whole batch refused.
 		body := `[{"query":"` + allowedText + `","query":"` + rejectedText + `"}]`
