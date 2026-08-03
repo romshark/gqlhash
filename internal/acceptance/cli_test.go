@@ -2,6 +2,8 @@ package acceptance
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -58,6 +60,12 @@ func TestCLIRejectsArguments(t *testing.T) {
 		writeDoc(t, dir, "a.graphql", allowedDoc)
 		// What a run needs, for the cases that are about something else.
 		base := []string{"-upstream.url", "http://127.0.0.1:1/graphql", "-allowlist", dir}
+		certFile, keyFile, _ := serverKeyPair(t)
+		_, otherKey, _ := serverKeyPair(t)
+		notPEM := filepath.Join(dir, "not.pem")
+		if err := os.WriteFile(notPEM, []byte("no certificate here"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		with := func(args ...string) []string {
 			return append(append([]string{}, base...), args...)
 		}
@@ -114,6 +122,25 @@ func TestCLIRejectsArguments(t *testing.T) {
 				with("-server.write-timeout", "-1s"), "must be 0 or more"},
 			{"a negative idle timeout",
 				with("-server.idle-timeout", "-1s"), "must be 0 or more"},
+
+			// The TLS files, read at startup so a proxy never binds a port it
+			// can't serve or an upstream it can't verify.
+			{"a certificate without a key",
+				with("-server.tls.cert", certFile), "go together"},
+			{"a key without a certificate",
+				with("-server.tls.key", keyFile), "go together"},
+			{"a certificate that isn't there",
+				with("-server.tls.cert", filepath.Join(dir, "absent.pem"),
+					"-server.tls.key", keyFile), "-server.tls.cert"},
+			{"a certificate and a key that aren't a pair",
+				with("-server.tls.cert", certFile, "-server.tls.key", otherKey),
+				"-server.tls.cert"},
+			{"an upstream CA over http", with("-upstream.tls.ca", certFile),
+				"no https URL"},
+			{"an upstream CA holding no certificate",
+				[]string{"-upstream.url", "https://api:4000/graphql",
+					"-allowlist", dir, "-upstream.tls.ca", notPEM},
+				"holds no PEM certificate"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				code, stdout, stderr := run(t, tgt, tc.args...)
