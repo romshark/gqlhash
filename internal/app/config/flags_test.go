@@ -61,6 +61,22 @@ func TestParseHasher(t *testing.T) {
 		cfg.Ignore != gqlhash.IgnoreVariables {
 		t.Errorf("unexpected config: %+v", cfg)
 	}
+
+	// A depth limit below 1 is the default, and the config carries that rather
+	// than what was typed: it's the limit in force, and the proxy logs it.
+	for _, given := range []string{"0", "-5"} {
+		errOut.Reset()
+		cfg, code, run = config.ParseHasher("gqlhash",
+			hasherArgs("-depth-limit", given), &errOut)
+		if !run || code != 0 {
+			t.Fatalf("expected -depth-limit %s to parse; code %d, stderr: %s",
+				given, code, errOut.String())
+		}
+		if cfg.DepthLimit != parser.DefaultDepthLimit {
+			t.Errorf("expected -depth-limit %s to take the default %d; received %d",
+				given, parser.DefaultDepthLimit, cfg.DepthLimit)
+		}
+	}
 }
 
 func TestParseHasherErrors(t *testing.T) {
@@ -229,6 +245,24 @@ func TestParseProxy(t *testing.T) {
 	if cfg.Server.WriteTimeout != 0 {
 		t.Errorf("expected the write timeout off where -upstream.timeout is; "+
 			"received %v", cfg.Server.WriteTimeout)
+	}
+
+	// A depth limit below 1 is the default here too, so the startup log reports
+	// the limit the proxy applies rather than the number it was given.
+	for _, given := range []string{"0", "-5"} {
+		errOut.Reset()
+		cfg, code, run = config.ParseProxy("gqlhash-proxy", proxyArgs(
+			"-upstream.url", "http://api/graphql", "-allowlist", "./q",
+			"-depth-limit", given,
+		), &errOut)
+		if !run || code != 0 {
+			t.Fatalf("expected -depth-limit %s to parse; code %d, stderr: %s",
+				given, code, errOut.String())
+		}
+		if cfg.DepthLimit != parser.DefaultDepthLimit {
+			t.Errorf("expected -depth-limit %s to take the default %d; received %d",
+				given, parser.DefaultDepthLimit, cfg.DepthLimit)
+		}
 	}
 }
 

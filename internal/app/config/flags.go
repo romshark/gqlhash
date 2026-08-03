@@ -28,7 +28,8 @@ type Hasher struct {
 	Ignore gqlhash.Ignore
 
 	// DepthLimit is how deeply a document may nest before it's refused,
-	// see [gqlhash.Options].
+	// see [gqlhash.Options]. Always the limit in force: a flag below 1 is the
+	// default here already, see [depthLimit].
 	DepthLimit int
 
 	// CmdPrintVersion means the caller prints the version and returns instead
@@ -49,7 +50,8 @@ type Proxy struct {
 	Ignore gqlhash.Ignore
 
 	// DepthLimit is how deeply a document may nest before it's refused,
-	// see [gqlhash.Options].
+	// see [gqlhash.Options]. Always the limit in force: a flag below 1 is the
+	// default here already, see [depthLimit].
 	DepthLimit int
 
 	// AllowBatch accepts a batch of documents, every one of which has to be allowed.
@@ -239,7 +241,7 @@ func ParseHasher(
 		return cfg, unsupported(stderr, "ignore mode", *fIgnore,
 			SupportedIgnoreModes), false
 	}
-	cfg.DepthLimit = *fDepthLimit
+	cfg.DepthLimit = depthLimit(*fDepthLimit)
 	return cfg, 0, true
 }
 
@@ -504,7 +506,7 @@ func ParseProxyFor(
 		return cfg, unsupported(stderr, "ignore mode", *fIgnore,
 			SupportedIgnoreModes), false
 	}
-	cfg.DepthLimit = *fDepthLimit
+	cfg.DepthLimit = depthLimit(*fDepthLimit)
 
 	// Every timeout is a duration to wait, so a negative one asks for nothing this
 	// can do. Refused rather than read as 0 — the two mean opposite things here,
@@ -601,6 +603,20 @@ func ParseProxyFor(
 		return cfg, 2, false
 	}
 	return cfg, 0, true
+}
+
+// depthLimit is the nesting a document may reach, given what -depth-limit was set to.
+// Below 1 is [parser.DefaultDepthLimit]: no value turns the limit off.
+//
+// The parser applies that rule too, so this changes no decision. It applies it
+// here as well, so the config carries the limit that's in force rather than the
+// number a caller typed — which is what the proxy logs at startup,
+// where a -depth-limit of 0 used to be reported as a limit of 0.
+func depthLimit(given int) int {
+	if given < 1 {
+		return parser.DefaultDepthLimit
+	}
+	return given
 }
 
 // isSet reports whether the flag named name was given, on the command line
