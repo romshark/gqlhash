@@ -32,6 +32,9 @@ var (
 
 	errQueryBesideBody = errors.New(
 		"ambiguous request: a query parameter beside a body")
+
+	// errMethodNotAllowed is a method that is neither GET nor POST, see [MethodOther].
+	errMethodNotAllowed = errors.New("method not allowed")
 )
 
 // span is the range of a document within the request body.

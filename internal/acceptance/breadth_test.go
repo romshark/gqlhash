@@ -247,10 +247,10 @@ func TestEmptyGraphQLBody(t *testing.T) {
 
 // TestHEADWithQueryString covers the method a cache or a health checker sends.
 //
-// Only a GET reads the query string, so for every other method a `query`
-// parameter is a parameter beside a body: `ambiguous`, the one series the
-// design calls worth an alert. A health check pointed at the wrong URL raises
-// the alarm meant for somebody probing — shared behaviour worth knowing.
+// A HEAD is neither of the two methods the proxy serves, so it's refused for the
+// method before the query string is read at all: 405, counted as
+// method_not_allowed. A health check pointed at the wrong URL therefore raises no
+// alarm meant for somebody probing — it lands in a series of its own.
 func TestHEADWithQueryString(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := newEnv(t, tgt, []string{allowedDoc})
@@ -261,9 +261,12 @@ func TestHEADWithQueryString(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if code, _ := send(t, req); code != http.StatusBadRequest {
-			t.Errorf("expected 400 for a HEAD carrying a query string; received %d",
-				code)
+		code, _, header := sendFor(t, req)
+		if code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405 for a HEAD; received %d", code)
+		}
+		if got := header.Get("Allow"); got != "GET, POST" {
+			t.Errorf("expected Allow: GET, POST; received %q", got)
 		}
 
 		// The identical GET is served, which is what makes the row above a
@@ -274,8 +277,13 @@ func TestHEADWithQueryString(t *testing.T) {
 
 		_, exposition := control(t, e.server, http.MethodGet, "/metrics", "")
 		if v := metricValue(t, exposition,
-			`gqlhash_proxy_requests_total{decision="ambiguous"}`); v != 1 {
-			t.Errorf("expected the HEAD counted ambiguous; received %v", v)
+			`gqlhash_proxy_requests_total{decision="method_not_allowed"}`); v != 1 {
+			t.Errorf("expected the HEAD counted method_not_allowed; received %v", v)
+		}
+		// And not as the series that means somebody is probing.
+		if v := metricValue(t, exposition,
+			`gqlhash_proxy_requests_total{decision="ambiguous"}`); v != 0 {
+			t.Errorf("expected no ambiguous request; received %v", v)
 		}
 	})
 }
