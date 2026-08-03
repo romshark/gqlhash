@@ -165,6 +165,18 @@ To print the version:
 gqlhash -version
 ```
 
+```
+gqlhash v2.0.0
+Copyright (c) 2026 Roman Scharkov (github.com/romshark/gqlhash)
+MIT License
+```
+
+`gqlhash-proxy -version` answers the same way, so a script reads the version off either with `-version | head -1`. For the build behind it — the Go version, the module and every dependency — ask the Go toolchain, which prints it for any Go binary:
+
+```sh
+go version -m $(command -v gqlhash)
+```
+
 ### File Input
 
 `-file` reads the document from a file instead:

@@ -21,6 +21,7 @@ import (
 	"github.com/romshark/gqlhash/v2"
 	"github.com/romshark/gqlhash/v2/internal/allowlist"
 	"github.com/romshark/gqlhash/v2/internal/app/config"
+	"github.com/romshark/gqlhash/v2/internal/app/versioninfo"
 )
 
 // Run serves the proxy until it's interrupted, ctx is done, or a server fails.
@@ -59,7 +60,9 @@ func RunWith(
 		return code
 	}
 	if cfg.CmdPrintVersion {
-		_, _ = fmt.Fprintf(stdout, "%s v%s\n", name, version)
+		// The same notice the hashing command answers with,
+		// see [versioninfo.Print].
+		versioninfo.Print(stdout, name, version)
 		return 0
 	}
 	// The query of -upstream.url is merged into every forwarded request,

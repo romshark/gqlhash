@@ -636,10 +636,9 @@ func ParseProxyFor(
 // depthLimit is the nesting a document may reach, given what -depth-limit was set to.
 // Below 1 is [parser.DefaultDepthLimit]: no value turns the limit off.
 //
-// The parser applies that rule too, so this changes no decision. It applies it
-// here as well, so the config carries the limit that's in force rather than the
-// number a caller typed — which is what the proxy logs at startup,
-// where a -depth-limit of 0 used to be reported as a limit of 0.
+// The parser applies that rule too, so this decides nothing of its own. It applies
+// it here as well so the config carries the limit that's in force rather than the
+// number a caller typed, which is what the proxy logs at startup.
 func depthLimit(given int) int {
 	if given < 1 {
 		return parser.DefaultDepthLimit

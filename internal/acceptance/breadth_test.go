@@ -1103,10 +1103,9 @@ func TestFlagsThatAreOnlyEverParsed(t *testing.T) {
 // which every other size and duration flag reads as "no limit" and
 // which here is a limit no body can be under.
 //
-// Refused at startup, where a value nothing can be served under belongs.
-// It used to be taken: the proxy started and answered 413 to every POST there is,
-// an empty one included, while a GET carrying its document in the query string was
-// still served.
+// Refused at startup, where a value nothing can be served under belongs: taken,
+// it binds a port and answers 413 to every POST there is, an empty one included,
+// while a GET carrying its document in the query string is served.
 func TestMaxBodyBelowOneIsRefused(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		dir := t.TempDir()
