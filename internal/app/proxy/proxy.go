@@ -42,6 +42,7 @@ type counters struct {
 	tooLarge  paddedCounter
 	ambiguous paddedCounter
 	tooDeep   paddedCounter
+	batchBig  paddedCounter
 	upstream  paddedCounter
 }
 
@@ -60,6 +61,7 @@ type decisions struct {
 	tooLarge  uint64
 	ambiguous uint64
 	tooDeep   uint64
+	batchBig  uint64
 	upstream  uint64
 }
 
@@ -71,6 +73,7 @@ func (c *counters) snapshot() decisions {
 		tooLarge:  c.tooLarge.Load(),
 		ambiguous: c.ambiguous.Load(),
 		tooDeep:   c.tooDeep.Load(),
+		batchBig:  c.batchBig.Load(),
 		upstream:  c.upstream.Load(),
 	}
 }
@@ -88,10 +91,14 @@ type proxy struct {
 
 	// upstreamTimeout bounds a forward whole, see -upstream.timeout.
 	upstreamTimeout time.Duration
-	allowBatch      bool
-	opaqueErrors    bool
-	logRequests     bool
-	trustForwarded  bool
+
+	// maxBatch is -max-batch: how many documents one request may carry,
+	// 0 for no batch at all.
+	maxBatch int
+
+	opaqueErrors   bool
+	logRequests    bool
+	trustForwarded bool
 
 	// debug is the level, read once at startup instead of per event.
 	debug bool
@@ -164,8 +171,9 @@ type proxyConfig struct {
 	// Options is what the canonical form leaves out.
 	options gqlhash.Options
 
-	// AllowBatch accepts a JSON array of requests. Every document must be allowed.
-	allowBatch bool
+	// maxBatch is how many documents a JSON array of requests may carry,
+	// every one of which must be allowed. 0 refuses an array outright.
+	maxBatch int
 
 	// OpaqueErrors answers every rejection with 403 and no detail.
 	opaqueErrors bool
@@ -200,7 +208,7 @@ func newProxy(
 		log:       log,
 		options:   config.options, maxBody: config.maxBody,
 		upstreamTimeout: config.upstreamTimeout,
-		allowBatch:      config.allowBatch, opaqueErrors: config.opaqueErrors,
+		maxBatch:        config.maxBatch, opaqueErrors: config.opaqueErrors,
 		trustForwarded: config.trustForwarded,
 		debug:          log.GetLevel() <= zerolog.DebugLevel,
 		newHash:        newHash,
@@ -325,6 +333,12 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.reject(w, http.StatusForbidden,
 			"operation not allowed", "OPERATION_NOT_ALLOWED")
 		p.metrics.Observe(decisionTooDeep, start)
+		return
+	case errors.Is(err, errBatchTooLarge):
+		p.counters.batchBig.Add(1)
+		p.reject(w, http.StatusRequestEntityTooLarge,
+			err.Error(), "BATCH_TOO_LARGE")
+		p.metrics.Observe(decisionBatchTooLarge, start)
 		return
 	case isAmbiguous(err):
 		p.counters.ambiguous.Add(1)
@@ -527,7 +541,7 @@ func (p *proxy) decide(st *state, req Request) (allowed bool, err error) {
 		return p.allow(st, req.Body)
 	}
 
-	docs, err := extractJSON(st.spans[:0], req.Body, p.allowBatch)
+	docs, err := extractJSON(st.spans[:0], req.Body, p.maxBatch)
 	// Kept whatever happened, so the room extractJSON grew for a batch is there
 	// for the next request. docs shares the array and keeps its length.
 	st.spans = docs[:0]

@@ -42,6 +42,7 @@ func TestControlStatus(t *testing.T) {
 			TooLarge  int    `json:"too_large"`
 			Ambiguous int    `json:"ambiguous"`
 			TooDeep   int    `json:"too_deep"`
+			BatchBig  int    `json:"batch_too_large"`
 			Upstream  int    `json:"upstream_errors"`
 		}
 		if err := json.Unmarshal([]byte(body), &status); err != nil {
@@ -49,7 +50,8 @@ func TestControlStatus(t *testing.T) {
 		}
 		if status.Documents != 1 || status.Allowed != 1 || status.Rejected != 2 ||
 			status.Malformed != 1 || status.TooLarge != 0 ||
-			status.Ambiguous != 0 || status.TooDeep != 0 || status.Upstream != 0 {
+			status.Ambiguous != 0 || status.TooDeep != 0 || status.BatchBig != 0 ||
+			status.Upstream != 0 {
 			t.Errorf("unexpected status: %+v", status)
 		}
 		if status.LoadedAt == "" {
@@ -384,6 +386,7 @@ func TestControlMetrics(t *testing.T) {
 			`gqlhash_proxy_request_duration_seconds_count{decision="too_large"} 0`,
 			`gqlhash_proxy_requests_total{decision="ambiguous"} 0`,
 			`gqlhash_proxy_requests_total{decision="too_deep"} 0`,
+			`gqlhash_proxy_requests_total{decision="batch_too_large"} 0`,
 			`gqlhash_proxy_upstream_errors_total 0`,
 			`gqlhash_proxy_allowlist_documents 1`,
 			"gqlhash_proxy_allowlist_loaded_timestamp_seconds",

@@ -241,7 +241,7 @@ func TestOpaqueErrors(t *testing.T) {
 	})
 }
 
-// TestBatch covers -allow-batch: an array of requests is refused outright
+// TestBatch covers -max-batch: an array of requests is refused outright
 // without it, and every document of one has to be allowed with it.
 func TestBatch(t *testing.T) {
 	const batch = `[{"query":"` + allowedText + `"},{"query":"{ b }"}]`
@@ -249,10 +249,10 @@ func TestBatch(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
 		e := newEnv(t, tgt, []string{allowedDoc, "{ b }"})
 		if code, body := post(t, e.server, batch); code != http.StatusBadRequest {
-			t.Errorf("expected 400 without -allow-batch; received %d: %s", code, body)
+			t.Errorf("expected 400 without -max-batch; received %d: %s", code, body)
 		}
 
-		allowed := newEnv(t, tgt, []string{allowedDoc, "{ b }"}, "-allow-batch")
+		allowed := newEnv(t, tgt, []string{allowedDoc, "{ b }"}, "-max-batch", "8")
 		if code, body := post(t, allowed.server, batch); code != http.StatusOK {
 			t.Errorf("expected 200; received %d: %s", code, body)
 		}
@@ -262,12 +262,86 @@ func TestBatch(t *testing.T) {
 		}
 
 		// One document of the batch is enough to reject the whole batch.
-		partly := newEnv(t, tgt, []string{allowedDoc}, "-allow-batch")
+		partly := newEnv(t, tgt, []string{allowedDoc}, "-max-batch", "8")
 		if code, body := post(t, partly.server, batch); code != http.StatusForbidden {
 			t.Errorf("expected 403; received %d: %s", code, body)
 		}
 		if n := partly.api.count(); n != 0 {
 			t.Error("a partly allowed batch must not reach upstream")
+		}
+	})
+}
+
+// TestMaxBatch covers the cap -max-batch puts on a batch: a request carrying
+// more documents than it allows is refused whole, counted apart from every other
+// refusal, and nothing of it reaches the API.
+//
+// The cap is what makes batching bounded. One request holds as many operations as
+// -server.max-body has room for — tens of thousands of them at the default —
+// so without a count the API's work per allowed request has no limit,
+// and one request is all a dashboard sees.
+func TestMaxBatch(t *testing.T) {
+	// batchOf returns a batch of n allowed documents.
+	batchOf := func(n int) string {
+		one := `{"query":"` + allowedText + `"}`
+		elements := make([]string, n)
+		for i := range elements {
+			elements[i] = one
+		}
+		return "[" + strings.Join(elements, ",") + "]"
+	}
+
+	each(t, func(t *testing.T, tgt target) {
+		e := newEnv(t, tgt, []string{allowedDoc}, "-max-batch", "3")
+
+		// At the cap and under it, every document allowed.
+		for _, n := range []int{1, 2, 3} {
+			if code, body := post(t, e.server, batchOf(n)); code != http.StatusOK {
+				t.Errorf("expected a batch of %d served; received %d: %s",
+					n, code, body)
+			}
+		}
+		if n := e.api.count(); n != 3 {
+			t.Errorf("expected three forwarded requests; received %d", n)
+		}
+
+		// One past it, and far past it, refused with a reason of its own.
+		for _, n := range []int{4, 1000} {
+			code, body := post(t, e.server, batchOf(n))
+			if code != http.StatusRequestEntityTooLarge {
+				t.Errorf("expected a batch of %d refused; received %d: %s",
+					n, code, body)
+			}
+			if !strings.Contains(body, "BATCH_TOO_LARGE") {
+				t.Errorf("expected a batch error body; received %s", body)
+			}
+		}
+		if n := e.api.count(); n != 3 {
+			t.Errorf("a batch past the cap must not reach upstream; the API saw %d", n)
+		}
+
+		// Counted as its own decision rather than as a malformed request.
+		_, exposition := control(t, e.server, http.MethodGet, "/metrics", "")
+		if !strings.Contains(exposition,
+			`gqlhash_proxy_requests_total{decision="batch_too_large"} 2`) {
+			t.Errorf("expected two counted batch_too_large; received %s", exposition)
+		}
+
+		// A cap of 1 takes a batch of one: an array is still a batch,
+		// and one document in it is one operation.
+		one := newEnv(t, tgt, []string{allowedDoc}, "-max-batch", "1")
+		if code, body := post(t, one.server, batchOf(1)); code != http.StatusOK {
+			t.Errorf("expected a batch of one served; received %d: %s", code, body)
+		}
+		if code, body := post(t, one.server, batchOf(2)); code !=
+			http.StatusRequestEntityTooLarge {
+			t.Errorf("expected a batch of two refused; received %d: %s", code, body)
+		}
+
+		// A lone request object is one document whatever the cap says,
+		// so -max-batch never stands between a client and an ordinary request.
+		if code, body := post(t, one.server, docAllowed); code != http.StatusOK {
+			t.Errorf("expected an ordinary request served; received %d: %s", code, body)
 		}
 	})
 }

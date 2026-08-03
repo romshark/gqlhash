@@ -54,8 +54,9 @@ type Proxy struct {
 	// default here already, see [depthLimit].
 	DepthLimit int
 
-	// AllowBatch accepts a batch of documents, every one of which has to be allowed.
-	AllowBatch bool
+	// MaxBatch is how many documents one request may carry as a batch, every one
+	// of which has to be allowed. 0 takes no batch at all, see -max-batch.
+	MaxBatch int
 
 	// OpaqueErrors answers every rejection with 403 and no detail.
 	// TrustForwarded keeps the X-Forwarded-* headers a request arrives with,
@@ -288,8 +289,11 @@ func ParseProxyFor(
 				"what one costs. Below 1 takes the default.")
 		fMaxBody = cli.Int64("server.max-body", 1<<20,
 			"Largest request body to accept, in bytes")
-		fAllowBatch = cli.Bool("allow-batch", false,
-			"Accept batched requests, where every document must be allowed")
+		fMaxBatch = cli.Int("max-batch", 0,
+			"How many documents a batched request may carry, every one of which\n"+
+				"must be allowed. 0 refuses a batch outright, which is the default:\n"+
+				"batching turns one request into as many operations as it holds,\n"+
+				"and -server.max-body bounds that in bytes rather than in documents.")
 		fOpaqueErrors = cli.Bool("opaque-errors", false,
 			"Answer every rejection with 403 and no detail")
 		fTrustForwarded = cli.Bool("trust-forwarded", false,
@@ -390,7 +394,7 @@ func ParseProxyFor(
 
 	cfg = Proxy{
 		AllowlistDir:   *fAllowlist,
-		AllowBatch:     *fAllowBatch,
+		MaxBatch:       *fMaxBatch,
 		OpaqueErrors:   *fOpaqueErrors,
 		TrustForwarded: *fTrustForwarded,
 		Server: ProxyServer{
@@ -553,6 +557,10 @@ func ParseProxyFor(
 	// which is a 413 for a request that carried nothing.
 	if cfg.Server.MaxBody < 1 {
 		_, _ = fmt.Fprintln(stderr, "-server.max-body must be 1 or more")
+		return cfg, 2, false
+	}
+	if cfg.MaxBatch < 0 {
+		_, _ = fmt.Fprintln(stderr, "-max-batch must be 0 or more")
 		return cfg, 2, false
 	}
 	// An unset write timeout follows the upstream timeout, and is off where that

@@ -41,9 +41,9 @@ func (c *control) status(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintf(w,
 		`{"documents":%d,"loaded_at":%q,"allowed":%d,"rejected":%d,`+
 			`"malformed":%d,"too_large":%d,"ambiguous":%d,"too_deep":%d,`+
-			`"upstream_errors":%d}`+"\n",
+			`"batch_too_large":%d,"upstream_errors":%d}`+"\n",
 		documents, loadedAt.Format(time.RFC3339), d.allowed, d.rejected,
-		d.malformed, d.tooLarge, d.ambiguous, d.tooDeep, d.upstream)
+		d.malformed, d.tooLarge, d.ambiguous, d.tooDeep, d.batchBig, d.upstream)
 }
 
 // reload rereads the allowlist and answers with what it holds afterwards.

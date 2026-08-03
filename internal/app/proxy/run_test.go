@@ -162,7 +162,7 @@ func TestBuildWiring(t *testing.T) {
 		AllowlistDir:   dir,
 		HashFunc:       config.HashFunctionBLAKE3,
 		Ignore:         gqlhash.IgnoreInputs,
-		AllowBatch:     true,
+		MaxBatch:       7,
 		OpaqueErrors:   true,
 		TrustForwarded: true,
 		Server: config.ProxyServer{
@@ -207,6 +207,9 @@ func TestBuildWiring(t *testing.T) {
 	if !p.logRequests || !p.debug {
 		t.Errorf("expected debug logging of requests; debug %t requests %t",
 			p.debug, p.logRequests)
+	}
+	if p.maxBatch != cfg.MaxBatch {
+		t.Errorf("MaxBatch: expected %d; received %d", cfg.MaxBatch, p.maxBatch)
 	}
 	// The allowlist. A hit for a document of cfg.AllowlistDir under the key of
 	// cfg.HashFunc and cfg.Ignore covers the directory, the hash function and

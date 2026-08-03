@@ -183,8 +183,8 @@ func FuzzExtractJSONAgainstEncodingJSON(f *testing.F) {
 	f.Fuzz(func(t *testing.T, body string) {
 		// checked is every document the proxy would hash for this body, or nil
 		// where it refuses the request and hashes nothing.
-		checked := func(batch bool) ([]string, bool) {
-			spans, err := extractJSON(nil, []byte(body), batch)
+		checked := func(maxBatch int) ([]string, bool) {
+			spans, err := extractJSON(nil, []byte(body), maxBatch)
 			if err != nil {
 				return nil, false
 			}
@@ -214,7 +214,7 @@ func FuzzExtractJSONAgainstEncodingJSON(f *testing.F) {
 		}
 
 		// One request object.
-		if documents, ok := checked(false); ok {
+		if documents, ok := checked(noBatch); ok {
 			var request struct {
 				Query *string `json:"query"`
 			}
@@ -223,9 +223,10 @@ func FuzzExtractJSONAgainstEncodingJSON(f *testing.F) {
 			}
 		}
 
-		// A batch of them, where -allow-batch takes the whole array and every
-		// document of it has to be allowed.
-		if documents, ok := checked(true); ok {
+		// A batch of them, where -max-batch takes an array of up to that many and
+		// every document of it has to be allowed. The cap is above what a seed carries,
+		// so what's compared is the reading and not the limit.
+		if documents, ok := checked(inBatch); ok {
 			var requests []struct {
 				Query *string `json:"query"`
 			}

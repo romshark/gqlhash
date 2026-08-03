@@ -60,6 +60,9 @@ const (
 	// VerdictTooDeep answers alone: the document nests past the depth limit,
 	// see decisionTooDeep.
 	VerdictTooDeep
+	// VerdictBatchTooLarge answers alone: the batch carries more documents than
+	// -max-batch allows, see decisionBatchTooLarge.
+	VerdictBatchTooLarge
 )
 
 // Answer is what to write when a request isn't forwarded.
@@ -95,6 +98,10 @@ func (c *Core) Decide(req Request) (Verdict, Answer) {
 		p.counters.tooDeep.Add(1)
 		return VerdictTooDeep, c.answer(http.StatusForbidden,
 			"operation not allowed", "OPERATION_NOT_ALLOWED")
+	case errors.Is(err, errBatchTooLarge):
+		p.counters.batchBig.Add(1)
+		return VerdictBatchTooLarge, c.answer(http.StatusRequestEntityTooLarge,
+			err.Error(), "BATCH_TOO_LARGE")
 	case isAmbiguous(err):
 		p.counters.ambiguous.Add(1)
 		if p.debug {
@@ -162,6 +169,8 @@ func (c *Core) Observe(v Verdict, start time.Time) {
 		c.p.metrics.Observe(decisionAmbiguous, start)
 	case VerdictTooDeep:
 		c.p.metrics.Observe(decisionTooDeep, start)
+	case VerdictBatchTooLarge:
+		c.p.metrics.Observe(decisionBatchTooLarge, start)
 	default:
 		c.p.metrics.Observe(decisionMalformed, start)
 	}
