@@ -294,7 +294,10 @@ func ParseProxyFor(
 				"batching turns one request into as many operations as it holds,\n"+
 				"and -server.max-body bounds that in bytes rather than in documents.")
 		fOpaqueErrors = cli.Bool("opaque-errors", false,
-			"Answer every rejection with 403 and no detail")
+			"Answer every rejection with 403 and no detail.\n"+
+				"An upstream failure is no rejection and keeps its status:\n"+
+				"this hides why a request was refused, not whether a document\n"+
+				"is on the list, which forwarding reveals either way.")
 		fTrustForwarded = cli.Bool("trust-forwarded", false,
 			"Keep the X-Forwarded-* headers of the request and append to them.\n"+
 				"Set this only behind a trusted load balancer: a client that\n"+
