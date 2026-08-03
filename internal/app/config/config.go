@@ -29,7 +29,12 @@ import (
 // hashFunctions is the one place a hash function is spelled out: the flag value
 // naming it, the constant it parses to, whether an allowlist may rely on it,
 // and how one is made. Everything else derives from this, so adding one is one edit
-// rather than five that fail quietly. The order is the help strings' order.
+// rather than five that fail quietly.
+//
+// The order is the help strings' order: the default first, then the rest of the
+// collision-resistant ones — which makes [SupportedProxyHashFunctions] the front
+// of the list — then the two that are broken, then the ones collidable by
+// construction. A caller reading the help top to bottom reads them worst-last.
 var hashFunctions = []struct {
 	name  string
 	value HashFunction
@@ -39,11 +44,9 @@ var hashFunctions = []struct {
 
 	new func() hash.Hash
 }{
-	{name: "sha1", value: HashFunctionSHA1, new: sha1.New},
 	{name: "sha2", value: HashFunctionSHA2, proxySafe: true, new: sha256.New},
 	{name: "sha3", value: HashFunctionSHA3, proxySafe: true,
 		new: func() hash.Hash { return sha3.New512() }},
-	{name: "md5", value: HashFunctionMD5, new: md5.New},
 	{name: "blake2b", value: HashFunctionBLAKE2B, proxySafe: true,
 		new: func() hash.Hash {
 			h, err := blake2b.New256(nil)
@@ -62,6 +65,10 @@ var hashFunctions = []struct {
 		}},
 	{name: "blake3", value: HashFunctionBLAKE3, proxySafe: true,
 		new: func() hash.Hash { return blake3.New() }},
+	// Broken: offered for a cache key or a bucket, refused by the proxy.
+	{name: "sha1", value: HashFunctionSHA1, new: sha1.New},
+	{name: "md5", value: HashFunctionMD5, new: md5.New},
+	// Collidable by construction, so the same again and more so.
 	{name: "fnv", value: HashFunctionFNV, new: func() hash.Hash { return fnv.New64() }},
 	{name: "fnv1a", value: HashFunctionFNV1A,
 		new: func() hash.Hash { return fnv.New64a() }},

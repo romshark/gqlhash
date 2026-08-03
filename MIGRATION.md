@@ -21,8 +21,23 @@ go install github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy@latest
 
 ## Hashes
 
-**A document whose string values hold an escape sequence hashes differently
-under v2. Everything else hashes the same.**
+**`gqlhash` hashes with SHA-256 by default, where v1 used SHA-1. Every hash the
+command prints without `-hash` therefore differs from v1.** Pass `-hash sha1` to
+keep what a v1 pipeline produced:
+
+```sh
+echo '{foo bar}' | gqlhash             # v2: SHA-256
+echo '{foo bar}' | gqlhash -hash sha1  # what v1 printed
+```
+
+SHA-1 is broken, and `gqlhash-proxy` refuses it for that reason — a hash that
+decides whether a document may run needs collision resistance. The two commands
+now default to the same function, so a hash built with one matches the other.
+`sha1` and `md5` are still offered for a cache key or a bucket, where a collision
+costs a cache miss rather than an execution.
+
+**A document whose string values hold an escape sequence also hashes differently
+under v2, whichever function you name. Everything else hashes the same.**
 
 v1 hashed a string as it was spelled; v2 hashes the value it stands for, so
 `"\u0041"` and `"A"` now agree with each other and neither agrees with v1.
@@ -43,7 +58,9 @@ What that means where a hash was kept:
 - **A stored hash needs rebuilding**: a persisted query registry, a cache key
   written to a shared cache, a hash committed to a repository for a CI check.
   Rehash the documents with v2 before serving with it, or the entries stop
-  matching what clients send.
+  matching what clients send. Rebuilding under the new default is the moment to
+  leave SHA-1 behind; `-hash sha1` keeps the old entries valid where that's not
+  possible yet.
 
 Nothing warns about this. A hash that no longer matches reads as a document
 that isn't allowed.

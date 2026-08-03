@@ -39,8 +39,10 @@ func TestParseHasher(t *testing.T) {
 	if cfg.Format != config.FormatHex {
 		t.Errorf("expected hex by default; received %v", cfg.Format)
 	}
-	if cfg.Hash != config.HashFunctionSHA1 {
-		t.Errorf("expected sha1 by default; received %v", cfg.Hash)
+	// sha2 by default, the same function the proxy defaults to and the narrowest
+	// thing an allowlist needs of a hash. TestParseProxy pins the proxy's.
+	if cfg.Hash != config.HashFunctionSHA2 {
+		t.Errorf("expected sha2 by default; received %v", cfg.Hash)
 	}
 	if cfg.Ignore != gqlhash.IgnoreNothing {
 		t.Errorf("expected nothing ignored by default; received %v", cfg.Ignore)
@@ -436,8 +438,8 @@ func TestParseProxyEnv(t *testing.T) {
 	if !run || code != 0 {
 		t.Fatalf("code %d, stderr: %s", code, errOut.String())
 	}
-	if hasher.Hash != config.HashFunctionSHA1 {
-		t.Errorf("expected sha1 to stand; received %v", hasher.Hash)
+	if hasher.Hash != config.HashFunctionSHA2 {
+		t.Errorf("expected the default to stand; received %v", hasher.Hash)
 	}
 }
 
@@ -490,7 +492,7 @@ func TestFlagInventory(t *testing.T) {
 		"depth-limit": "128",
 		"file":        "",
 		"format":      `"hex"`,
-		"hash":        `"sha1"`,
+		"hash":        `"sha2"`,
 		"ignore":      `"nothing"`,
 		"version":     "",
 	})

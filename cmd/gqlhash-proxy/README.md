@@ -120,7 +120,7 @@ Every flag of the proxy, with its default:
 - `-upstream.max-conn-lifetime` belongs on wherever the upstream is several backends behind one name. They're balanced per connection, so a pool that never turns over never reaches one added after it filled, and a large `-upstream.max-idle-conns-per-host` makes that worse rather than better.
 - [`gqlhash-proxy-fhttp`](../gqlhash-proxy-fhttp/README.md) takes the same flags and serves them with fasthttp, forwarding around 59% faster on a third of the memory. It is **experimental and not for production use**: it trades cancellation on client disconnect, HTTP/2, a well-worn HTTP parser, and it hands a client's request trailer to your API as an ordinary header. [GQLHASH_PROXY_FHTTP.md](../../GQLHASH_PROXY_FHTTP.md) has the whole trade, measured.
 
-`-hash` takes only the collision-resistant functions, unlike `gqlhash`. Rationale: an allowlist's security property is collision resistance, and `crc32`, `crc64`, `fnv`, `fnv1a` and `xxh64` are collidable by construction while `md5` and `sha1` are broken.
+`-hash` defaults to `sha2` as `gqlhash` does, so a hash built with either matches, and takes only the collision-resistant functions, unlike `gqlhash`. Rationale: an allowlist's security property is collision resistance, and `crc32`, `crc64`, `fnv`, `fnv1a` and `xxh64` are collidable by construction while `md5` and `sha1` are broken.
 
 `-trust-forwarded` appends the peer to the `X-Forwarded-*` headers instead of replacing them, which a proxy behind a load balancer needs so the API still sees the original client. Set it only there: a client that connects directly can otherwise claim any address.
 

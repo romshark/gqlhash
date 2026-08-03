@@ -7,7 +7,7 @@
 
 # gqlhash
 
-gqlhash generates SHA1 ([and other](#hash-function)) hashes from GraphQL [executable documents](https://spec.graphql.org/September2025/#sec-Executable-Definitions) ignoring comments, differences in formatting, and optionally input values and variables.
+gqlhash generates SHA-256 ([and other](#hash-function)) hashes from GraphQL [executable documents](https://spec.graphql.org/September2025/#sec-Executable-Definitions) ignoring comments, differences in formatting, and optionally input values and variables.
 
 It's shipped as:
 1. The Go package [github.com/romshark/gqlhash/v2](https://pkg.go.dev/github.com/romshark/gqlhash/v2) for fast GraphQL request document hashing.
@@ -46,7 +46,7 @@ A rejection never opens an upstream connection, which is where the four-fold dif
 
 ----
 
-With [`-ignore=variables`](#ignoring-variables) the following two documents produce the same SHA1 hash, despite differing in formatting, comments, input values and variables:
+With [`-ignore=variables`](#ignoring-variables) the following two documents produce the same SHA-256 hash, despite differing in formatting, comments, input values and variables:
 
 ```graphql
 {
@@ -89,7 +89,7 @@ gqlhash implements the GraphQL specification of [September 2025](https://spec.gr
 { object(x: 7, y: "hello") { id } }
 ```
 
-Both produce the same hex-encoded SHA1 hash `f298bdffe58cc1791fb9bc37b338d472641ab59c`.
+Both produce the same hex-encoded SHA-256 hash `03f3ba19742426404ddcf6467c7f210472f973d3cc78110ebf4ca94a2326e50d`.
 
 `-ignore=variables` ignores what `-ignore=inputs` ignores and the variables on top of that, both their definitions and their usages. A parameterized document then matches its inline-value equivalent:
 
@@ -101,7 +101,7 @@ query ($x: Int) { object(x: $x) { id } }
 { object(x: 42) { id } }
 ```
 
-Both produce the same hex-encoded SHA1 hash `b09f92659125366c58ec90c771eba361e921aa2f`.
+Both produce the same hex-encoded SHA-256 hash `21de2f6884f4e7e93a6c45c729b1d6fc47a73c4e657b9b1bf18923efcc27501a`.
 
 ## Use cases
 
@@ -152,10 +152,10 @@ This requires the latest version of [Go](https://go.dev).
 > [!IMPORTANT]
 > The gqlhash CLI spawns a process per invocation. It's for scripts, CI pipelines and local use, not for a per-request path. Use the [gqlhash-proxy](cmd/gqlhash-proxy/README.md) for filtering incoming requests. A Go server may use the package functions ([Compare](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Compare), [AppendHash](https://pkg.go.dev/github.com/romshark/gqlhash/v2#AppendHash)).
 
-gqlhash reads the document from stdin until EOF and prints its SHA1 hash as a hexadecimal string to stdout:
+gqlhash reads the document from stdin until EOF and prints its SHA-256 hash as a hexadecimal string to stdout:
 
 ```sh
-# prints: 102fe40ed0c19cf540a8223ae7f425b895a02f1f
+# prints: d592c23e0c362a3a49b4c4b18316d9bfc5bda2ce7577b0925d25c4b4cba9c2ec
 echo '{foo bar}' | gqlhash
 ```
 
@@ -200,39 +200,44 @@ The supported output formats:
 The default is `hex`. `-format` selects another one:
 
 ```sh
-# prints: EC/kDtDBnPVAqCI65/QluJWgLx8=
+# prints: 1ZLCPgw2KjpJtMSxgxbZv8W9os51d7CSXSXEtMupwuw=
 echo '{foo bar}' | gqlhash -format base64
 ```
 
-`base64url` avoids the `+` and `/` characters, which makes it the format for a URL, a header or a file name:
+`base64url` avoids the `+` and `/` characters, which makes it the format for a URL, a header or a file name. This digest carries a `+`, where the two differ:
 
 ```sh
-# prints: EC_kDtDBnPVAqCI65_QluJWgLx8=
-echo '{foo bar}' | gqlhash -format base64url
+# prints: u3Pd9Iuuyzg+q1CF5y6zJa35kLIEs66EsP6CrHfUcE0=
+echo '{foo}' | gqlhash -format base64
+
+# prints: u3Pd9Iuuyzg-q1CF5y6zJa35kLIEs66EsP6CrHfUcE0=
+echo '{foo}' | gqlhash -format base64url
 ```
 
 ### Hash Function
 
 The supported hash functions:
 
-- `sha1`
 - `sha2` (SHA-256)
 - `sha3` (SHA3-512)
-- `md5`
 - `blake2b` (unkeyed)
 - `blake2s` (unkeyed)
 - `blake3` (unkeyed, 256 bits)
+- `sha1`
+- `md5`
 - `fnv` (FNV-1, 64 bits)
 - `fnv1a` (FNV-1a, 64 bits)
 - `xxh64` (XXH64, unseeded)
 - `crc32` (IEEE polynomial)
 - `crc64` (ISO polynomial, defined in ISO 3309)
 
-The default is `sha1`. `-hash` selects another one:
+The default is `sha2`, which is also the [proxy's](cmd/gqlhash-proxy/README.md) and the narrowest thing an allowlist or a persisted-query registry needs of a hash: collision resistance. `md5` and `sha1` are broken and `crc32`, `crc64`, `fnv`, `fnv1a` and `xxh64` are collidable by construction — reach for those to group or bucket documents, never to decide whether one may run.
+
+`-hash` selects another one:
 
 ```sh
-# prints: 1ZLCPgw2KjpJtMSxgxbZv8W9os51d7CSXSXEtMupwuw=
-echo '{foo bar}' | gqlhash -hash sha2 -format base64
+# prints: 9df882f0d75c115d9587c6afd10b6fbeb8d8865b75db3be73e079513667739e9
+echo '{foo bar}' | gqlhash -hash blake3
 ```
 
 <details>
