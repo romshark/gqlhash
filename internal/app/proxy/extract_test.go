@@ -273,3 +273,41 @@ func TestExtractZeroCopy(t *testing.T) {
 		t.Errorf("GET: expected no allocations; received %v", n)
 	}
 }
+
+// TestMergeQuery covers the query a forwarded request carries:
+// the endpoint's parameters lead and the client's follow,
+// and the pair is joined only where both have one.
+func TestMergeQuery(t *testing.T) {
+	for _, tc := range []struct{ upstream, client, expect string }{
+		// The common deployment: a plain endpoint, so the client's query is it.
+		{"", "query=%7Ba%7D", "query=%7Ba%7D"},
+		{"", "", ""},
+		// A POST names no query of its own, so the endpoint's arrives alone.
+		{"env=staging", "", "env=staging"},
+		{"env=staging&key=abc", "query=%7Ba%7D", "env=staging&key=abc&query=%7Ba%7D"},
+	} {
+		if got := mergeQuery(tc.upstream, tc.client); got != tc.expect {
+			t.Errorf("mergeQuery(%q, %q) = %q; expected %q",
+				tc.upstream, tc.client, got, tc.expect)
+		}
+	}
+
+	// The endpoint carrying no query of its own is every deployment that names a
+	// plain URL, and it's the forwarding path, so it allocates nothing.
+	client := "query=" + strings.Repeat("x", 32)
+	if n := testing.AllocsPerRun(100, func() {
+		if mergeQuery("", client) == "" {
+			t.Fatal("merging failed")
+		}
+	}); n != 0 {
+		t.Errorf("expected no allocations for a plain endpoint; received %v", n)
+	}
+	// One endpoint parameter costs the one string it takes to join them.
+	if n := testing.AllocsPerRun(100, func() {
+		if mergeQuery("env=staging", client) == "" {
+			t.Fatal("merging failed")
+		}
+	}); n > 1 {
+		t.Errorf("expected one allocation at most; received %v", n)
+	}
+}

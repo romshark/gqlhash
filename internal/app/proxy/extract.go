@@ -301,6 +301,30 @@ func extractQueryParam(scratch []byte, rawQuery string) (value, newScratch []byt
 	return scratch, scratch, nil
 }
 
+// mergeQuery is the query string a forwarded request carries: the parameters of
+// -upstream.url, then the client's verbatim. An endpoint that takes a parameter
+// of its own — an API key, a project, an environment — is reached with it,
+// where replacing the query outright would drop it and joining nothing would be a
+// request the endpoint doesn't answer.
+//
+// The upstream's lead so an API reading the first of a repeated parameter reads
+// what the deployment configured rather than what a client sent beside it.
+// The client's are kept whole: a GET carries its document among them.
+// The two can't collide over that document, since an -upstream.url naming a query
+// parameter is refused at startup, see [hasQueryParam] and [Run].
+//
+// Nothing is allocated where the upstream has no query of its own,
+// which is every deployment that names a plain endpoint.
+func mergeQuery(upstream, client string) string {
+	switch {
+	case upstream == "":
+		return client
+	case client == "":
+		return upstream
+	}
+	return upstream + "&" + client
+}
+
 // hasQueryParam reports whether rawQuery names the query parameter at all,
 // which makes a request reading its document elsewhere ambiguous.
 // It splits pairs the way [extractQueryParam] does, ';' included.

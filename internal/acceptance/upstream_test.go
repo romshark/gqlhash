@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +25,71 @@ func serveUpstream(
 	return serve(t, tgt, append([]string{
 		"-upstream.url", upstream.URL + "/graphql", "-allowlist", dir,
 	}, args...)...)
+}
+
+// TestUpstreamEndpointQuery covers an -upstream.url carrying query parameters of
+// its own, which a hosted API uses for a key or an environment. They reach it on
+// every forwarded request, ahead of what the client sent: an endpoint is the whole URL,
+// and replacing its query with the client's would drop half of it.
+//
+// Their own parameter is refused at startup where it's named "query",
+// since it would arrive beside the document the client sent and the API would choose
+// between two the allowlist saw one of.
+func TestUpstreamEndpointQuery(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		seen := make(chan string, 4)
+		upstream := httptest.NewServer(http.HandlerFunc(
+			func(w http.ResponseWriter, r *http.Request) {
+				seen <- r.URL.RawQuery
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"data":{"ok":true}}`)
+			}))
+		t.Cleanup(upstream.Close)
+		dir := t.TempDir()
+		writeDoc(t, dir, "a.graphql", allowedDoc)
+
+		s := serve(t, tgt, "-upstream.url",
+			upstream.URL+"/graphql?env=staging&key=abc", "-allowlist", dir)
+
+		// A POST names no query parameter of its own — one beside a body is
+		// refused — so the endpoint's arrive as they were given.
+		if code, answer := post(t, s, docAllowed); code != http.StatusOK {
+			t.Fatalf("expected the POST served; received %d: %s", code, answer)
+		}
+		if got := <-seen; got != "env=staging&key=abc" {
+			t.Errorf("expected the endpoint query forwarded; received %q", got)
+		}
+
+		// A GET carries its document in the query string, so both are there,
+		// the endpoint's first.
+		document := "query=" + url.QueryEscape(allowedText)
+		if code, answer := get(t, s, document); code != http.StatusOK {
+			t.Fatalf("expected the GET served; received %d: %s", code, answer)
+		}
+		if got := <-seen; got != "env=staging&key=abc&"+document {
+			t.Errorf("expected both queries forwarded; received %q", got)
+		}
+
+		// An endpoint naming the document is refused before anything is served.
+		for _, endpoint := range []string{
+			upstream.URL + "/graphql?query=" + url.QueryEscape("{injected}"),
+			// The reading rule splits on ';' and decodes a name, so these name it too.
+			upstream.URL + "/graphql?key=abc;query=x",
+			upstream.URL + "/graphql?quer%79=x",
+		} {
+			t.Run(endpoint, func(t *testing.T) {
+				code, _, stderr := run(t, tgt,
+					"-upstream.url", endpoint, "-allowlist", dir)
+				if code != exitBadArgs {
+					t.Errorf("expected exit %d; received %d: %s",
+						exitBadArgs, code, stderr)
+				}
+				if !strings.Contains(stderr, "must name no query parameter") {
+					t.Errorf("expected the reason named; received %s", stderr)
+				}
+			})
+		}
+	})
 }
 
 // TestUpstreamAnswerPassesThrough covers what comes back: the proxy forwards

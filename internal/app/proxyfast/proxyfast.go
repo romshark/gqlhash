@@ -74,8 +74,14 @@ type server struct {
 	// upstream is where a forwarded request goes,
 	// in the parts a fasthttp request is built from.
 	scheme, host, path []byte
-	timeout            time.Duration
-	log                zerolog.Logger
+
+	// query is the query string of -upstream.url, empty for a plain endpoint.
+	// A string rather than bytes: it's only ever joined with the client's,
+	// see [proxy.MergeQuery].
+	query string
+
+	timeout time.Duration
+	log     zerolog.Logger
 
 	// serveTLS is whether -server.tls.cert was given. Kept here rather than read
 	// off the fasthttp server, which fills its own TLSConfig in on the way up.
@@ -102,6 +108,7 @@ func New(
 		scheme:   []byte(upstream.Scheme),
 		host:     []byte(upstream.Host),
 		path:     []byte(path),
+		query:    upstream.RawQuery,
 		timeout:  upstreamTimeout(cfg.Upstream.Timeout),
 		log:      log,
 		serveTLS: cfg.Server.TLSCert != nil,
@@ -440,13 +447,20 @@ func (s *server) forward(
 	s.setForwarded(ctx, req)
 
 	// The upstream URL is the GraphQL endpoint, so its path replaces the
-	// request's rather than being joined with it.
-	// The query is kept: a GET carries the document in it.
+	// request's rather than being joined with it. The query is kept — a GET
+	// carries the document in it — behind the endpoint's own, see [proxy.MergeQuery].
 	uri := req.URI()
 	uri.SetSchemeBytes(s.scheme)
 	uri.SetHostBytes(s.host)
 	uri.SetPathBytes(s.path)
-	uri.SetQueryStringBytes(ctx.URI().QueryString())
+	if s.query == "" {
+		// No endpoint parameters to join, so the client's query goes as it came,
+		// without a string of its own.
+		uri.SetQueryStringBytes(ctx.URI().QueryString())
+	} else {
+		uri.SetQueryString(proxy.MergeQuery(s.query,
+			string(ctx.URI().QueryString())))
+	}
 	req.Header.SetMethodBytes(ctx.Method())
 	// The request carries the host of the upstream, as it would without a proxy.
 	req.Header.SetHostBytes(s.host)

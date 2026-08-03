@@ -62,6 +62,20 @@ func RunWith(
 		_, _ = fmt.Fprintf(stdout, "%s v%s\n", name, version)
 		return 0
 	}
+	// The query of -upstream.url is merged into every forwarded request,
+	// see [mergeQuery], so one naming the document is refused here: it would reach the
+	// API beside the document the client sent, and which of the two an API reads is
+	// the API's business. The allowlist hashed only one of them.
+	//
+	// Checked here rather than in config, which owns no reading rule:
+	// this is the same [hasQueryParam] a request goes through.
+	if hasQueryParam(cfg.Upstream.URL.RawQuery) {
+		_, _ = fmt.Fprintf(stderr,
+			"-upstream.url %q must name no query parameter: it is merged into "+
+				"every forwarded request, and the document is the client's to carry\n",
+			cfg.Upstream.URL)
+		return 2
+	}
 
 	log, ok := newLogger(cfg, stderr)
 	if !ok {
@@ -106,8 +120,8 @@ type components struct {
 	// /metrics, /status and /reload. Each has a listener of its own and a run
 	// has both, since the control server has no off switch.
 	//
-	// dataPlane is whichever HTTP implementation the command carries, see
-	// [ServerImpl]. control is net/http under every one of them.
+	// dataPlane is whichever HTTP implementation the command carries,
+	// see [ServerImpl]. control is net/http under every one of them.
 	dataPlane dataPlaneServer
 	control   *http.Server
 
@@ -161,8 +175,8 @@ func build(cfg config.Proxy, log zerolog.Logger, impl ServerImpl) (*components, 
 		maxBody:         cfg.Server.MaxBody,
 	}, transport, log)
 
-	// The metrics and the control endpoints share an address of their own, so
-	// neither is exposed on the data-plane port.
+	// The metrics and the control endpoints share an address of their own,
+	// so neither is exposed on the data-plane port.
 	controlMux := http.NewServeMux()
 	controlMux.Handle("/metrics", p.metrics.Handler(log))
 	(&control{
