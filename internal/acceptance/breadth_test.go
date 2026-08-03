@@ -1069,10 +1069,10 @@ func TestFlagsThatAreOnlyEverParsed(t *testing.T) {
 			name string
 			args []string
 		}{
-			// -upstream.http2 is refused by fasthttp and taken by
-			// the other, so what's shared is that a server given it serves.
-			// each() has no "this target speaks HTTP/2" predicate,
-			// so that's the whole rule this can hold.
+			// -upstream.http2 isn't here: it means one thing under one command
+			// and another under the other, so it's covered where that difference
+			// can be told — TestUpstreamHTTP2, which asks which command it runs
+			// and holds each to what it promises.
 			{"the pool flags", []string{
 				"-upstream.max-idle-conns-per-host", "8",
 				"-upstream.max-idle-conns", "16",
