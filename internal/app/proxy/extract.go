@@ -19,6 +19,9 @@ var (
 	// errBatch is a batch of requests where none is expected.
 	errBatch = errors.New("batched request")
 
+	// errBatchTooLarge is a batch carrying more documents than -max-batch allows.
+	errBatchTooLarge = errors.New("too many documents in the batch")
+
 	errInvalidEscape  = errors.New("invalid escape sequence in query")
 	errDuplicateQuery = errors.New("duplicate query parameter")
 	errQueryCollision = errors.New(`naming collision on field "query"`)
@@ -35,8 +38,13 @@ var (
 type span struct{ start, end int }
 
 // extractJSON finds the query member of every request in body and appends its
-// span to dst. body is one request object, or an array of them when batch is
-// true. A span points at the raw JSON string contents, escapes included.
+// span to dst. body is one request object, or an array of them where maxBatch is
+// 1 or more. A span points at the raw JSON string contents, escapes included.
+//
+// maxBatch is -max-batch: how many documents one request may carry,
+// 0 for no batching at all, which makes an array [errBatch]. A batch past it is
+// [errBatchTooLarge] and the scan stops there, so a body holding tens of
+// thousands of documents costs the cap and not the body.
 //
 // A request object naming the query member twice is [errQueryCollision] rather
 // than two documents: which one an API runs is the API's business,
@@ -44,7 +52,7 @@ type span struct{ start, end int }
 // See [isQueryKey] for what counts as the same name.
 //
 // Nothing is copied: a span is a range within body.
-func extractJSON(dst []span, body []byte, batch bool) ([]span, error) {
+func extractJSON(dst []span, body []byte, maxBatch int) ([]span, error) {
 	// The member level of a lone request object, and one deeper within an array.
 	level := 1
 
@@ -54,6 +62,7 @@ func extractJSON(dst []span, body []byte, batch bool) ([]span, error) {
 		flagFound     = 1 << iota // A document has been found.
 		flagSeen                  // This request object names the member.
 		flagCollision             // It names it twice.
+		flagTooMany               // The batch carries more than maxBatch.
 	)
 	var flags uint8
 
@@ -61,7 +70,7 @@ func extractJSON(dst []span, body []byte, batch bool) ([]span, error) {
 		if i.Level() == 0 {
 			// The outermost value decides whether this is a batch.
 			if i.ValueType() == jscan.ValueTypeArray {
-				if !batch {
+				if maxBatch < 1 {
 					return true
 				}
 				level = 2
@@ -90,14 +99,26 @@ func extractJSON(dst []span, body []byte, batch bool) ([]span, error) {
 		// ValueIndex and ValueIndexEnd include the quotes.
 		dst = append(dst, span{i.ValueIndex() + 1, i.ValueIndexEnd() - 1})
 		flags |= flagFound
+		// One past the cap is enough to refuse, so the rest of the array is never
+		// read: a megabyte of documents costs what the cap allows plus one.
+		// Only within an array — a lone request object is one document whatever
+		// -max-batch says.
+		if level == 2 && len(dst) > maxBatch {
+			flags |= flagTooMany
+			return true
+		}
 		return false
 	})
 
 	if errScan.IsErr() {
 		if errScan.Code == jscan.ErrorCodeCallback {
-			// The callback breaks for an unexpected batch and for a collision.
-			if flags&flagCollision != 0 {
+			// The callback breaks for an unexpected batch, for a collision,
+			// and for a batch past the cap.
+			switch {
+			case flags&flagCollision != 0:
 				return dst, errQueryCollision
+			case flags&flagTooMany != 0:
+				return dst, errBatchTooLarge
 			}
 			return dst, errBatch
 		}

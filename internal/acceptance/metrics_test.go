@@ -15,18 +15,19 @@ import (
 
 // TestDecisionsAreCounted covers what a decision is called. Every refusal has a
 // series of its own, since an operator reading a spike does something different
-// for each: an allowlist out of date, a client sending nonsense, a client and
-// -server.max-body disagreeing, somebody probing, and a nesting attack.
+// for each: an allowlist out of date, a client sending nonsense,
+// a client and -server.max-body disagreeing, somebody probing, a nesting attack,
+// and a client batching past -max-batch.
 //
 // On a server of its own, since what's asserted is the count.
 func TestDecisionsAreCounted(t *testing.T) {
-	// The default of -depth-limit, which this run doesn't set,
-	// and a document past it.
+	// The default of -depth-limit, which this run doesn't set, and a document past it.
 	const limit = 128
 	tooDeep := "{" + strings.Repeat("f{", limit) + "f" + strings.Repeat("}", limit+1)
 
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc}, "-server.max-body", "4096")
+		e := newEnv(t, tgt, []string{allowedDoc},
+			"-server.max-body", "4096", "-max-batch", "2")
 
 		// One request per decision.
 		for _, tc := range []struct {
@@ -42,6 +43,10 @@ func TestDecisionsAreCounted(t *testing.T) {
 				rejectedText + `"}`, http.StatusBadRequest},
 			{"too_deep", `{"query":` + strconv.Quote(tooDeep) + `}`,
 				http.StatusForbidden},
+			// One past -max-batch, which this run sets to 2.
+			{"batch_too_large", `[{"query":"` + allowedText + `"},{"query":"` +
+				allowedText + `"},{"query":"` + allowedText + `"}]`,
+				http.StatusRequestEntityTooLarge},
 		} {
 			if code, answer := post(t, e.server, tc.body); code != tc.expect {
 				t.Fatalf("%s: expected %d; received %d: %s",
@@ -52,6 +57,7 @@ func TestDecisionsAreCounted(t *testing.T) {
 		_, exposition := control(t, e.server, http.MethodGet, "/metrics", "")
 		for _, decision := range []string{
 			"allowed", "rejected", "malformed", "too_large", "ambiguous", "too_deep",
+			"batch_too_large",
 		} {
 			for _, metric := range []string{
 				`gqlhash_proxy_requests_total{decision=%q} 1`,
@@ -73,12 +79,14 @@ func TestDecisionsAreCounted(t *testing.T) {
 			TooLarge  int `json:"too_large"`
 			Ambiguous int `json:"ambiguous"`
 			TooDeep   int `json:"too_deep"`
+			BatchBig  int `json:"batch_too_large"`
 		}
 		if err := json.Unmarshal([]byte(body), &status); err != nil {
 			t.Fatalf("answering no JSON: %v: %s", err, body)
 		}
 		if status.Allowed != 1 || status.Rejected != 1 || status.Malformed != 1 ||
-			status.TooLarge != 1 || status.Ambiguous != 1 || status.TooDeep != 1 {
+			status.TooLarge != 1 || status.Ambiguous != 1 || status.TooDeep != 1 ||
+			status.BatchBig != 1 {
 			t.Errorf("expected one of each; received %s", body)
 		}
 	})
@@ -252,7 +260,7 @@ func TestMetricsAllowlistTracksReload(t *testing.T) {
 // Counting per document would make a request rate that no client's traffic matches.
 func TestMetricsBatchCountsOnce(t *testing.T) {
 	each(t, func(t *testing.T, tgt target) {
-		e := newEnv(t, tgt, []string{allowedDoc, "{ b }"}, "-allow-batch")
+		e := newEnv(t, tgt, []string{allowedDoc, "{ b }"}, "-max-batch", "8")
 
 		batch := `[{"query":"` + allowedText + `"},{"query":"{ b }"}]`
 		if code, answer := post(t, e.server, batch); code != http.StatusOK {

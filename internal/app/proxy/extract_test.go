@@ -6,10 +6,18 @@ import (
 	"testing"
 )
 
+// noBatch is -max-batch off, inBatch a cap above every batch in these tables,
+// so a row says whether batching is on rather than what the cap happens to be.
+// TestExtractJSONBatchCap covers the cap itself.
+const (
+	noBatch = 0
+	inBatch = 8
+)
+
 func TestExtractJSON(t *testing.T) {
-	f := func(t *testing.T, expectErr error, expect []string, body string, batch bool) {
+	f := func(t *testing.T, expectErr error, expect []string, body string, maxBatch int) {
 		t.Helper()
-		spans, err := extractJSON(nil, []byte(body), batch)
+		spans, err := extractJSON(nil, []byte(body), maxBatch)
 		if !errors.Is(err, expectErr) {
 			t.Fatalf("expected err %v; received: %v; body: %s", expectErr, err, body)
 		}
@@ -26,30 +34,85 @@ func TestExtractJSON(t *testing.T) {
 		}
 	}
 
-	f(t, nil, []string{"{f}"}, `{"query":"{f}"}`, false)
-	f(t, nil, []string{"{f}"}, `{"query": "{f}"}`, false)
-	f(t, nil, []string{`{f(s:\"x\")}`}, `{"query":"{f(s:\"x\")}"}`, false)
+	f(t, nil, []string{"{f}"}, `{"query":"{f}"}`, noBatch)
+	f(t, nil, []string{"{f}"}, `{"query": "{f}"}`, noBatch)
+	f(t, nil, []string{`{f(s:\"x\")}`}, `{"query":"{f(s:\"x\")}"}`, noBatch)
 	f(t, nil, []string{"{f}"},
-		`{"operationName":"Q","query":"{f}","variables":{"a":1}}`, false)
+		`{"operationName":"Q","query":"{f}","variables":{"a":1}}`, noBatch)
 
 	// A query member of an object other than the request isn't the document.
-	f(t, nil, []string{"{f}"}, `{"query":"{f}","variables":{"query":"nope"}}`, false)
-	f(t, errNoQuery, nil, `{"variables":{"query":"nope"}}`, false)
+	f(t, nil, []string{"{f}"}, `{"query":"{f}","variables":{"query":"nope"}}`, noBatch)
+	f(t, errNoQuery, nil, `{"variables":{"query":"nope"}}`, noBatch)
 
 	// Only a string is a document.
-	f(t, errNoQuery, nil, `{"query":null}`, false)
-	f(t, errNoQuery, nil, `{"query":42}`, false)
-	f(t, errNoQuery, nil, `{}`, false)
+	f(t, errNoQuery, nil, `{"query":null}`, noBatch)
+	f(t, errNoQuery, nil, `{"query":42}`, noBatch)
+	f(t, errNoQuery, nil, `{}`, noBatch)
 
-	f(t, errMalformedJSON, nil, `{"query":`, false)
-	f(t, errMalformedJSON, nil, `not json`, false)
-	f(t, errMalformedJSON, nil, ``, false)
+	f(t, errMalformedJSON, nil, `{"query":`, noBatch)
+	f(t, errMalformedJSON, nil, `not json`, noBatch)
+	f(t, errMalformedJSON, nil, ``, noBatch)
 
 	// A batch is rejected unless it's allowed, then every document is returned.
-	f(t, errBatch, nil, `[{"query":"{a}"},{"query":"{b}"}]`, false)
-	f(t, nil, []string{"{a}", "{b}"}, `[{"query":"{a}"},{"query":"{b}"}]`, true)
-	f(t, nil, []string{"{a}"}, `{"query":"{a}"}`, true)
-	f(t, errNoQuery, nil, `[{"variables":{}}]`, true)
+	f(t, errBatch, nil, `[{"query":"{a}"},{"query":"{b}"}]`, noBatch)
+	f(t, nil, []string{"{a}", "{b}"}, `[{"query":"{a}"},{"query":"{b}"}]`, inBatch)
+	f(t, nil, []string{"{a}"}, `{"query":"{a}"}`, inBatch)
+	f(t, errNoQuery, nil, `[{"variables":{}}]`, inBatch)
+}
+
+// TestExtractJSONBatchCap covers -max-batch:
+// a batch of up to that many documents is read, one past it is refused,
+// and a lone request object is one document whatever the cap says.
+//
+// The scan stops at the document that breaks the cap, so a body carrying tens of
+// thousands of them costs the cap and not the body — which is the point of a count
+// over -server.max-body's bytes.
+func TestExtractJSONBatchCap(t *testing.T) {
+	batchOf := func(n int) string {
+		elements := make([]string, n)
+		for i := range elements {
+			elements[i] = `{"query":"{a}"}`
+		}
+		return "[" + strings.Join(elements, ",") + "]"
+	}
+
+	for _, tc := range []struct {
+		maxBatch, documents int
+		expectErr           error
+	}{
+		{maxBatch: 0, documents: 1, expectErr: errBatch},
+		{maxBatch: 1, documents: 1},
+		{maxBatch: 1, documents: 2, expectErr: errBatchTooLarge},
+		{maxBatch: 3, documents: 3},
+		{maxBatch: 3, documents: 4, expectErr: errBatchTooLarge},
+		{maxBatch: 2, documents: 10_000, expectErr: errBatchTooLarge},
+	} {
+		body := []byte(batchOf(tc.documents))
+		spans, err := extractJSON(nil, body, tc.maxBatch)
+		if !errors.Is(err, tc.expectErr) {
+			t.Errorf("cap %d over %d documents: expected %v; received %v",
+				tc.maxBatch, tc.documents, tc.expectErr, err)
+			continue
+		}
+		switch {
+		case tc.expectErr == nil && len(spans) != tc.documents:
+			t.Errorf("cap %d: expected %d documents; received %d",
+				tc.maxBatch, tc.documents, len(spans))
+		case errors.Is(err, errBatchTooLarge) && len(spans) != tc.maxBatch+1:
+			// One past the cap and no further: the rest of the array is never read.
+			t.Errorf("cap %d: expected the scan to stop at %d documents; it read %d",
+				tc.maxBatch, tc.maxBatch+1, len(spans))
+		}
+	}
+
+	// A lone request object is no batch, so the cap doesn't reach it.
+	for _, maxBatch := range []int{0, 1, 8} {
+		spans, err := extractJSON(nil, []byte(`{"query":"{a}"}`), maxBatch)
+		if err != nil || len(spans) != 1 {
+			t.Errorf("cap %d: expected one document, no error; received %d, %v",
+				maxBatch, len(spans), err)
+		}
+	}
 }
 
 // TestExtractJSONEscapedQueryKey covers a query member whose key carries a JSON
@@ -67,7 +130,7 @@ func TestExtractJSON(t *testing.T) {
 func TestExtractJSONEscapedQueryKey(t *testing.T) {
 	f := func(t *testing.T, expectErr error, expect []string, body string) {
 		t.Helper()
-		spans, err := extractJSON(nil, []byte(body), false)
+		spans, err := extractJSON(nil, []byte(body), noBatch)
 		if !errors.Is(err, expectErr) {
 			t.Fatalf("expected err %v; received %v; body: %s", expectErr, err, body)
 		}
@@ -113,31 +176,31 @@ func TestExtractJSONEscapedQueryKey(t *testing.T) {
 // the decoder's business, so the request is refused rather than one of them
 // picked and a body forwarded that an API may read the other way round.
 func TestExtractJSONQueryCollision(t *testing.T) {
-	f := func(t *testing.T, expectErr error, body string, batch bool) {
+	f := func(t *testing.T, expectErr error, body string, maxBatch int) {
 		t.Helper()
-		if _, err := extractJSON(nil, []byte(body), batch); !errors.Is(err, expectErr) {
+		if _, err := extractJSON(nil, []byte(body), maxBatch); !errors.Is(err, expectErr) {
 			t.Errorf("expected err %v; received %v; body: %s", expectErr, err, body)
 		}
 	}
 
 	// The plain spelling twice, whatever the two carry.
-	f(t, errQueryCollision, `{"query":"{a}","query":"{b}"}`, false)
-	f(t, errQueryCollision, `{"query":"{a}","query":"{a}"}`, false)
-	f(t, errQueryCollision, `{"query":"{a}","queRY":"{b}"}`, false)
-	f(t, errQueryCollision, `{"query":"{a}","query":"{b}","query":"{c}"}`, false)
+	f(t, errQueryCollision, `{"query":"{a}","query":"{b}"}`, noBatch)
+	f(t, errQueryCollision, `{"query":"{a}","query":"{a}"}`, noBatch)
+	f(t, errQueryCollision, `{"query":"{a}","queRY":"{b}"}`, noBatch)
+	f(t, errQueryCollision, `{"query":"{a}","query":"{b}","query":"{c}"}`, noBatch)
 
 	// The name is what collides, not the document: a member this reads nothing
 	// from is one an API may still run something out of.
-	f(t, errQueryCollision, `{"query":"{a}","query":null}`, false)
-	f(t, errQueryCollision, `{"query":null,"query":"{a}"}`, false)
-	f(t, errQueryCollision, `{"query":"{a}","query":{"x":1}}`, false)
-	f(t, errQueryCollision, `{"query":"{a}","query":["x"]}`, false)
+	f(t, errQueryCollision, `{"query":"{a}","query":null}`, noBatch)
+	f(t, errQueryCollision, `{"query":null,"query":"{a}"}`, noBatch)
+	f(t, errQueryCollision, `{"query":"{a}","query":{"x":1}}`, noBatch)
+	f(t, errQueryCollision, `{"query":"{a}","query":["x"]}`, noBatch)
 
 	// A member of another object is another request's, or no request's at all.
-	f(t, nil, `{"query":"{a}","variables":{"query":"nope"}}`, false)
-	f(t, nil, `[{"query":"{a}"},{"query":"{b}"}]`, true)
-	f(t, errQueryCollision, `[{"query":"{a}","query":"{b}"}]`, true)
-	f(t, errQueryCollision, `[{"query":"{a}"},{"query":"{b}","queRY":"{c}"}]`, true)
+	f(t, nil, `{"query":"{a}","variables":{"query":"nope"}}`, noBatch)
+	f(t, nil, `[{"query":"{a}"},{"query":"{b}"}]`, inBatch)
+	f(t, errQueryCollision, `[{"query":"{a}","query":"{b}"}]`, inBatch)
+	f(t, errQueryCollision, `[{"query":"{a}"},{"query":"{b}","queRY":"{c}"}]`, inBatch)
 }
 
 // TestExtractQueryParamEncodedName is the GET half of TestExtractJSONEscapedQueryKey.
@@ -252,7 +315,7 @@ func TestExtractZeroCopy(t *testing.T) {
 	scratch := make([]byte, 0, 1024)
 
 	if n := testing.AllocsPerRun(100, func() {
-		s, err := extractJSON(spans[:0], body, false)
+		s, err := extractJSON(spans[:0], body, noBatch)
 		if err != nil || len(s) != 1 {
 			t.Fatal("extraction failed")
 		}
