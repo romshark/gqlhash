@@ -12,11 +12,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       
-      # Build both executables.
+      # Build every executable. gqlhash-proxy-fhttp is no longer a release artifact,
+      # but the acceptance suite compiles it, so a break there
+      # surfaces as a confusing test failure unless it's built here.
       - name: Build
         run: |
           go build -o ./bin/gqlhash ./cmd/gqlhash
           go build -o ./bin/gqlhash-proxy ./cmd/gqlhash-proxy
+          go build -o ./bin/gqlhash-proxy-fhttp ./cmd/gqlhash-proxy-fhttp
 
       # Test.
       - name: Test and calculate coverage
@@ -36,5 +39,4 @@ jobs:
         run: go test -race -count=1 $(go list ./... | grep -v /internal/acceptance)
 
       - name: Run go vet
-        continue-on-error: true
         run: go vet ./...
