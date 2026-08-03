@@ -25,9 +25,13 @@
 //
 // What an implementation has to do to be testable here:
 //
-//   - take -server.listen, -control.listen, -upstream.url and -allowlist,
-//     and listen on the addresses it was given,
+//   - accept every flag in the table of cmd/gqlhash-proxy/README.md, whether or
+//     not it acts on one. A flag it doesn't know is a startup failure, so the
+//     test passing it reports that instead of the rule it meant to check,
+//   - listen on the addresses -server.listen and -control.listen name,
 //   - shut down on SIGINT and exit 0.
+//
+// Which of those flags it has to honor is what the tests say, one rule at a time.
 //
 // Nothing is asked of what it logs: a test learns it's serving by connecting to it.
 //
