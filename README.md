@@ -131,9 +131,15 @@ take a released binary or build from source, below.
 
 ```sh
 brew tap romshark/tools
+brew trust romshark/tools  # Homebrew 6 loads a third-party tap only once trusted
 brew install gqlhash       # the hashing command
 brew install gqlhash-proxy # the allowlist-firewall proxy
 ```
+
+Without the trust line Homebrew 6 stops at `Refusing to load cask
+romshark/tools/gqlhash from untrusted tap`. `brew trust --cask
+romshark/tools/gqlhash` trusts that one cask instead of every one the tap
+carries, now and later.
 
 v1 shipped `gqlhash` as a formula, which Homebrew doesn't replace with a cask.
 `brew uninstall --formula gqlhash` first if `brew list --formula` still names it.
