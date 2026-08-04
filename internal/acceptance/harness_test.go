@@ -109,7 +109,10 @@ func resolve(dir string) ([]target, error) {
 		path := filepath.Join(dir, name)
 		args := []string{"build", "-o", path}
 		if os.Getenv("GOCOVERDIR") != "" {
-			args = append(args, "-cover",
+			// atomic rather than the default set: the servers are hit concurrently,
+			// and the mode has to be the one the in-process run uses,
+			// or go tool covdata merge refuses the two halves. See ci.yml.
+			args = append(args, "-cover", "-covermode=atomic",
 				"-coverpkg=github.com/romshark/gqlhash/v2/...")
 		}
 		build := exec.Command("go", append(args, "./cmd/"+name)...)

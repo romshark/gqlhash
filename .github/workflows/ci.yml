@@ -21,9 +21,23 @@ jobs:
           go build -o ./bin/gqlhash-proxy ./cmd/gqlhash-proxy
           go build -o ./bin/gqlhash-proxy-fhttp ./cmd/gqlhash-proxy-fhttp
 
-      # Test.
+      # Test. Coverage comes in two halves: what the tests reach in process,
+      # and what the servers the acceptance suite starts reach.
+      # A binary reached through an exec reports nothing to the first half, which is why
+      # the proxies used to land in Coveralls near 0% however much of them the
+      # suite drove. Both halves write covdata, so covdata merge puts them back together;
+      # -covermode has to be the one resolve() in the acceptance harness
+      # builds the servers with. The suite is left out of the first half:
+      # it covers nothing in process that the second half doesn't cover.
       - name: Test and calculate coverage
-        run: go test -v -covermode=count -coverprofile=coverage.out ./...
+        run: |
+          mkdir -p covdata/unit covdata/servers
+          go test -v -covermode=atomic -coverpkg=./... \
+            $(go list ./... | grep -v /internal/acceptance) \
+            -args -test.gocoverdir=$PWD/covdata/unit
+          GOCOVERDIR=$PWD/covdata/servers go test -count=1 ./internal/acceptance
+          go tool covdata merge -i=covdata/unit,covdata/servers -o=covdata/merged
+          go tool covdata textfmt -i=covdata/merged -o=coverage.out
       - name: Convert coverage.out to coverage.lcov
         uses: jandelgado/gcov2lcov-action@v1
       - name: Coveralls
