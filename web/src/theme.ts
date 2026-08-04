@@ -96,7 +96,11 @@ const choices: readonly {
 }[] = [
   { theme: "light", label: "Light theme", icon: "sun" },
   { theme: "dark", label: "Dark theme", icon: "moon" },
-  { theme: "system", label: "Follow the system", text: "Auto" },
+  // The label of the one that carries visible text has to begin with that
+  // text: a name that doesn't is a name nobody can say out loud, since what
+  // the eye reads on the button and what a voice command matches are the same
+  // word to everyone but the two of them.
+  { theme: "system", label: "Auto — follow the system", text: "Auto" },
 ];
 
 /**

@@ -69,8 +69,13 @@ export interface PaneFile {
 export interface PaneConfig {
   /** kind names the pane and prefixes the ids of the files it holds. */
   readonly kind: "operations" | "allowlist";
-  /** tabs is the <neo-tabs> host, tablist the strip its tabs go in. */
+  /**
+   * tabs is the <neo-tabs> host, tablist the element the tabs themselves go
+   * in, and strip the box around it, which also holds the add button: a
+   * tablist may own tabs and nothing else.
+   */
   readonly tabs: HTMLElement;
+  readonly strip: HTMLElement;
   readonly tablist: HTMLElement;
   /** panel is the <neo-tabpanel> the editor lives in. */
   readonly panel: HTMLElement;
@@ -83,6 +88,12 @@ export interface PaneConfig {
   readonly newName: (n: number) => string;
   /** addLabel names the add button itself, for a screen reader. */
   readonly addLabel: string;
+  /**
+   * editorLabel names the editor. It's a text box with no <label> of its own —
+   * which file it holds is on the tab above it — so a reader would otherwise
+   * reach an unnamed field.
+   */
+  readonly editorLabel: string;
   /** onEdit fires for every keystroke; the page debounces it. */
   readonly onEdit: () => void;
   /** onUpdate fires once per tab action: switch, add, remove or rename. */
@@ -114,8 +125,15 @@ export function createPane(config: PaneConfig): Pane {
   let activeId = "";
   let created = 0;
 
-  const view = createEditor(config.host, createEditorState("", onEdit));
-  const addButton = makeAddButton();
+  const view = createEditor(config.host, newState(""));
+  // Outside the tablist, after it in the strip, so it keeps its place at the
+  // end of the tabs without being one of the tablist's children.
+  config.strip.append(makeAddButton());
+
+  /** newState builds the state of one file, named for a screen reader. */
+  function newState(text: string): EditorState {
+    return createEditorState(text, onEdit, config.editorLabel);
+  }
 
   function onEdit(text: string): void {
     const file = byId(activeId);
@@ -164,7 +182,7 @@ export function createPane(config: PaneConfig): Pane {
       id: `${config.kind}-${created}`,
       name: unique(name),
       text,
-      editor: createEditorState(text, onEdit),
+      editor: newState(text),
       state: "pending",
       note: "",
       matched: false,
@@ -287,10 +305,10 @@ export function createPane(config: PaneConfig): Pane {
 
     const current = Array.from(config.tablist.children);
     const same =
-      current.length === wanted.length + 1 &&
+      current.length === wanted.length &&
       wanted.every((tab, index) => current[index] === tab);
     if (!same) {
-      config.tablist.replaceChildren(...wanted, addButton);
+      config.tablist.replaceChildren(...wanted);
     }
   }
 

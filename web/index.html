@@ -9,7 +9,7 @@
       of flashing white.
     -->
     <meta name="color-scheme" content="light dark" />
-    <title>gqlhash — check GraphQL operations against an allowlist</title>
+    <title>gqlhash — GraphQL allowlist</title>
     <meta
       name="description"
       content="Write GraphQL operations on the left, an allowlist on the right, and see which entry each operation matches. Runs gqlhash in your browser as WebAssembly; formatting differences are ignored."
@@ -354,10 +354,21 @@
 
             <div class="stack">
               <neo-tabs id="tabs-operations" class="files" auto-activate>
-                <neo-tablist
-                  id="tablist-operations"
-                  aria-label="Operation files"
-                ></neo-tablist>
+                <!-- The strip is the box; the tablist inside it holds nothing
+                     but tabs, which is all a tablist is allowed to own. The
+                     button that adds a file is a sibling of it, and sits back
+                     among the tabs through the tablist's display: contents.
+                     The role and the orientation are declared rather than left
+                     to <neo-tabs>, which only writes them onto a tablist that
+                     is its own child. -->
+                <div class="tab-strip">
+                  <neo-tablist
+                    id="tablist-operations"
+                    role="tablist"
+                    aria-orientation="horizontal"
+                    aria-label="Operation files"
+                  ></neo-tablist>
+                </div>
                 <neo-tabpanel class="editor-pane">
                   <div id="editor-operations" class="editor"></div>
                 </neo-tabpanel>
@@ -435,10 +446,15 @@
 
             <div class="stack">
               <neo-tabs id="tabs-allowlist" class="files" auto-activate>
-                <neo-tablist
-                  id="tablist-allowlist"
-                  aria-label="Allowlist files"
-                ></neo-tablist>
+                <!-- See the strip opposite. -->
+                <div class="tab-strip">
+                  <neo-tablist
+                    id="tablist-allowlist"
+                    role="tablist"
+                    aria-orientation="horizontal"
+                    aria-label="Allowlist files"
+                  ></neo-tablist>
+                </div>
                 <neo-tabpanel class="editor-pane">
                   <div id="editor-allowlist" class="editor"></div>
                 </neo-tabpanel>

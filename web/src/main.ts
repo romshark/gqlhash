@@ -68,6 +68,15 @@ function panelOf(tabs: HTMLElement): HTMLElement {
   return panel;
 }
 
+/** stripOf returns the box a pane's tabs and its add button share. */
+function stripOf(tabs: HTMLElement): HTMLElement {
+  const strip = tabs.querySelector<HTMLElement>(":scope > .tab-strip");
+  if (!strip) {
+    throw new Error(`#${tabs.id} holds no tab strip`);
+  }
+  return strip;
+}
+
 const ui = {
   splash: element<HTMLDivElement>("splash"),
   splashStatus: element<HTMLParagraphElement>("splash-status"),
@@ -194,6 +203,7 @@ function start(api: GQLHash): void {
     pane: createPane({
       kind: "operations",
       tabs: operationTabs,
+      strip: stripOf(operationTabs),
       tablist: element("tablist-operations"),
       panel: panelOf(operationTabs),
       host: element("editor-operations"),
@@ -201,6 +211,7 @@ function start(api: GQLHash): void {
       active: saved?.operations.active,
       newName: (n) => `operation-${n}`,
       addLabel: "New operation file",
+      editorLabel: "Operation",
       onEdit: () => edited(operations),
       onUpdate: () => {
         rehash();
@@ -216,6 +227,7 @@ function start(api: GQLHash): void {
     pane: createPane({
       kind: "allowlist",
       tabs: allowlistTabs,
+      strip: stripOf(allowlistTabs),
       tablist: element("tablist-allowlist"),
       panel: panelOf(allowlistTabs),
       host: element("editor-allowlist"),
@@ -223,6 +235,7 @@ function start(api: GQLHash): void {
       active: saved?.allowlist.active,
       newName: (n) => `entry-${n}`,
       addLabel: "New allowlist entry",
+      editorLabel: "Allowlist entry",
       onEdit: () => edited(allowlist),
       onUpdate: () => {
         rehash();

@@ -44,7 +44,9 @@
   --border: #e6e4ea;
   --fg: #1c1a20;
   --fg-muted: #5f5b68;
-  --fg-faint: #8b8794;
+  /* The faintest text still has to be read: 4.5:1 on every surface it lands
+   * on, the palest of which is --bg-input. */
+  --fg-faint: #716d78;
   --warn: #9a5b00;
   --ok: #0f7355;
   --error: #c02640;
@@ -53,7 +55,9 @@
   --active-line: rgb(28 26 32 / 4%);
   --splash-glow: #fff0f9;
 
-  --syn-comment: #8b8794;
+  /* A comment is text like any other, and the editor's background is the
+   * palest surface on the page; --fg-faint is what clears 4.5:1 on it. */
+  --syn-comment: #716d78;
   --syn-keyword: #b30079;
   --syn-directive: #b30079;
   --syn-type: #1f61a0;
@@ -176,7 +180,9 @@
   --border: #2a2632;
   --fg: #ece9f1;
   --fg-muted: #a29daf;
-  --fg-faint: #6f6a7c;
+  /* As in the light scheme: 4.5:1 on every surface, the darkest contrast
+   * against it being --bg-raised. */
+  --fg-faint: #868291;
   --warn: #f2b366;
   --ok: #6ee7b7;
   --error: #ff8095;
@@ -185,7 +191,7 @@
   --active-line: rgb(236 233 241 / 5%);
   --splash-glow: #241a2b;
 
-  --syn-comment: #6f6a7c;
+  --syn-comment: #868291;
   --syn-keyword: #ff6ec7;
   --syn-directive: #ff6ec7;
   --syn-type: #7cc4f8;
@@ -346,6 +352,33 @@ body {
   display: flex;
   height: 100dvh;
   overflow: hidden;
+}
+
+/*
+ * Holds the sidebar's column from the first frame, at the width where it is
+ * always open — above the kit's 50rem breakpoint neither the button that
+ * opens it nor the one that closes it is on screen.
+ *
+ * Every state the kit leaves it in before it has settled takes it out of the
+ * column: undefined it's fixed and off-canvas, defined without [open] it
+ * collapses to zero, and in its overlay state it's fixed again. Which one it
+ * lands on it reads off the width of its container — and this one is
+ * display:none until the WebAssembly module has loaded, so it measures
+ * nothing, calls the viewport narrow and goes to the overlay. The moment the
+ * page is revealed its ResizeObserver sees the real width and snaps it open,
+ * taking the workspace 17.5rem to the right with it: the whole of the page,
+ * moved after it had painted, which is a layout shift of 0.45 on its own.
+ * Pinning the column here means the first frame is already the final one and
+ * settling changes nothing. The id is what outranks the kit's own rules.
+ */
+@media (min-width: 50rem) {
+  #sidebar {
+    position: static;
+    transform: none;
+    width: var(--neo-sidebar-width);
+    max-width: var(--neo-sidebar-width);
+    border-color: var(--neo-sidebar-border-color);
+  }
 }
 
 .workspace {
@@ -922,14 +955,46 @@ neo-option[aria-selected="true"] .kind-tag {
  * The strip wraps instead of scrolling: a file whose tab is off the edge of it
  * is one whose standing can't be read, which is half of what the page has to
  * say.
+ *
+ * The box is this element rather than the <neo-tablist> inside it, which a
+ * tablist has to be: it may own tabs and nothing else, and the button that
+ * adds a file is not one. Laying the tablist out as display: contents hands
+ * its tabs to this row, so the button still follows the last of them and wraps
+ * with them, while the tablist owns only tabs. What's restated here is the
+ * kit's own box, in the kit's own tokens.
  */
-neo-tablist {
+.tab-strip {
+  display: flex;
   flex-wrap: wrap;
-  width: auto;
-  overflow: visible;
+  align-items: center;
+  gap: 0.25rem;
+  padding: var(--neo-tabs-list-padding);
+  background: var(--neo-tabs-list-bg);
+  border-radius: var(--neo-tabs-radius);
   /* Square where the strip meets the editor under it. */
   border-bottom-right-radius: 0;
   border-bottom-left-radius: 0;
+}
+
+neo-tablist {
+  display: contents;
+}
+
+/* The two schemes where the kit draws the strip an edge of its own. */
+@media (forced-colors: active) {
+  .tab-strip {
+    padding: 0;
+    background: ButtonFace;
+    border: var(--neo-tabs-list-border-width) solid ButtonText;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .tab-strip {
+    padding: 0;
+    background: transparent;
+    border: var(--neo-tabs-list-border-width) solid currentColor;
+  }
 }
 
 neo-tab {

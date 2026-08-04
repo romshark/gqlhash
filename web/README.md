@@ -36,6 +36,15 @@ Go edits are covered by hot reloading too: the `go-wasm-watch` plugin in
 packages it imports, rebuilds, and reloads the page. Compile errors go to the
 terminal running `pnpm dev`.
 
+Measure against `pnpm preview`, never `pnpm dev`. The dev server ships every
+module unbundled and unminified — about 7 MB against the build's 1.2 MB — so a
+Lighthouse run there scores around 70 where the build scores 96, all of it the
+harness. `preview` serves the real `dist/`, gzipped, including the WebAssembly
+binary, which `vite preview` alone sends raw; the `wasm-preview-gzip` plugin in
+[vite.config.ts](vite.config.ts) is what closes that last gap, and without it
+preview reads several seconds slower than the deployed site for a reason the
+deployed site doesn't have.
+
 [Biome](https://biomejs.dev) handles formatting, linting and import sorting;
 [biome.json](biome.json) excludes the vendored files, none of which are ours to
 reformat. Go code is unaffected — `gofmt` and `go vet` from the repository root
@@ -91,6 +100,13 @@ schemes, wordmark and favicon only), `--accent` (interface accent, lightened in
 dark where 4.1:1 isn't enough) and `--accent-text` (body text, 4.5:1 either
 way). Every color, including CodeMirror's, is a variable in the same block.
 
+The two grey tokens carry a floor of their own: `--fg-muted` and `--fg-faint`
+are set to clear 4.5:1 against every surface they land on, the tightest being
+`--bg-raised` in dark and `--bg-input` in light. `--fg-faint` is the smallest
+text on the page — the option hints, the footer, the tab markers — and
+`--syn-comment` matches it, since a comment in the editor is text like any
+other.
+
 [src/theme.ts](src/theme.ts) puts `dark` or `light` on `<html>` — resolving
 "follow the system" itself, since a media query can't be overruled by a choice —
 and saves the choice under `gqlhash-theme`. An inline script in
@@ -129,3 +145,10 @@ every push to `main` touching the site or the hasher; it needs Pages enabled wit
 The WebAssembly binary is ~3.3 MB, or ~950 KB over the wire — make sure the host
 serves `.wasm` with `Content-Encoding: gzip` or `br`. GitHub Pages does by
 default.
+
+It's also the last link of a chain — document, then entry chunk, then the fetch
+the chunk makes — so the `wasm-preload` plugin in
+[vite.config.ts](vite.config.ts) puts a `<link rel="preload">` for it in the
+head, and it downloads alongside the script instead of after it. The plugin
+emits the link rather than `index.html` carrying it, because the build
+content-hashes the name.

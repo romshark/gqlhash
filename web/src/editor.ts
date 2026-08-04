@@ -101,11 +101,15 @@ const highlight = HighlightStyle.define([
  * switching tabs keeps its cursor, scroll position and undo history — the view
  * they're shown in is shared and holds only whichever one is on screen.
  *
- * onChange fires for every document edit, undebounced.
+ * onChange fires for every document edit, undebounced. label names the editing
+ * surface, which CodeMirror gives the textbox role and no name — it's the
+ * state's rather than the view's because the view takes its attributes from
+ * whichever state is swapped into it.
  */
 export function createEditorState(
   doc: string,
   onChange: (doc: string) => void,
+  label: string,
 ): EditorState {
   const extensions: Extension[] = [
     basicSetup,
@@ -113,6 +117,7 @@ export function createEditorState(
     graphql,
     syntaxHighlighting(highlight),
     themeConfig.of(buildTheme(theme.dark())),
+    EditorView.contentAttributes.of({ "aria-label": label }),
     EditorView.lineWrapping,
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
