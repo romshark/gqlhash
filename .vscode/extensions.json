@@ -1,0 +1,43 @@
+// What VS Code offers to install when this repository is opened. It is a
+// suggestion, not a requirement: everything here has a command line equivalent
+// that `make` or `pnpm` already runs, and nothing in the build depends on an
+// editor. See DEVELOPMENT.md.
+{
+  "recommendations": [
+    // Go: the language server, the test runner and the debugger. Configure it
+    // to format with gofumpt ("go.formatTool": "custom" and
+    // "go.alternateTools": {"customFormatter": "gofumpt"}), or the editor
+    // writes back files that `make lint` refuses. See DEVELOPMENT.md
+    // "Formatting".
+    "golang.go",
+
+    // web/ is linted and formatted by Biome, not by ESLint and Prettier —
+    // web/biome.json is the same config `pnpm run ci` uses.
+    "biomejs.biome",
+
+    // Highlighting for the .graphql and .graphqls files in playground/queries
+    // and testdata. This is the syntax-only package on purpose: the full
+    // graphql extension starts a language server that wants a graphql-config
+    // file and a schema, and this repository has neither.
+    "GraphQL.vscode-graphql-syntax",
+
+    // Schema-aware editing for .golangci.yml, .goreleaser.yml and the
+    // workflows — the linters and the release config are YAML with schemas
+    // worth having completed and validated.
+    "redhat.vscode-yaml",
+
+    // The workflows in .github/workflows, with their run history.
+    "GitHub.vscode-github-actions",
+
+    // playground/ is a Docker Compose demo: a Dockerfile per service and a
+    // compose file. Nothing else in the repository needs this.
+    "ms-azuretools.vscode-docker"
+  ],
+
+  // Both are what Biome replaces in web/. Running them alongside it means two
+  // formatters disagreeing about the same file.
+  "unwantedRecommendations": [
+    "esbenp.prettier-vscode",
+    "dbaeumer.vscode-eslint"
+  ]
+}
