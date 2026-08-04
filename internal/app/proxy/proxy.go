@@ -287,7 +287,7 @@ func newProxy(
 			if errors.Is(context.Cause(r.Context()), errUpstreamTimeout) {
 				p.counters.upstream.Add(1)
 				p.log.Error().Err(err).Msg("forwarding upstream")
-				writeError(w, http.StatusGatewayTimeout,
+				writeError(w, r.Header.Get("Accept"), http.StatusGatewayTimeout,
 					"upstream unavailable", "UPSTREAM_UNAVAILABLE")
 				return
 			}
@@ -306,7 +306,8 @@ func newProxy(
 				code = http.StatusGatewayTimeout
 			}
 			p.log.Error().Err(err).Msg("forwarding upstream")
-			writeError(w, code, "upstream unavailable", "UPSTREAM_UNAVAILABLE")
+			writeError(w, r.Header.Get("Accept"), code,
+				"upstream unavailable", "UPSTREAM_UNAVAILABLE")
 		},
 	}
 	return p
@@ -324,16 +325,19 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	allowed, err := p.check(st, r)
+	// Every branch below reads Accept for the media type of the envelope it
+	// writes, see [errorContentType]. Read there rather than here:
+	// an allowed request is answered by the API and never reaches one.
 	switch {
 	case errors.Is(err, errTooLarge):
 		p.counters.tooLarge.Add(1)
-		p.reject(w, http.StatusRequestEntityTooLarge,
+		p.reject(w, r.Header.Get("Accept"), http.StatusRequestEntityTooLarge,
 			"request body too large", "REQUEST_TOO_LARGE")
 		p.metrics.Observe(decisionTooLarge, start)
 		return
 	case errors.Is(err, errTooDeep):
 		p.counters.tooDeep.Add(1)
-		p.reject(w, http.StatusForbidden,
+		p.reject(w, r.Header.Get("Accept"), http.StatusForbidden,
 			"operation not allowed", "OPERATION_NOT_ALLOWED")
 		p.metrics.Observe(decisionTooDeep, start)
 		return
@@ -348,12 +352,12 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// as writeError does with the content type.
 			w.Header()["Allow"] = allowHeader
 		}
-		writeError(w, code, message, extension)
+		writeError(w, r.Header.Get("Accept"), code, message, extension)
 		p.metrics.Observe(decisionMethodNotAllowed, start)
 		return
 	case errors.Is(err, errBatchTooLarge):
 		p.counters.batchBig.Add(1)
-		p.reject(w, http.StatusRequestEntityTooLarge,
+		p.reject(w, r.Header.Get("Accept"), http.StatusRequestEntityTooLarge,
 			err.Error(), "BATCH_TOO_LARGE")
 		p.metrics.Observe(decisionBatchTooLarge, start)
 		return
@@ -362,7 +366,8 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if p.debug {
 			p.log.Debug().Err(err).Msg("rejecting an ambiguous request")
 		}
-		p.reject(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+		p.reject(w, r.Header.Get("Accept"),
+			http.StatusBadRequest, err.Error(), "BAD_REQUEST")
 		p.metrics.Observe(decisionAmbiguous, start)
 		return
 	case err != nil:
@@ -370,7 +375,8 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if p.debug {
 			p.log.Debug().Err(err).Msg("rejecting a malformed request")
 		}
-		p.reject(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+		p.reject(w, r.Header.Get("Accept"),
+			http.StatusBadRequest, err.Error(), "BAD_REQUEST")
 		p.metrics.Observe(decisionMalformed, start)
 		return
 	case !allowed:
@@ -384,7 +390,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Str("method", r.Method).
 				Msg("the document is not on the allowlist")
 		}
-		p.reject(w, http.StatusForbidden,
+		p.reject(w, r.Header.Get("Accept"), http.StatusForbidden,
 			"operation not allowed", "OPERATION_NOT_ALLOWED")
 		p.metrics.Observe(decisionRejected, start)
 		return
@@ -656,10 +662,14 @@ func (p *proxy) readBody(st *state, r *http.Request) error {
 }
 
 // reject answers with a GraphQL error body. Under -opaque-errors that's a 403
-// without detail, so a caller learns nothing about why.
-func (p *proxy) reject(w http.ResponseWriter, code int, message, extension string) {
+// without detail, so a caller learns nothing about why. accept is the client's
+// Accept header, which -opaque-errors doesn't reach:
+// what a refusal is written in is no detail of why it was refused.
+func (p *proxy) reject(
+	w http.ResponseWriter, accept string, code int, message, extension string,
+) {
 	code, message, extension = p.rejection(code, message, extension)
-	writeError(w, code, message, extension)
+	writeError(w, accept, code, message, extension)
 }
 
 // rejection applies -opaque-errors. The one copy of that rule:
@@ -675,15 +685,19 @@ func (p *proxy) rejection(
 }
 
 // writeError answers with the GraphQL error shape a client library expects.
+// accept is the client's Accept header, which decides the media type,
+// see [errorContentType].
 //
 // The envelope is written rather than marshalled, which keeps a rejection free
 // of allocations, so the variable parts are escaped on the way out.
-func writeError(w http.ResponseWriter, code int, message, extension string) {
+func writeError(
+	w http.ResponseWriter, accept string, code int, message, extension string,
+) {
 	// Header.Set would build a one-element slice per rejection,
 	// the path a flood takes. The shared one is only ever read:
 	// Add on a full slice appends into a new one, Del drops the entry.
 	// The key must be canonical to be assigned like this.
-	w.Header()["Content-Type"] = contentTypeJSON
+	w.Header()["Content-Type"] = errorContentType(accept)
 	w.WriteHeader(code)
 	writeErrorBody(w, message, extension)
 }
@@ -700,8 +714,21 @@ func writeErrorBody(w io.Writer, message, extension string) {
 	_, _ = io.WriteString(w, `"}}]}`)
 }
 
-// contentTypeJSON is shared, so writing an error answer allocates no slice.
-var contentTypeJSON = []string{"application/json; charset=utf-8"}
+// Shared, so writing an error answer allocates no slice.
+var (
+	contentTypeJSON            = []string{"application/json; charset=utf-8"}
+	contentTypeGraphQLResponse = []string{graphqlResponseJSON + "; charset=utf-8"}
+)
+
+// errorContentType is the media type an error envelope of the proxy's own goes
+// out with, given what the client asked for. Both are a GraphQL error response;
+// which one is named is the client's to choose, see [AcceptsGraphQLResponseJSON].
+func errorContentType(accept string) []string {
+	if AcceptsGraphQLResponseJSON(accept) {
+		return contentTypeGraphQLResponse
+	}
+	return contentTypeJSON
+}
 
 // allowHeader is the same for the Allow of a 405, see [AllowedMethods].
 var allowHeader = []string{AllowedMethods}

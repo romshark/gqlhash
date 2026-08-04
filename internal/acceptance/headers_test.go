@@ -219,3 +219,106 @@ func TestQueryParamBesideBody(t *testing.T) {
 		}
 	})
 }
+
+// TestRefusalMediaType covers the media type of the envelopes the proxy writes
+// itself — every refusal, and an upstream failure — which is the client's to
+// choose through Accept.
+//
+// GraphQL over HTTP defines application/graphql-response+json for a GraphQL
+// response and treats application/json as the legacy watershed every client parses.
+// A client that names the first gets it; one that names nothing, or a wildcard,
+// gets application/json, so nothing changes for a library that never asked.
+// The shape of the envelope is the same either way:
+// what the client asked to tell apart is the type.
+func TestRefusalMediaType(t *testing.T) {
+	const (
+		json    = "application/json; charset=utf-8"
+		graphql = "application/graphql-response+json; charset=utf-8"
+	)
+
+	each(t, func(t *testing.T, tgt target) {
+		e := shared(t, tgt)
+		e.allow(t, allowedDoc)
+
+		// One refusal of each kind the proxy can reach on the data plane,
+		// so none of them is answered in a type of its own.
+		refusals := []struct {
+			name, method, body string
+			code               int
+		}{
+			{"a rejected document", http.MethodPost, docRejected, http.StatusForbidden},
+			{"a malformed request", http.MethodPost, `{"no":"query"}`, http.StatusBadRequest},
+			{
+				"a batch where batching is off", http.MethodPost,
+				"[" + docAllowed + "]", http.StatusBadRequest,
+			},
+			{
+				"a method GraphQL doesn't define", http.MethodDelete, docAllowed,
+				http.StatusMethodNotAllowed,
+			},
+		}
+
+		for _, accept := range []struct{ header, want string }{
+			{"", json},
+			{"application/json", json},
+			{"*/*", json},
+			{"application/graphql-response+json", graphql},
+			// Beside another type and behind a q-value,
+			// which is how a client that takes either writes it.
+			{"application/json, application/graphql-response+json;q=0.9", graphql},
+			{"application/graphql-response+json, application/json", graphql},
+		} {
+			for _, r := range refusals {
+				t.Run(r.name+" for "+accept.header, func(t *testing.T) {
+					req, err := http.NewRequest(r.method,
+						"http://"+e.address+"/graphql", strings.NewReader(r.body))
+					if err != nil {
+						t.Fatal(err)
+					}
+					req.Header.Set("Content-Type", "application/json")
+					if accept.header != "" {
+						req.Header.Set("Accept", accept.header)
+					}
+					code, answer, header := sendFor(t, req)
+					if code != r.code {
+						t.Fatalf("expected %d; received %d: %s", r.code, code, answer)
+					}
+					if got := header.Get("Content-Type"); got != accept.want {
+						t.Errorf("Accept %q: expected %q; received %q",
+							accept.header, accept.want, got)
+					}
+					// The same envelope under either type.
+					if !strings.HasPrefix(answer, `{"errors":[{"message":"`) {
+						t.Errorf("expected the error envelope; received %s", answer)
+					}
+				})
+			}
+		}
+	})
+}
+
+// TestRefusalMediaTypeUnderOpaqueErrors covers that -opaque-errors doesn't reach
+// the media type. The flag withholds why a request was refused; what the answer
+// is written in is no part of that, and a client that can't parse the envelope
+// learns nothing either way.
+func TestRefusalMediaTypeUnderOpaqueErrors(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		e := newEnv(t, tgt, []string{allowedDoc}, "-opaque-errors")
+
+		req, err := http.NewRequest(http.MethodPost,
+			"http://"+e.address+"/graphql", strings.NewReader(docRejected))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/graphql-response+json")
+		code, answer, header := sendFor(t, req)
+		if code != http.StatusForbidden {
+			t.Fatalf("expected 403; received %d: %s", code, answer)
+		}
+		if got := header.Get("Content-Type"); got !=
+			"application/graphql-response+json; charset=utf-8" {
+			t.Errorf("expected the media type the client asked for; received %q", got)
+		}
+	})
+}

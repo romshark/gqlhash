@@ -221,7 +221,12 @@ func (c *Core) CountUpstreamError() { c.p.counters.upstream.Add(1) }
 func (c *Core) Debug() bool          { return c.p.debug }
 func (c *Core) LogRequests() bool    { return c.p.logRequests }
 func (c *Core) TrustForwarded() bool { return c.p.trustForwarded }
-func (c *Core) ContentType() string  { return contentTypeJSON[0] }
+
+// ContentType is the media type an [Answer] is written with,
+// given the Accept header of the request it answers, see [AcceptsGraphQLResponseJSON].
+// It takes one so that an implementation can't answer a client in a media type
+// the other wouldn't.
+func (c *Core) ContentType(accept string) string { return errorContentType(accept)[0] }
 
 // IsGraphQLContentType reports whether a body of this content type is the
 // document itself. It's exported for the implementations that fill [Request].

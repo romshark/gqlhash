@@ -343,7 +343,9 @@ func (s *server) handleReadError(ctx *fasthttp.RequestCtx, err error) {
 
 func (s *server) answer(ctx *fasthttp.RequestCtx, a proxy.Answer) {
 	ctx.SetStatusCode(a.Code)
-	ctx.SetContentType(s.core.ContentType())
+	// The client's Accept decides the media type, as under net/http.
+	ctx.SetContentType(s.core.ContentType(
+		string(ctx.Request.Header.Peek("Accept"))))
 	// RFC 9110 asks a 405 to name what is allowed. The status decides,
 	// so -opaque-errors — which answers 403 — names nothing, as under net/http.
 	if a.Code == fasthttp.StatusMethodNotAllowed {

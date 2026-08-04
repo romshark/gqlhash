@@ -27,7 +27,7 @@ func TestWriteErrorEscapes(t *testing.T) {
 		"",
 	} {
 		w := httptest.NewRecorder()
-		writeError(w, http.StatusBadRequest, message, "BAD_REQUEST")
+		writeError(w, "", http.StatusBadRequest, message, "BAD_REQUEST")
 
 		var answer struct {
 			Errors []struct {
@@ -79,7 +79,7 @@ func TestRejectEscapesTheError(t *testing.T) {
 
 	// An error carrying a quote, the way a wrapped read failure could.
 	w := httptest.NewRecorder()
-	p.reject(w, http.StatusBadRequest,
+	p.reject(w, "", http.StatusBadRequest,
 		errors.New(`reading the request body: read "tcp": reset`).Error(),
 		"BAD_REQUEST")
 
