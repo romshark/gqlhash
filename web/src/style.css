@@ -1,0 +1,1219 @@
+/*
+ * Morpheus first: the kit's component styles are the base this file overrides,
+ * and an @import has to lead the stylesheet. Its palette (theme-default.css)
+ * is deliberately left out — the tokens it would set are set below from the
+ * gqlhash palette instead. See vendor/morpheus/README.md.
+ */
+@import url("./vendor/morpheus/morpheus.css");
+
+/*
+ * Two palettes, picked by the operating system. Light is the default and the
+ * media query below swaps in the dark one; nothing in the page hardcodes a
+ * color, so every rule works in both.
+ *
+ * Every token color clears 4.8:1 against the surface it sits on, except the
+ * deliberately recessive comments and hints at ~3.6:1.
+ */
+:root {
+  /*
+   * --brand is Rhodamine, the one color the GraphQL brand guidelines publish
+   * (#E10098, PMS Rhodamine Red C). It's the same in both schemes, because
+   * the guidelines define no dark variant and say the logo appears "in
+   * Rhodamine, white, or black" — so the wordmark and the favicon stay
+   * Rhodamine on a dark canvas rather than wearing a tint of it. At the sizes
+   * they're set in that clears the 3:1 large-text floor.
+   *
+   * --accent is the interface accent — carets, focus rings, fills, the
+   * loading bar — which the guidelines don't govern. It's Rhodamine in light
+   * and a lighter tint of the same hue in dark, where the published color
+   * reaches only 4.1:1 against the canvas: enough for a wordmark, not for the
+   * small text and filled controls this token also has to carry. Morpheus
+   * reads --accent as its own primary role token.
+   *
+   * --accent-text is the same idea for accent-colored body text, which needs
+   * 4.5:1 in either scheme.
+   */
+  --brand: #e10098;
+  --accent: #e10098;
+  --accent-text: #b30079;
+
+  --bg: #f9f9fb;
+  --bg-raised: #ffffff;
+  --bg-sunken: #ffffff;
+  --bg-input: #f5f5f7;
+  --border: #e6e4ea;
+  --fg: #1c1a20;
+  --fg-muted: #5f5b68;
+  /* The faintest text still has to be read: 4.5:1 on every surface it lands
+   * on, the palest of which is --bg-input. */
+  --fg-faint: #716d78;
+  --warn: #9a5b00;
+  --ok: #0f7355;
+  --error: #c02640;
+
+  --selection: rgb(225 0 152 / 14%);
+  --active-line: rgb(28 26 32 / 4%);
+  --splash-glow: #fff0f9;
+
+  /* A comment is text like any other, and the editor's background is the
+   * palest surface on the page; --fg-faint is what clears 4.5:1 on it. */
+  --syn-comment: #716d78;
+  --syn-keyword: #b30079;
+  --syn-directive: #b30079;
+  --syn-type: #1f61a0;
+  --syn-argument: #6a3fb5;
+  --syn-string: #9a5b00;
+  --syn-number: #9a5b00;
+  --syn-atom: #9a5b00;
+  --syn-field: #1c1a20;
+
+  --sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
+
+  /*
+   * The kit's role tokens, pointed at the palette above. Everything here is a
+   * var() rather than a literal, so the dark block below only has to redefine
+   * the palette and the whole kit follows. The few literals that can't work
+   * that way — text *on* an accent or danger fill — are restated there.
+   */
+  --page-bg: var(--bg);
+  --page-fg: var(--fg);
+  --page-font-family: var(--sans);
+  --muted: var(--fg-muted);
+  --accent-hover: var(--accent-text);
+  --accent-fg: #ffffff;
+  --btn-bg: var(--bg-raised);
+  --btn-fg: var(--fg);
+  --btn-border: var(--border);
+  --btn-hover-bg: var(--bg-input);
+  --danger-bg: var(--error);
+  --danger-fg: #ffffff;
+  --danger-hover-bg: var(--error);
+  --link: var(--accent-text);
+  --link-hover: var(--accent);
+  --link-visited: var(--accent-text);
+  --neo-tooltip-bg: var(--fg);
+  --neo-tooltip-color: var(--bg);
+  --neo-card-border-color: var(--border);
+
+  /*
+   * The second layer the kit leaves to the app: its components ship neutral
+   * defaults for these — a white popover, a focus ring of currentColor — and
+   * expect whoever uses them to point them at the palette. Everything here
+   * goes through the role tokens above rather than the colors themselves, so
+   * there's one place to change.
+   */
+  --neo-popover-bg: var(--btn-bg);
+  --neo-popover-color: var(--page-fg);
+  --neo-popover-border-color: var(--btn-border);
+  --neo-button-bg: var(--btn-bg);
+  --neo-button-color: var(--btn-fg);
+  --neo-button-border-color: var(--btn-border);
+  --neo-button-hover-bg: var(--btn-hover-bg);
+  --neo-button-primary-bg: var(--accent);
+  --neo-button-primary-color: var(--accent-fg);
+  --neo-button-primary-hover-bg: var(--accent-hover);
+  --neo-button-secondary-bg: color-mix(
+    in srgb,
+    var(--page-fg) 10%,
+    transparent
+  );
+  --neo-button-secondary-color: var(--page-fg);
+  --neo-button-secondary-hover-bg: color-mix(
+    in srgb,
+    var(--page-fg) 16%,
+    transparent
+  );
+  --neo-button-ghost-bg: transparent;
+  --neo-button-ghost-color: var(--page-fg);
+  --neo-button-ghost-hover-bg: var(--btn-hover-bg);
+  --neo-button-danger-bg: var(--danger-bg);
+  --neo-button-danger-color: var(--danger-fg);
+  --neo-button-danger-hover-bg: var(--danger-hover-bg);
+  --neo-button-focus-ring: var(--accent);
+  --neo-select-option-hover-bg: color-mix(
+    in srgb,
+    var(--accent) 16%,
+    transparent
+  );
+  --neo-select-option-selected-bg: var(--accent);
+  --neo-select-option-selected-color: var(--accent-fg);
+
+  /* The alert tones the verdict is painted in, in our own three colors. */
+  --neo-alert-info-accent: var(--fg-muted);
+  --neo-alert-success-accent: var(--ok);
+  --neo-alert-warning-accent: var(--warn);
+  --neo-alert-danger-accent: var(--error);
+
+  /* <neo-icon> fetches <name>.svg from here. Document-relative, so it holds
+   * under a project-site subpath the same as at a domain root. */
+  --neo-icon-base: "./icons";
+
+  --neo-sidebar-width: 17.5rem;
+  --neo-sidebar-bg: var(--bg-raised);
+
+  /* Lets the browser theme scrollbars, selects and checkboxes to match. */
+  color-scheme: light;
+}
+
+/*
+ * The dark palette, under a class rather than a media query: the switch in the
+ * header can overrule a choice, and it can't overrule a query. Which class is
+ * on <html> is theme.ts's answer — the system's own preference where no choice
+ * was made — and the inline script in index.html puts it there before the
+ * first paint.
+ */
+:root.dark {
+  /* A tint of Rhodamine, not Rhodamine: see the note above --brand, which
+   * is what the logo keeps using here. */
+  --accent: #ff6ec7;
+  --accent-text: #ff6ec7;
+
+  --bg: #14121a;
+  --bg-raised: #1b1823;
+  --bg-sunken: #100e15;
+  --bg-input: #100e15;
+  --border: #2a2632;
+  --fg: #ece9f1;
+  --fg-muted: #a29daf;
+  /* As in the light scheme: 4.5:1 on every surface, the darkest contrast
+   * against it being --bg-raised. */
+  --fg-faint: #868291;
+  --warn: #f2b366;
+  --ok: #6ee7b7;
+  --error: #ff8095;
+
+  --selection: rgb(255 110 199 / 22%);
+  --active-line: rgb(236 233 241 / 5%);
+  --splash-glow: #241a2b;
+
+  --syn-comment: #868291;
+  --syn-keyword: #ff6ec7;
+  --syn-directive: #ff6ec7;
+  --syn-type: #7cc4f8;
+  --syn-argument: #c4a2f7;
+  --syn-string: #f2b366;
+  --syn-number: #f2b366;
+  --syn-atom: #f2b366;
+  --syn-field: #ece9f1;
+
+  /* Both fills are light in this scheme, so what sits on them is dark. */
+  --accent-fg: #14121a;
+  --danger-fg: #14121a;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/*
+ * A display of its own outranks the browser's [hidden] rule, so every element
+ * the page hides by script and the kit gives a display to restates it.
+ */
+.app[hidden],
+neo-button[hidden],
+neo-badge[hidden] {
+  display: none;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Available to a screen reader, not to the eye: the state of a tab is an icon
+ * and a color otherwise, and neither is announced. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* --- Splash ------------------------------------------------------------- */
+
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(
+    circle at 50% 40%,
+    var(--splash-glow) 0%,
+    var(--bg) 70%
+  );
+  transition: opacity 220ms ease;
+}
+
+.splash-done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.splash-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 24px;
+  text-align: center;
+}
+
+.splash-logo {
+  font-family: var(--mono);
+  font-size: clamp(28px, 6vw, 44px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.splash-logo span {
+  color: var(--brand);
+}
+
+.splash-bar {
+  width: min(240px, 60vw);
+  height: 3px;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.splash-bar-fill {
+  width: 40%;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  animation: slide 1.1s ease-in-out infinite;
+}
+
+@keyframes slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash-bar-fill {
+    width: 100%;
+    animation: none;
+  }
+}
+
+.splash-status {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.splash-failed .splash-bar-fill {
+  background: var(--error);
+  animation: none;
+  width: 100%;
+}
+
+.splash-failed .splash-status {
+  color: var(--error);
+  max-width: 40ch;
+}
+
+/* --- Frame -------------------------------------------------------------- */
+
+/*
+ * The sidebar is a fixed column and the workspace takes the rest. The frame
+ * is exactly one viewport tall, which is what lets the panes below shrink to
+ * fit rather than pushing the hash readouts off the bottom of the page; the
+ * workspace scrolls on its own once its content hits the floors it can't
+ * shrink past.
+ */
+.app {
+  display: flex;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/*
+ * Holds the sidebar's column from the first frame, at the width where it is
+ * always open — above the kit's 50rem breakpoint neither the button that
+ * opens it nor the one that closes it is on screen.
+ *
+ * Every state the kit leaves it in before it has settled takes it out of the
+ * column: undefined it's fixed and off-canvas, defined without [open] it
+ * collapses to zero, and in its overlay state it's fixed again. Which one it
+ * lands on it reads off the width of its container — and this one is
+ * display:none until the WebAssembly module has loaded, so it measures
+ * nothing, calls the viewport narrow and goes to the overlay. The moment the
+ * page is revealed its ResizeObserver sees the real width and snaps it open,
+ * taking the workspace 17.5rem to the right with it: the whole of the page,
+ * moved after it had painted, which is a layout shift of 0.45 on its own.
+ * Pinning the column here means the first frame is already the final one and
+ * settling changes nothing. The id is what outranks the kit's own rules.
+ */
+@media (min-width: 50rem) {
+  #sidebar {
+    position: static;
+    transform: none;
+    width: var(--neo-sidebar-width);
+    max-width: var(--neo-sidebar-width);
+    border-color: var(--neo-sidebar-border-color);
+  }
+}
+
+.workspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px 12px;
+  overflow: auto;
+}
+
+/* Holds the sidebar's toggle, and only exists while the sidebar is an overlay;
+ * at full width the row is gone rather than empty, which would still take the
+ * workspace's gap. */
+.workspace-head {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+@media (min-width: 50rem) {
+  .workspace-head {
+    display: none;
+  }
+}
+
+/* Both only do anything while the sidebar is an overlay, which is below the
+ * kit's 50rem breakpoint. The element part of the selector is what the kit's
+ * own `neo-button:not([variant="anchor"])` display rule needs to be met on. */
+.sidebar-toggle,
+.sidebar-close {
+  flex: none;
+}
+
+@media (min-width: 50rem) {
+  neo-button.sidebar-toggle,
+  neo-button.sidebar-close {
+    display: none;
+  }
+}
+
+/* --- Sidebar ------------------------------------------------------------ */
+
+.brand h1 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.brand h1 span {
+  color: var(--brand);
+}
+
+/*
+ * The switch sits between the wordmark and the sidebar's close button on a
+ * wide screen, and in the toolbar beside the button that opens the sidebar on
+ * a narrow one — where the sidebar's own copy would be behind the overlay it
+ * takes to reach.
+ */
+.theme-host {
+  display: flex;
+  margin-left: auto;
+}
+
+@media (max-width: 50rem) {
+  neo-sidebar > .brand > .theme-host {
+    display: none;
+  }
+}
+
+.theme-switch {
+  --neo-toggle-padding: 3px 7px;
+  font-size: 11px;
+}
+
+.theme-switch neo-toggle {
+  --neo-icon-size: 14px;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.tagline {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.tagline code {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.option {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* One control, three levels, sharing the sidebar's width. */
+.ignore-switch {
+  display: flex;
+  width: 100%;
+}
+
+.ignore-switch neo-toggle {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.option-label {
+  display: block;
+  padding: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/*
+ * One-line descriptions, tied to their control with aria-describedby so
+ * they're read out as a description rather than becoming part of its name.
+ */
+.hint {
+  margin: 0;
+  color: var(--fg-faint);
+  font-size: 11px;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.hint code {
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.hint strong {
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+
+.keys {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  color: var(--fg-faint);
+  font-size: 12px;
+  list-style: none;
+}
+
+.keys li {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+/*
+ * The kit sizes a keycap off the text around it — 0.7em — and derives its ink
+ * from currentColor at 70%. In a hint list that's 11px and already the
+ * faintest color on the page, that came out as 7.7px at 0.7 alpha: a chip you
+ * couldn't read. The cap is the thing being looked for here, so it's the size
+ * of the line it sits on and the color of the text, not a shade under it.
+ */
+.keys neo-kbd {
+  --neo-kbd-font-size: 1em;
+  --neo-kbd-color: var(--fg-muted);
+  --neo-kbd-bg: var(--bg-input);
+  --neo-kbd-border-color: var(--border);
+  --neo-kbd-shadow: inset 0 -1px 0 0 var(--border);
+}
+
+/*
+ * Pinned to the bottom of the sidebar's content, just above its footer, rather
+ * than trailing the options: margin-top: auto takes the free space above it in
+ * the column. On a viewport too short for the options it stops absorbing
+ * anything and simply follows them, which is what the scroll is for.
+ */
+.reset {
+  display: flex;
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.reset dialog {
+  max-width: 34rem;
+}
+
+/* Three lines rather than the kit's single footer row, which is what fits in
+ * a column this wide. Selector matches the kit rule's specificity and comes
+ * after it, since morpheus.css is @imported above. */
+neo-sidebar > .footer {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--fg-faint);
+  font-size: 11px;
+}
+
+.footer-link {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--fg-muted);
+  text-decoration-color: var(--border);
+  text-underline-offset: 2px;
+}
+
+.footer-link:hover {
+  color: var(--accent-text);
+  text-decoration-color: currentcolor;
+}
+
+/* A pseudo-version is longer than this column is wide, so it wraps rather than
+ * running past the edge of the sidebar. */
+.footer-version {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.footer-legal {
+  text-wrap: pretty;
+}
+
+/*
+ * The select and the button that explains its labels, under one border. The
+ * kit fits a select and a button together already; what it doesn't expect is
+ * the button sitting inside a popover, so its addon treatment is pointed at
+ * that one level in.
+ */
+.option-group {
+  display: flex;
+  width: 100%;
+}
+
+.option-group > neo-popover {
+  display: inline-flex;
+  flex: none;
+}
+
+.option-group > neo-popover > neo-button {
+  height: 100%;
+  color: var(--muted);
+  background: var(--neo-input-group-addon-bg);
+  border: none;
+  --neo-button-border-width: 0;
+  --neo-button-bg: var(--neo-input-group-addon-bg);
+  --neo-button-padding: 0 0.6rem;
+  --neo-button-shadow: none;
+  --neo-button-hover-shadow: none;
+  --neo-button-hover-lift: 0px;
+  --neo-button-active-lift: 0px;
+  border-radius: 0 calc(var(--neo-textarea-radius) - 1px)
+    calc(var(--neo-textarea-radius) - 1px) 0;
+}
+
+.option-group > neo-popover > neo-button:hover {
+  color: var(--page-fg);
+  background: var(--neo-button-hover-bg);
+}
+
+/* The three labels, each next to what it means. */
+.tag-guide {
+  max-width: 34ch;
+}
+
+.tag-guide h3 {
+  margin: 0 0 8px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tag-guide dl {
+  margin: 0;
+}
+
+.tag-guide dt {
+  margin-top: 10px;
+}
+
+.tag-guide dt:first-of-type {
+  margin-top: 0;
+}
+
+.tag-guide dd {
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+/*
+ * A hash function and what it's worth to an allowlist, on the option and on
+ * the trigger the kit clones it onto. The three kinds come from the module
+ * itself, so the page can't drift from the library's own view of which of
+ * them may decide whether a document runs.
+ */
+neo-option {
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.option-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kind-tag {
+  --neo-badge-padding-y: 1px;
+  --neo-badge-padding-x: 6px;
+  flex: none;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.kind-tag[data-kind="resistant"] {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.kind-tag[data-kind="broken"] {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.kind-tag[data-kind="checksum"] {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+/* The one-letter form on the trigger: a fixed box, so a name doesn't shift
+ * sideways when the choice moves between the two classes that carry one. */
+.kind-letter {
+  --neo-badge-padding-x: 0;
+  justify-content: center;
+  width: 15px;
+  letter-spacing: 0;
+}
+
+/* The selected row is filled with the accent, which none of the three tag
+ * colors is legible on. It reads in the fill's own foreground there; the
+ * trigger beneath keeps the color, on a surface that can carry it. */
+neo-option[aria-selected="true"] .kind-tag {
+  color: var(--accent-fg);
+  border-color: var(--accent-fg);
+}
+
+/* --- Summary ------------------------------------------------------------ */
+
+/*
+ * The banner under the editors: the verdict on the operation on screen, the
+ * entry it matched, and the two hashes it was decided from. It's the one thing
+ * on the page worth reading at a glance, so it's stated in words and carries
+ * an icon and a tone rather than color alone.
+ *
+ * Nothing in it is conditional. Every state fills the same boxes — a dash
+ * where there's no hash, a spent-looking button where nothing matched — and
+ * the parts that hold text of varying length have their height reserved
+ * below, so the banner is the same shape whatever the answer is and the panes
+ * above it never shift.
+ */
+.summary {
+  flex: none;
+  --neo-alert-padding-y: 10px;
+  --neo-alert-padding-x: 14px;
+  --neo-alert-title-size: 15px;
+  --neo-alert-icon-size: 20px;
+  /*
+   * The kit drops the icon 0.25rem to sit it on the title's first line, which
+   * is tuned to an icon shorter than that line — its own is 1.1rem against a
+   * 1.2825rem line box. Ours is as tall as the line, so the same nudge puts it
+   * 4px below centre. Zeroed, the two boxes are within a quarter of a pixel.
+   */
+  --neo-alert-icon-margin-top: 0;
+}
+
+.summary [data-neo-alert-title],
+.summary [data-neo-alert-icon] {
+  color: var(--neo-alert-accent);
+}
+
+.summary-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.summary-lines {
+  min-width: 0;
+}
+
+/*
+ * Held to one line rather than sized to what it holds — at every width: the
+ * longest verdict the page can write is "Rejected — 403 Forbidden", which
+ * fits a phone's column with room to spare. A height that followed the text
+ * would move the editors under it every time the answer changed.
+ */
+.summary-lines [data-neo-alert-title] {
+  height: calc(1 * 1.35 * var(--neo-alert-title-size));
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
+.hash-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/*
+ * The hash and the parser's message share this box and neither is taller than
+ * the two lines it holds open — which is what a 64-character digest takes at
+ * the narrow end of this column, and more than any message needs.
+ */
+.hash-slot {
+  min-height: calc(2 * 1.5em);
+}
+
+/* --- Panes -------------------------------------------------------------- */
+
+/*
+ * The two documents, side by side. min-width: 0 on the panes keeps a long hash
+ * from widening its column, and min-height: 0 lets the editors shrink rather
+ * than stretch the workspace.
+ */
+/*
+ * min-content, not 0, all the way down this column — .panes, .pane, .stack and
+ * the tabs inside it. Zero lets a flex box be shorter than what it holds, and
+ * what it holds here has a floor: the editor's min-height. Under that the
+ * editor overflowed its own box while the hash readout was laid out at the
+ * shrunken edge, so the two drew over each other instead of the workspace
+ * scrolling. min-content stops the shrinking at that floor and hands the
+ * overflow to the workspace, which scrolls.
+ */
+.panes {
+  display: flex;
+  flex: 1;
+  gap: 14px;
+  min-height: min-content;
+}
+
+.pane {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: min-content;
+}
+
+/*
+ * Each pane is a title and the button next to it that says what the pane
+ * holds. The two names carry the distinction on their own — an operation is
+ * sent, an entry is registered — and the popover is there for whoever wants it
+ * spelled out, which keeps the standing header down to one line.
+ */
+.pane-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pane-heading {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
+}
+
+.pane-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.pane-info {
+  color: var(--fg-faint);
+}
+
+/* A paragraph or two, at a width they read at rather than the panel's. */
+.pane-info-content {
+  max-width: 40ch;
+}
+
+.pane-info-content h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.pane-info-content p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.pane-info-content p:last-child {
+  margin-bottom: 0;
+}
+
+.pane-info-content code {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.pane-tools {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.pane-summary {
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Files -------------------------------------------------------------- */
+
+/*
+ * One card in three parts: the tab strip, the editor under it, and the hash of
+ * whichever file is on screen under that. They share their edges — each is
+ * square where it meets the next — so the three read as one thing rather than
+ * as a stack of cards.
+ */
+.stack {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: min-content;
+}
+
+/* <neo-tabs> is a block by default; as a column it can hand the editor the
+ * height left over from the tab strip. */
+.files {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: min-content;
+  --neo-tabs-panel-padding: 0;
+}
+
+/*
+ * The strip wraps instead of scrolling: a file whose tab is off the edge of it
+ * is one whose standing can't be read, which is half of what the page has to
+ * say.
+ *
+ * The box is this element rather than the <neo-tablist> inside it, which a
+ * tablist has to be: it may own tabs and nothing else, and the button that
+ * adds a file is not one. Laying the tablist out as display: contents hands
+ * its tabs to this row, so the button still follows the last of them and wraps
+ * with them, while the tablist owns only tabs. What's restated here is the
+ * kit's own box, in the kit's own tokens.
+ */
+.tab-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  padding: var(--neo-tabs-list-padding);
+  background: var(--neo-tabs-list-bg);
+  border-radius: var(--neo-tabs-radius);
+  /* Square where the strip meets the editor under it. */
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+neo-tablist {
+  display: contents;
+}
+
+/* The two schemes where the kit draws the strip an edge of its own. */
+@media (forced-colors: active) {
+  .tab-strip {
+    padding: 0;
+    background: ButtonFace;
+    border: var(--neo-tabs-list-border-width) solid ButtonText;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .tab-strip {
+    padding: 0;
+    background: transparent;
+    border: var(--neo-tabs-list-border-width) solid currentColor;
+  }
+}
+
+neo-tab {
+  max-width: 240px;
+  font-family: var(--mono);
+  font-size: 12px;
+  /* Room given back to the padding the line box below takes. */
+  --neo-tabs-tab-padding-y: 0.25rem;
+}
+
+/*
+ * The kit pins line-height: 1 on a tab, so its line box is exactly the em box
+ * and descenders paint outside it — which is fine until something clips, and
+ * the ellipsis this name is cut with does exactly that. A line box with room
+ * under the baseline is what keeps the tail of a "g" attached.
+ */
+.tab-name {
+  overflow: hidden;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+/*
+ * The marker carries the file's standing — allowed, refused, unparsable — as a
+ * glyph as well as a color, so it survives a grayscale screen, and the tab
+ * carries it in words for a reader.
+ */
+.tab-mark {
+  --neo-icon-size: 14px;
+  color: var(--fg-faint);
+}
+
+neo-tab[data-state="ok"] .tab-mark {
+  color: var(--ok);
+}
+
+neo-tab[data-state="bad"] .tab-mark {
+  color: var(--warn);
+}
+
+neo-tab[data-state="error"] .tab-mark {
+  color: var(--error);
+}
+
+/* The entry the operation on screen hashes to, called out on the tab itself so
+ * the answer is visible on both sides of the page, not only in the verdict. */
+neo-tab[data-matched="true"] {
+  max-width: 320px;
+  box-shadow: inset 0 0 0 1px var(--ok);
+}
+
+.tab-badge {
+  --neo-badge-padding-y: 1px;
+  --neo-badge-padding-x: 5px;
+  color: var(--ok);
+  font-family: var(--sans);
+  font-size: 9px;
+  border-color: var(--ok);
+}
+
+/*
+ * Out of the tab order on purpose: a tablist moves between tabs with the arrow
+ * keys, and a focus stop inside every tab would break that. Deleting a file
+ * from the keyboard is the Delete key, which the sidebar names.
+ */
+.tab-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  color: var(--fg-faint);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tab-close:hover {
+  color: var(--fg);
+  background: var(--selection);
+}
+
+/* Renaming happens in place, so the tab keeps its position while it's typed. */
+.tab-rename {
+  width: 100%;
+  min-width: 120px;
+  padding: 1px 4px;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+}
+
+.tab-rename:focus {
+  outline: none;
+}
+
+.tab-add {
+  --neo-button-padding: 2px 6px;
+  align-self: center;
+  color: var(--fg-faint);
+}
+
+/* --- Editor ------------------------------------------------------------- */
+
+/* min-height is the floor the workspace starts scrolling at, so keep it to a
+ * height an editor is still usable at rather than a comfortable one. */
+.editor-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 180px;
+  overflow: hidden;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  /* Both edges are shared, with the tab strip above and the hash below. */
+  border-radius: 0;
+}
+
+.editor {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* --- Hash readouts ------------------------------------------------------ */
+
+/*
+ * The bottom of the card, in the tab strip's own tint so the editor sits
+ * between two bands of it. No border along the top: the editor above already
+ * draws that line, and a second one beside it reads as a seam.
+ */
+.hash-cell {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 14px 10px;
+  background: var(--neo-tabs-list-bg);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+}
+
+/* Stays on one line whatever it holds: it sits in a row with the copy button,
+ * and a label that wrapped would make the cell taller. */
+.result-label {
+  flex: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hash {
+  display: block;
+  min-height: 1.5em;
+  color: var(--fg);
+  font-family: var(--mono);
+  /* Sized so a 256-bit digest in hex — the default, and the width the proxy
+   * runs on — sits on one line in its half of the banner. */
+  font-size: clamp(11px, 1vw, 12.5px);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+/* Stands in for the hash where there's nothing to hash, so the box says the
+ * absence rather than going blank. A document that doesn't parse prints the
+ * parser's message in the same place instead. */
+.hash[data-state="empty"]::after {
+  color: var(--fg-faint);
+  content: "—";
+}
+
+/* Where the parser's message stands in for the hash, the empty box it replaces
+ * shouldn't hold a line above it. The slot's own height is reserved either
+ * way, so nothing moves. */
+.hash[data-state="error"] {
+  display: none;
+}
+
+/* The parser's message, in the slot the hash would have been in. */
+.error {
+  margin: 0;
+  color: var(--error);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* --- Narrow screens ----------------------------------------------------- */
+
+/*
+ * Two editors side by side stop being readable well before a phone: below this
+ * they stack, and the workspace scrolls instead of squeezing both into one
+ * viewport height.
+ */
+@media (max-width: 54rem) {
+  .panes {
+    flex-direction: column;
+    flex: 0 0 auto;
+  }
+
+  .pane {
+    flex: 0 0 auto;
+  }
+
+  .editor-pane {
+    min-height: 320px;
+  }
+}

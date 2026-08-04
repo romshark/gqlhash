@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Declares both schemes before any stylesheet is parsed, so the very first
+      frame the browser paints already uses a dark canvas in dark mode instead
+      of flashing white.
+    -->
+    <meta name="color-scheme" content="light dark" />
+    <title>gqlhash — GraphQL allowlist</title>
+    <meta
+      name="description"
+      content="Write GraphQL operations on the left, an allowlist on the right, and see which entry each operation matches. Runs gqlhash in your browser as WebAssembly; formatting differences are ignored."
+    />
+    <!-- Tints the browser UI the way the page is tinted. The script below
+         puts the right value in before the first paint, and theme.ts keeps it
+         there; a `media` pair can't be used, since it would follow the system
+         where the page follows a choice. -->
+    <meta name="theme-color" content="#f9f9fb" />
+    <!--
+      The SVG icon carries a prefers-color-scheme rule of its own, so the glyph
+      follows the tab strip. The .ico is the fallback for browsers that don't
+      read SVG icons.
+    -->
+    <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
+    <link rel="alternate icon" href="%BASE_URL%favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="apple-touch-icon" href="%BASE_URL%apple-touch-icon.png" />
+    <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
+    <!--
+      Linked here rather than imported from main.ts: as a render-blocking
+      stylesheet it's in place before the splash paints. Importing it from the
+      entry module would let the unstyled markup show first, which the dev
+      server does by injecting the CSS only once the module runs. It pulls in
+      the Morpheus component styles through an @import of its own.
+    -->
+    <link rel="stylesheet" href="/src/style.css" />
+    <!--
+      The palette, before anything paints. The stylesheet keeps its dark values
+      under :root.dark, so the class has to be on the element before the first
+      frame or a dark-mode visitor gets a white flash while the module loads.
+      Inline and tiny for the same reason — a separate file is a round trip.
+      The key and the class names are src/theme.ts's; the two agree by hand.
+    -->
+    <script>
+      (() => {
+        let saved = null;
+        try {
+          saved = localStorage.getItem("gqlhash-theme");
+        } catch {}
+        const dark =
+          saved === "dark" ||
+          (saved !== "light" &&
+            matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.add(dark ? "dark" : "light");
+        document
+          .querySelector('meta[name="theme-color"]')
+          .setAttribute("content", dark ? "#14121a" : "#f9f9fb");
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="splash" class="splash">
+      <div class="splash-inner">
+        <div class="splash-logo">gql<span>hash</span></div>
+        <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+        <p class="splash-status" id="splash-status">Loading WebAssembly…</p>
+      </div>
+    </div>
+
+    <!--
+      The frame: options on the left, the two panes on the right. Below the
+      sidebar's breakpoint it becomes an overlay the toolbar button opens, so
+      the panes keep the whole width on a narrow screen.
+    -->
+    <div id="app" class="app" hidden>
+      <neo-sidebar id="sidebar" aria-label="Hashing options">
+        <header data-neo-sidebar-header class="brand">
+          <h1>gql<span>hash</span></h1>
+          <!-- Filled by theme.ts, which keeps this one and the toolbar's in
+               step with each other. -->
+          <div id="theme-sidebar" class="theme-host"></div>
+          <neo-button
+            id="sidebar-close"
+            class="sidebar-close"
+            variant="ghost"
+            size="sm"
+            aria-label="Hide options"
+            data-neo-sidebar-close
+          >
+            <neo-icon name="x"></neo-icon>
+          </neo-button>
+        </header>
+
+        <div data-neo-sidebar-content class="options">
+          <p class="tagline">
+            Interactive visualization of the decision-making machine behind
+            <a
+              href="https://github.com/romshark/gqlhash/tree/main/cmd/gqlhash-proxy"
+              target="_blank"
+              rel="noopener noreferrer"
+              ><code>gqlhash-proxy</code></a
+            >.
+            Same Go hasher, compiled to WebAssembly.
+            <br>
+            No document leaves your browser.
+          </p>
+
+          <div class="option">
+            <span class="option-label" id="hash-function-label"
+              >Hash function</span
+            >
+            <neo-input-group class="option-group">
+              <!-- popover-fit-content: the rows carry a name and a tag, which
+                   need more room than this column gives the trigger. -->
+              <neo-select
+                id="hash-function"
+                aria-labelledby="hash-function-label"
+                aria-describedby="hash-function-hint"
+                popover-fit-content
+              ></neo-select>
+              <neo-popover placement="bottom-end" screen-offset="1rem">
+                <neo-button
+                  data-neo-popover-trigger
+                  aria-label="What the labels mean"
+                >
+                  <neo-icon name="info"></neo-icon>
+                </neo-button>
+                <div data-neo-popover-content class="tag-guide">
+                  <h3>What the labels mean</h3>
+                  <dl>
+                    <dt>
+                      <neo-badge
+                        class="kind-tag"
+                        data-kind="resistant"
+                        >resistant</neo-badge
+                      >
+                    </dt>
+                    <dd>
+                      These hash functions are currently collision-resistant and will
+                      not produce the same hash for two different documents.
+                    </dd>
+                    <dt>
+                      <neo-badge class="kind-tag" data-kind="broken"
+                        >broken</neo-badge
+                      >
+                    </dt>
+                    <dd>
+                      With these hash functions two different documents may produce
+                      the same hash. Don't use this for anything that matters!
+                    </dd>
+                    <dt>
+                      <neo-badge
+                        class="kind-tag"
+                        data-kind="checksum"
+                        >checksum</neo-badge
+                      >
+                    </dt>
+                    <dd>
+                      These hash functions are slightly faster but they're checksums
+                      and not cryptographically secure. Collisions are easy to produce.
+                      They can be used to group documents, but should never be used for
+                      the allowlist.
+                    </dd>
+                  </dl>
+                </div>
+              </neo-popover>
+            </neo-input-group>
+            <p class="hint" id="hash-function-hint">
+              The algorithm used to hash the document.
+            </p>
+          </div>
+
+          <div class="option">
+            <span class="option-label" id="format-label">Output format</span>
+            <neo-select
+              id="format"
+              aria-labelledby="format-label"
+              aria-describedby="format-hint"
+            ></neo-select>
+            <p class="hint" id="format-hint">
+              How the hash is written out.
+            </p>
+          </div>
+
+          <div class="option">
+            <span class="option-label" id="ignore-label">Ignore</span>
+            <!-- One control for what the CLI's -ignore takes: nothing, inputs,
+                 or variables, which takes inputs with it. -->
+            <neo-toggle-group
+              id="ignore"
+              class="ignore-switch"
+              value="nothing"
+              aria-labelledby="ignore-label"
+              aria-describedby="ignore-hint"
+            >
+              <neo-toggle value="variables">Variables</neo-toggle>
+              <neo-toggle value="inputs">Inputs</neo-toggle>
+              <neo-toggle value="nothing">Nothing</neo-toggle>
+            </neo-toggle-group>
+            <p class="hint" id="ignore-hint">
+              What to leave out of the hash. <strong>Inputs</strong> skips
+              argument and default values, so only the variable names and types
+              are hashed. <strong>Variables</strong> skips those too, both
+              where they're defined and where they're used.
+            </p>
+          </div>
+
+          <div class="option">
+            <span class="option-label">Files</span>
+            <!-- key="…" renders the glyph of the platform the page is on, and
+                 the branch picks which keys to name: a Mac keyboard's "delete"
+                 is Backspace, and ⌘⌫ is what it takes an item off a list
+                 with. See the keydown handler in src/pane.ts. -->
+            <ul class="keys">
+              <li><neo-kbd key="f2"></neo-kbd><span>rename the file</span></li>
+              <li>
+                <neo-condition platform="apple">
+                  <neo-kbd key="mod"></neo-kbd><neo-kbd key="backspace"></neo-kbd>
+                </neo-condition>
+                <neo-condition platform="not apple">
+                  <neo-kbd key="delete"></neo-kbd>
+                </neo-condition>
+                <span>delete it</span>
+              </li>
+              <li>
+                <neo-kbd key="left"></neo-kbd><neo-kbd key="right"></neo-kbd
+                ><span>switch files</span>
+              </li>
+            </ul>
+          </div>
+
+          <neo-dialog id="reset-dialog" class="reset">
+            <neo-button
+              id="reset-open"
+              data-neo-dialog-trigger
+              variant="ghost"
+              size="sm"
+            >
+              <neo-icon name="trash-2"></neo-icon>
+              Reset playground
+            </neo-button>
+            <dialog>
+              <header data-neo-dialog-header>
+                <h2 data-neo-dialog-title>Reset the playground?</h2>
+                <p data-neo-dialog-description>
+                  All operations and the allowlist currently stored in your browser
+                  will be deleted permanently!
+                </p>
+              </header>
+              <footer data-neo-dialog-footer>
+                <neo-button data-neo-dialog-close>Cancel</neo-button>
+                <neo-button
+                  id="reset-confirm"
+                  variant="danger"
+                  data-neo-dialog-close
+                >
+                  Delete Permanently
+                </neo-button>
+              </footer>
+            </dialog>
+          </neo-dialog>
+        </div>
+
+        <footer data-neo-sidebar-footer class="footer">
+          <a
+            class="footer-link"
+            href="https://github.com/romshark/gqlhash"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <neo-icon name="github"></neo-icon>
+            <span>romshark/gqlhash</span>
+          </a>
+          <span
+            class="footer-version"
+            id="version"
+            title="gqlhash module version"
+            >…</span
+          >
+          <span class="footer-legal">MIT License · © 2026 Roman Scharkov</span>
+        </footer>
+      </neo-sidebar>
+
+      <main class="workspace">
+        <!-- Only reachable while the sidebar is an overlay. -->
+        <div class="workspace-head">
+          <neo-button
+            id="sidebar-toggle"
+            class="sidebar-toggle"
+            variant="ghost"
+            aria-label="Show options"
+            aria-controls="sidebar"
+          >
+            <neo-icon name="menu"></neo-icon>
+          </neo-button>
+          <div id="theme-navbar" class="theme-host"></div>
+        </div>
+
+        <!--
+          What the proxy would answer for the operation on screen, over the
+          two editors it was decided from. One line, the same height in every
+          state, so nothing under the pointer moves when the answer changes.
+        -->
+        <neo-alert id="verdict" class="summary" aria-live="polite">
+          <div data-neo-alert-icon aria-hidden="true">
+            <neo-icon id="verdict-icon" name="info"></neo-icon>
+          </div>
+          <div data-neo-alert-content class="summary-content">
+            <div class="summary-lines">
+              <h2 data-neo-alert-title id="verdict-text">Checking…</h2>
+            </div>
+          </div>
+        </neo-alert>
+
+        <div class="panes">
+          <section class="pane" aria-labelledby="title-operations">
+            <header class="pane-head">
+              <div class="pane-heading">
+                <h2 class="pane-title" id="title-operations">Operations</h2>
+                <neo-popover
+                  class="pane-info"
+                  placement="bottom-start"
+                  screen-offset="1rem"
+                >
+                  <neo-button
+                    data-neo-popover-trigger
+                    variant="ghost"
+                    size="sm"
+                    aria-label="About the operations"
+                  >
+                    <neo-icon name="info"></neo-icon>
+                  </neo-button>
+                  <div data-neo-popover-content class="pane-info-content">
+                    <h3>What a client sends</h3>
+                    <p>
+                      Each file is one GraphQL document a client could send.
+                      The tab you're on is the one the banner above is about;
+                      the other tabs show what the allowlist makes of them.
+                    </p>
+                    <p>
+                      The hash skips comments, line breaks, indentation and
+                      commas. A document that was reformatted or minified still
+                      matches the entry it was registered as.
+                    </p>
+                  </div>
+                </neo-popover>
+              </div>
+              <div class="pane-tools">
+                <span class="pane-summary" id="summary-operations"></span>
+              </div>
+            </header>
+
+            <div class="stack">
+              <neo-tabs id="tabs-operations" class="files" auto-activate>
+                <!-- The strip is the box; the tablist inside it holds nothing
+                     but tabs, which is all a tablist is allowed to own. The
+                     button that adds a file is a sibling of it, and sits back
+                     among the tabs through the tablist's display: contents.
+                     The role and the orientation are declared rather than left
+                     to <neo-tabs>, which only writes them onto a tablist that
+                     is its own child. -->
+                <div class="tab-strip">
+                  <neo-tablist
+                    id="tablist-operations"
+                    role="tablist"
+                    aria-orientation="horizontal"
+                    aria-label="Operation files"
+                  ></neo-tablist>
+                </div>
+                <neo-tabpanel class="editor-pane">
+                  <div id="editor-operations" class="editor"></div>
+                </neo-tabpanel>
+              </neo-tabs>
+
+              <div class="hash-cell">
+                <div class="hash-head">
+                  <label class="result-label" for="hash-operations"
+                    >Operation hash</label
+                  >
+                  <neo-clipcopy
+                    id="copy-operations"
+                    for="hash-operations"
+                    copied-duration="1200"
+                  >
+                    <neo-button variant="ghost" size="sm">
+                      <span data-neo-clipcopy-idle>
+                        <neo-icon name="clipboard"></neo-icon>
+                        Copy
+                      </span>
+                      <span data-neo-clipcopy-copied>
+                        <neo-icon name="check"></neo-icon>
+                        Copied
+                      </span>
+                    </neo-button>
+                  </neo-clipcopy>
+                </div>
+                <!-- One slot, two faces: the hash, or the parser's message
+                     where there is none. Its height is reserved either way. -->
+                <div class="hash-slot">
+                  <output class="hash" id="hash-operations"></output>
+                  <p class="error" id="error-operations" hidden></p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="pane" aria-labelledby="title-allowlist">
+            <header class="pane-head">
+              <div class="pane-heading">
+                <h2 class="pane-title" id="title-allowlist">Allowlist</h2>
+                <neo-popover
+                  class="pane-info"
+                  placement="bottom-start"
+                  screen-offset="1rem"
+                >
+                  <neo-button
+                    data-neo-popover-trigger
+                    variant="ghost"
+                    size="sm"
+                    aria-label="About the allowlist"
+                  >
+                    <neo-icon name="info"></neo-icon>
+                  </neo-button>
+                  <div data-neo-popover-content class="pane-info-content">
+                    <h3>What the proxy allows</h3>
+                    <p>
+                      The directory <code>-allowlist</code> points at. One file
+                      is one entry: everything in it is hashed as a single
+                      document.
+                    </p>
+                    <p>
+                      A request goes through if its hash matches an entry.
+                      Everything else gets <code>403 Forbidden</code>. If two
+                      files have the same hash, both are dropped — the proxy
+                      can't tell which one was meant.
+                    </p>
+                  </div>
+                </neo-popover>
+              </div>
+              <div class="pane-tools">
+                <span class="pane-summary" id="summary-allowlist"></span>
+              </div>
+            </header>
+
+            <div class="stack">
+              <neo-tabs id="tabs-allowlist" class="files" auto-activate>
+                <!-- See the strip opposite. -->
+                <div class="tab-strip">
+                  <neo-tablist
+                    id="tablist-allowlist"
+                    role="tablist"
+                    aria-orientation="horizontal"
+                    aria-label="Allowlist files"
+                  ></neo-tablist>
+                </div>
+                <neo-tabpanel class="editor-pane">
+                  <div id="editor-allowlist" class="editor"></div>
+                </neo-tabpanel>
+              </neo-tabs>
+
+              <div class="hash-cell">
+                <div class="hash-head">
+                  <label class="result-label" for="hash-allowlist"
+                    >Entry hash</label
+                  >
+                  <neo-clipcopy
+                    id="copy-allowlist"
+                    for="hash-allowlist"
+                    copied-duration="1200"
+                  >
+                    <neo-button variant="ghost" size="sm">
+                      <span data-neo-clipcopy-idle>
+                        <neo-icon name="clipboard"></neo-icon>
+                        Copy
+                      </span>
+                      <span data-neo-clipcopy-copied>
+                        <neo-icon name="check"></neo-icon>
+                        Copied
+                      </span>
+                    </neo-button>
+                  </neo-clipcopy>
+                </div>
+                <!-- One slot, two faces: the hash, or the parser's message
+                     where there is none. Its height is reserved either way. -->
+                <div class="hash-slot">
+                  <output class="hash" id="hash-allowlist"></output>
+                  <p class="error" id="error-allowlist" hidden></p>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

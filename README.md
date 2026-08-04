@@ -4,6 +4,7 @@
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/romshark/gqlhash)](https://github.com/romshark/gqlhash/releases)
 [![Awesome GraphQL](https://img.shields.io/badge/Awesome-GraphQL-%23e535ab?logo=graphql&logoColor=white)](https://github.com/chentsulin/awesome-graphql?tab=readme-ov-file#tools---miscellaneous)
 [![GoDoc](https://godoc.org/github.com/romshark/gqlhash/v2?status.svg)](https://pkg.go.dev/github.com/romshark/gqlhash/v2)
+[![Playground](https://img.shields.io/badge/Playground-try%20it%20live-%23e10098?logo=graphql&logoColor=white)](https://romshark.github.io/gqlhash/)
 
 # gqlhash
 
