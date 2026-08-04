@@ -10,7 +10,14 @@ permissions:
   contents: write
 
 jobs:
+  # The scan a release has to pass. The daily run in govulncheck.yml catches an
+  # advisory that lands without a commit; this catches the tag being released,
+  # which nothing else did — a release could go out between two daily runs.
+  govulncheck:
+    uses: ./.github/workflows/govulncheck.yml
+
   goreleaser:
+    needs: govulncheck
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

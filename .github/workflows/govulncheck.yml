@@ -6,6 +6,9 @@ on:
     # commit, so this must run on a timer, not only on push.
     - cron: "17 6 * * *"
   workflow_dispatch:
+  # Called by release.yml, so a tag can't ship past an advisory the daily
+  # run would only report the next morning.
+  workflow_call:
 
 permissions:
   contents: read
