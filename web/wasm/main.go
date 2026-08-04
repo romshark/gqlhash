@@ -31,7 +31,7 @@ import (
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/blake2s"
 
-	"github.com/romshark/gqlhash"
+	"github.com/romshark/gqlhash/v2"
 )
 
 func main() {
@@ -70,17 +70,19 @@ func hashQuery(_ js.Value, args []js.Value) any {
 		return fail("unsupported output format")
 	}
 
-	sum, err := gqlhash.AppendQueryHashWithOptions(nil, hasher, gqlhash.Options{
-		IgnoreInputs:    optBool(options, "ignoreInputs"),
-		IgnoreVariables: optBool(options, "ignoreVariables"),
-	}, []byte(source))
-	if err != nil {
-		// No position: this version of the parser reports the error without
-		// saying where it stopped. The page treats offset, line and column as
-		// optional and just prints the message when they're absent.
-		return map[string]any{"error": map[string]any{
-			"message": err.Error(),
-		}}
+	sum, err := gqlhash.AppendHash(nil, hasher, gqlhash.Options{
+		Ignore: ignoreLevel(options),
+	}, source)
+	if err.IsErr() {
+		e := map[string]any{"message": err.Err.Error()}
+		// A writer error carries no offset, and the page treats offset, line
+		// and column as optional, so it just prints the message when they're
+		// absent.
+		if err.ErrOffset >= 0 {
+			line, column := gqlhash.Position(source, err.ErrOffset)
+			e["offset"], e["line"], e["column"] = err.ErrOffset, line, column
+		}
+		return map[string]any{"error": e}
 	}
 
 	return map[string]any{
@@ -102,6 +104,19 @@ func optString(options js.Value, key, fallback string) string {
 		return v.String()
 	}
 	return fallback
+}
+
+// ignoreLevel reads the two booleans the page sends. ignoreVariables is the
+// wider of the two and implies ignoreInputs, as the -ignore flag of cmd/gqlhash
+// has it.
+func ignoreLevel(options js.Value) gqlhash.Ignore {
+	switch {
+	case optBool(options, "ignoreVariables"):
+		return gqlhash.IgnoreVariables
+	case optBool(options, "ignoreInputs"):
+		return gqlhash.IgnoreInputs
+	}
+	return gqlhash.IgnoreNothing
 }
 
 func optBool(options js.Value, key string) bool {

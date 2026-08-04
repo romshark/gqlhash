@@ -23,3 +23,9 @@ go.work.sum
 
 # env file
 .env
+
+# Coverage counters of the acceptance suite, see README "Coverage"
+covdata/
+
+# Build output of goreleaser, including `goreleaser release --snapshot`
+dist/

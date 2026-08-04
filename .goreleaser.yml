@@ -1,48 +1,62 @@
-# This is an example .goreleaser.yml file with some sensible defaults.
-# Make sure to check the documentation at https://goreleaser.com
-
-# The lines below are called `modelines`. See `:help modeline`
-# Feel free to remove those if you don't want/need to use them.
+# Release configuration, see https://goreleaser.com.
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
-# vim: set ts=2 sw=2 tw=0 fo=cnqoj
 
 version: 2
 
 before:
   hooks:
-    # You may remove this if you don't use go modules.
-    - go mod tidy
+    # Checked, not tidied: a release builds the tag as it was cut, and go mod
+    # tidy would rewrite go.mod and go.sum in the middle of doing it.
+    - go mod verify
 
 builds:
-  - id: gqlhash
-    binary: gqlhash
+  - &build
+    id: gqlhash
     main: ./cmd/gqlhash
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
     ldflags:
       - -s -w -X main.Version={{ .Version }}
-    goos:
-      - linux
-      - windows
-      - darwin
-    goarch:
-      - amd64
-      - arm64
+    goos: [linux, windows, darwin]
+    goarch: [amd64, arm64]
 
+  # A binary of its own: most of its size is the HTTP server,
+  # the metrics client and the schema validator that gqlhash doesn't link.
+  - <<: *build
+    id: gqlhash-proxy
+    main: ./cmd/gqlhash-proxy
+
+# One archive per command, so installing the hashing command doesn't drag in the
+# proxy: the two differ by 8 MB. The name carries the OS and the arch as `uname`
+# reports them; it can't be shared, .Binary resolves per project and not per archive.
 archives:
-  - format: tar.gz
-    # this name template makes the OS and Arch compatible with the results of `uname`.
+  - id: gqlhash
+    ids: [gqlhash]
+    formats: [tar.gz]
     name_template: >-
-      {{ .ProjectName }}_
+      gqlhash_
       {{- title .Os }}_
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
-    # use zip for windows archives
-    format_overrides:
+    format_overrides: &zip_on_windows
       - goos: windows
-        format: zip
+        formats: [zip]
+
+  - id: gqlhash-proxy
+    ids: [gqlhash-proxy]
+    formats: [tar.gz]
+    name_template: >-
+      gqlhash-proxy_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides: *zip_on_windows
 
 changelog:
   sort: asc
@@ -51,3 +65,45 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^ci:"
+
+# One cask per command, published to the romshark/tools tap on release. It needs
+# a token with write access to that repository, as HOMEBREW_TAP_GITHUB_TOKEN.
+homebrew_casks:
+  - name: gqlhash
+    ids: [gqlhash]
+    homepage: &homepage https://github.com/romshark/gqlhash
+    description: Hashes GraphQL executable documents, ignoring formatting
+    license: &license MIT
+    # The binaries are neither signed nor notarized, so a cask install leaves
+    # them quarantined and Gatekeeper refuses to run them.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gqlhash"]
+          end
+    # Shared, so an upgrade never says two different things about the same release.
+    caveats: &caveats |
+      Upgrading from v1: gqlhash now hashes with SHA-256 by default where v1 used
+      SHA-1, some documents hash differently under any function, and a few v1
+      accepted are now refused. Anything holding a stored hash has to rebuild it;
+      -hash sha1 keeps what v1 printed. What changed:
+      https://github.com/romshark/gqlhash/blob/main/MIGRATION.md
+    repository: &tap
+      owner: romshark
+      name: tools
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+
+  - name: gqlhash-proxy
+    ids: [gqlhash-proxy]
+    homepage: *homepage
+    description: Serves an allowlist of GraphQL documents in front of an API
+    license: *license
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gqlhash-proxy"]
+          end
+    caveats: *caveats
+    repository: *tap

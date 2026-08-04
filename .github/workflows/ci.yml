@@ -12,11 +12,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       
-      # Build the CLI executable.
+      # Build every executable. gqlhash-proxy-fhttp is no longer a release artifact,
+      # but the acceptance suite compiles it, so a break there
+      # surfaces as a confusing test failure unless it's built here.
       - name: Build
-        run: go build -o ./bin/gqlhash ./cmd/gqlhash
-      - name: Add binary to PATH
-        run: echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
+        run: |
+          go build -o ./bin/gqlhash ./cmd/gqlhash
+          go build -o ./bin/gqlhash-proxy ./cmd/gqlhash-proxy
+          go build -o ./bin/gqlhash-proxy-fhttp ./cmd/gqlhash-proxy-fhttp
 
       # Test.
       - name: Test and calculate coverage
@@ -28,6 +31,12 @@ jobs:
         with:
           github-token: ${{ secrets.github_token }}
           path-to-lcov: coverage.lcov
+      # The race detector, on the packages whose tests reach the concurrent
+      # code in process. The acceptance suite is left out: its servers are
+      # separate processes built without -race, so the run would check only
+      # the harness. See the race target in the Makefile.
+      - name: Test with the race detector
+        run: go test -race -count=1 $(go list ./... | grep -v /internal/acceptance)
+
       - name: Run go vet
-        continue-on-error: true
         run: go vet ./...

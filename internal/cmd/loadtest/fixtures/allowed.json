@@ -1,0 +1,1 @@
+{"operationName":"GetUser","query":"query GetUser{user(id:1){name email}}","variables":{"id":1}}

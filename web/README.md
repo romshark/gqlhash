@@ -141,10 +141,10 @@ The controls mirror the flags of `cmd/gqlhash`:
 
 - **Hash function** — `-hash`, all twelve the CLI supports.
 - **Output format** — `-format`: hex, base32, base64 or base64url.
-- **`-ignore-inputs`** — hash argument and default values as if they weren't
+- **`-ignore=inputs`** — hash argument and default values as if they weren't
   there, keeping only the variable signature.
-- **`-ignore-variables`** — ignore variable definitions and usages entirely.
-  This implies `-ignore-inputs`, so that box is checked and disabled while it's
+- **`-ignore=variables`** — ignore variable definitions and usages entirely.
+  This implies `-ignore=inputs`, so that box is checked and disabled while it's
   on, and your own setting comes back when you switch it off.
 
 The list of hash functions and formats comes from the Go side at runtime, so the

@@ -1,0 +1,25 @@
+name: govulncheck
+
+on:
+  schedule:
+    # Daily at 06:17 UTC. New advisories can affect the module without any
+    # commit, so this must run on a timer, not only on push.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Go 1.26.5
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.5"
+          check-latest: true
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

@@ -3,28 +3,31 @@ package parser_test
 import (
 	"crypto/sha1"
 	"errors"
-	"slices"
+	"fmt"
+	"io"
+	"math"
+	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/romshark/gqlhash/internal"
-	"github.com/romshark/gqlhash/parser"
+	"github.com/romshark/gqlhash/v2/internal/gqlhashtest"
+	"github.com/romshark/gqlhash/v2/parser"
 )
 
 // bom is the UTF-8 encoding of U+FEFF, which is Ignored
 // (https://spec.graphql.org/September2025/#UnicodeBOM).
 const bom = "\xef\xbb\xbf"
 
-// Supplementary-plane (astral) characters (https://www.unicode.org/roadmaps/smp),
-// each a 4-byte UTF-8 sequence:
+// astral1 and astral2 are supplementary-plane characters
+// (https://www.unicode.org/roadmaps/smp), each a 4-byte UTF-8 sequence:
 // U+1F4A9 PILE OF POO and U+1D11E MUSICAL SYMBOL G CLEF.
-// Used to exercise the full Unicode SourceCharacter range
+// They exercise the full Unicode SourceCharacter range
 // (https://spec.graphql.org/September2025/#SourceCharacter).
 var astral1, astral2 = string(rune(0x1F4A9)), string(rune(0x1D11E))
 
-// Byte sequences that aren't valid UTF-8 encodings of a Unicode scalar value.
-// SourceCharacter admits only scalar values, so none of these may appear in a
-// document (https://spec.graphql.org/September2025/#SourceCharacter).
+// badUTF8 holds byte sequences that aren't valid UTF-8 encodings of a Unicode
+// scalar value. SourceCharacter admits only scalar values, so none of these may
+// appear in a document (https://spec.graphql.org/September2025/#SourceCharacter).
 var badUTF8 = map[string]string{
 	"lone continuation byte":    "\x80",
 	"invalid byte 0xFF":         "\xff",
@@ -37,60 +40,60 @@ var badUTF8 = map[string]string{
 	"above U+10FFFF":            "\xf4\x90\x80\x80",
 }
 
-func TestSkipIgnorables(t *testing.T) {
-	f := func(t *testing.T, expect, input string) {
-		t.Helper()
-		a := parser.SkipIgnorables([]byte(input))
-		if expect != string(a) {
-			t.Errorf("expected %q; received: %q", expect, a)
-		}
-	}
+// recorder is an [io.Writer] that keeps the canonical form instead of hashing
+// it.
+type recorder struct{ stream []byte }
 
-	f(t, "", "")
-
-	f(t, "", ",")
-	f(t, "xyz", ",xyz")
-	f(t, "xyz", " ,\t\r\nxyz")
-	f(t, "", "# this should be skipped")
-	f(t, "", "# this should be skipped\n\n\t # and this\n\t")
-	f(t, "but not this", "# this should be skipped\n\n\t # and this\n\tbut not this")
-	// Bare CR is a LineTerminator, so it ends the comment just like LF.
-	f(t, "but not this", "# this should be skipped\rbut not this")
-
-	f(t, "(", "(")
-	f(t, "{", "{")
-	f(t, "xyz", "xyz")
-
-	// A UTF-8 BOM is Ignored and may appear before or after any token
-	// (https://spec.graphql.org/September2025/#UnicodeBOM).
-	f(t, "", bom)
-	f(t, "xyz", bom+"xyz")
-	f(t, "xyz", bom+bom+"xyz")
-	f(t, "xyz", " "+bom+"\t,\n"+bom+"xyz")
-	f(t, "xyz", bom+"# comment\n"+bom+"xyz")
-
-	// A BOM starts with 0xEF, but 0xEF alone is no BOM and ends the Ignored.
-	f(t, "\xefxyz", "\xefxyz")
-	f(t, "\xef\xbbxyz", "\xef\xbbxyz")
-
-	// The same set of bytes, without comments and the BOM.
-	for _, b := range []byte{' ', ',', '\t', '\n', '\r'} {
-		if !parser.IsIgnorableByte(b) {
-			t.Errorf("expected %q to be ignorable", b)
-		}
-	}
-	for _, b := range []byte{'#', 'x', '\xef', 0} {
-		if parser.IsIgnorableByte(b) {
-			t.Errorf("expected %q not to be ignorable", b)
-		}
-	}
+func (r *recorder) Write(b []byte) (int, error) {
+	r.stream = append(r.stream, b...)
+	return len(b), nil
 }
 
-func TestReadDocument(t *testing.T) {
+func (r *recorder) String() string { return string(r.stream) }
+
+var _ io.Writer = new(recorder)
+
+// parse reads input and returns its canonical form and the error.
+func parse(o parser.Options, input string) (string, parser.Result) {
+	r := new(recorder)
+	err := parser.Parse(r, o, input)
+	return r.String(), err
+}
+
+// stream builds a canonical form from prefix bytes and text.
+func stream(parts ...any) string {
+	var b []byte
+	for _, p := range parts {
+		switch v := p.(type) {
+		case byte:
+			b = append(b, v)
+		case string:
+			b = append(b, v...)
+		default:
+			panic(fmt.Sprintf("unsupported stream part: %T", p))
+		}
+	}
+	return string(b)
+}
+
+// hash returns the SHA-1 sum of the canonical form of input.
+// Fails the test if input is invalid.
+func hash(t *testing.T, options parser.Options, input string) string {
+	t.Helper()
+	h := sha1.New()
+	if err := parser.Parse(h, options, input); err.Err != nil {
+		t.Fatalf("Parse(%q): %v", input, err)
+	}
+	return string(h.Sum(nil))
+}
+
+func TestParse(t *testing.T) {
 	f := func(t *testing.T, expectErr error, input string) {
 		t.Helper()
-		err := parser.ReadDocument(internal.NoopHash{}, []byte(input))
-		if expectErr != err {
+		// A depth beyond what these inputs reach:
+		// what the limit itself does is [TestParseDepthLimit].
+		_, err := parse(parser.Options{DepthLimit: 1000}, input)
+		if expectErr != err.Err {
 			t.Errorf("expected err: %v; received err: %v; input: %q",
 				expectErr, err, input)
 		}
@@ -169,8 +172,21 @@ func TestReadDocument(t *testing.T) {
 		f(t, parser.ErrUnexpectedToken, "{ ... on{ x } }")
 	}
 
-	{ // UTF-8 BOM (https://spec.graphql.org/September2025/#UnicodeBOM).
-		// Accept a BOM anywhere an Ignored is allowed.
+	{ // Ignored tokens
+		// (https://spec.graphql.org/September2025/#sec-Language.Source-Text.Ignored-Tokens).
+		f(t, nil, "{x}")
+		f(t, nil, ",{,x,},")
+		f(t, nil, " \t\r\n{ \t\r\nx \t\r\n} \t\r\n")
+		f(t, nil, "# comment\n{x}")
+		f(t, nil, "{x}# comment")
+		f(t, nil, "{x}# comment\n")
+		// A bare CR ends a comment just like a LF does.
+		f(t, nil, "# comment\r{x}")
+		f(t, nil, "{#\n#\n#\nx#\n}")
+		// A comment runs to the end of the line, so it swallows a whole document.
+		f(t, parser.ErrUnexpectedEOF, "# {x}")
+
+		// A UTF-8 BOM is Ignored and may appear before or after any token.
 		f(t, nil, bom+"{ x }")
 		f(t, nil, "{ x }"+bom)
 		f(t, nil, "{ "+bom+"x }")
@@ -179,9 +195,15 @@ func TestReadDocument(t *testing.T) {
 		f(t, nil, "query"+bom+"Foo { x }")
 		f(t, nil, "fragment F on"+bom+"T { x }")
 		f(t, nil, "{ f(a:"+bom+"1) }")
+		f(t, nil, bom+bom+"{x}")
+		f(t, nil, "{x"+bom+"# comment\n"+bom+"}")
 
 		// A BOM doesn't glue two names together.
 		f(t, nil, "query"+bom+"Foo"+bom+"{ x }")
+
+		// A BOM starts with 0xEF, but 0xEF alone is no BOM.
+		f(t, parser.ErrUnexpectedToken, "\xef{x}")
+		f(t, parser.ErrUnexpectedToken, "\xef\xbb{x}")
 	}
 
 	{ // Constants (https://spec.graphql.org/September2025/#VariableDefinition).
@@ -210,6 +232,10 @@ func TestReadDocument(t *testing.T) {
 		f(t, nil, `fragment F on T @d(a: $x) { f } { ...F }`)
 		f(t, nil, `{ ... @d(a: $x) { f } }`)
 		f(t, nil, `{ ...F @d(a: $x) }`)
+
+		// The constant rule ends with the variable definitions: the directives of
+		// the operation itself take a Value again.
+		f(t, nil, `query Q($x: Int = 1) @d(a: $x) { f }`)
 	}
 
 	{ // Control characters (https://spec.graphql.org/September2025/#SourceCharacter).
@@ -221,10 +247,18 @@ func TestReadDocument(t *testing.T) {
 		f(t, nil, "{ f(s: \"\"\"a\x00b\nc\x1fd\"\"\") }")
 
 		// A normal string keeps rejecting them, they must be escaped there.
-		f(t, parser.ErrUnexpectedToken, "{ f(s: \"a\x00b\") }")
-		f(t, parser.ErrUnexpectedToken, "{ f(s: \"a\x07b\") }")
-		f(t, parser.ErrUnexpectedToken, "{ f(s: \"a\x1fb\") }")
+		f(t, parser.ErrUnescapedControlChar, "{ f(s: \"a\x00b\") }")
+		f(t, parser.ErrUnescapedControlChar, "{ f(s: \"a\x07b\") }")
+		f(t, parser.ErrUnescapedControlChar, "{ f(s: \"a\x1fb\") }")
 		f(t, nil, `{ f(s: "a\u0000b") }`)
+
+		// A LineTerminator is a control character too, so it needs an escape
+		// (https://spec.graphql.org/September2025/#StringCharacter).
+		f(t, parser.ErrUnescapedControlChar, "{ f(s: \"a\nb\") }")
+		f(t, parser.ErrUnescapedControlChar, "{ f(s: \"a\rb\") }")
+
+		// A control character isn't Ignored anywhere else either.
+		f(t, parser.ErrUnexpectedToken, "{\x00x}")
 	}
 
 	{ // Descriptions (https://spec.graphql.org/September2025/#sec-Descriptions).
@@ -249,31 +283,32 @@ func TestReadDocument(t *testing.T) {
 		f(t, parser.ErrUnexpectedToken, `1 query Q { f }`)
 		f(t, parser.ErrUnexpectedToken, `query Q("A" "B" $x: Int) { f }`)
 		// A description is still a string value and must be valid.
-		f(t, parser.ErrUnexpectedToken, `"\q" query Q { f }`)
-		f(t, parser.ErrUnexpectedToken, `query Q("\q" $x: Int) { f }`)
+		f(t, parser.ErrInvalidEscape, `"\q" query Q { f }`)
+		f(t, parser.ErrInvalidEscape, `query Q("\q" $x: Int) { f }`)
 		f(t, parser.ErrUnexpectedEOF, `"Description"`)
 		f(t, parser.ErrUnexpectedEOF, `query Q("A"`)
+		f(t, parser.ErrUnexpectedEOF, `"""Description"""`)
 	}
 
 	{ // Numeric literals (https://spec.graphql.org/September2025/#sec-Int-Value).
 		// A broken number is one invalid number and must not be split into
 		// several values.
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [01]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [-.1]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [0x123]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [123L]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [1e2foo]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [- foo]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: 007) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [-]) }")
-		f(t, parser.ErrUnexpectedToken, "{ f(a: [1.]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [01]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [-.1]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [0x123]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [123L]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [1e2foo]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [- foo]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: 007) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [-]) }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: [1.]) }")
 		f(t, parser.ErrUnexpectedToken, "{ f(a: .5) }")
-		f(t, parser.ErrUnexpectedToken, "query Q($x: Int = 01) { f }")
+		f(t, parser.ErrMalformedNumber, "query Q($x: Int = 01) { f }")
 
 		// The same rules apply wherever a value is read.
-		f(t, parser.ErrUnexpectedToken, "{ f(a: {x: 01}) }")
-		f(t, parser.ErrUnexpectedToken, "{ f @d(a: 1e2foo) }")
-		f(t, parser.ErrUnexpectedToken, "query Q($x: Int @d(a: -.1)) { f }")
+		f(t, parser.ErrMalformedNumber, "{ f(a: {x: 01}) }")
+		f(t, parser.ErrMalformedNumber, "{ f @d(a: 1e2foo) }")
+		f(t, parser.ErrMalformedNumber, "query Q($x: Int @d(a: -.1)) { f }")
 
 		// Values that an Ignored token separates legally are still accepted.
 		f(t, nil, "{ f(a: [1 2]) }")
@@ -297,9 +332,9 @@ func TestReadDocument(t *testing.T) {
 		for name, seq := range badUTF8 {
 			t.Run(name, func(t *testing.T) {
 				// Reject it in a single-line string.
-				f(t, parser.ErrUnexpectedToken, `{ f(s: "`+seq+`") }`)
+				f(t, parser.ErrMalformedUTF8, `{ f(s: "`+seq+`") }`)
 				// Reject it in a block string.
-				f(t, parser.ErrUnexpectedToken, `{ f(s: """`+seq+`""") }`)
+				f(t, parser.ErrMalformedUTF8, `{ f(s: """`+seq+`""") }`)
 				// Reject it in a comment, whose CommentChar is a SourceCharacter
 				// too (https://spec.graphql.org/September2025/#CommentChar).
 				f(t, parser.ErrUnexpectedToken, "# "+seq+"\n{ x }")
@@ -313,288 +348,482 @@ func TestReadDocument(t *testing.T) {
 		f(t, nil, "# é € "+astral1+"\n{ x }")
 		f(t, nil, "{ x } # é € "+astral1)
 	}
+
+	{ // Selection sets (https://spec.graphql.org/September2025/#sec-Selection-Sets).
+		// A selection set holds at least one selection.
+		f(t, parser.ErrUnexpectedToken, "{}")
+		f(t, parser.ErrUnexpectedToken, "{ }")
+		f(t, parser.ErrUnexpectedToken, "{ f {} }")
+		f(t, parser.ErrUnexpectedToken, "{ ... on T {} }")
+		// Deeply nested selection sets need no stack of their own.
+		f(t, nil, strings.Repeat("{f", 200)+strings.Repeat("}", 200))
+		// A '.' that begins no '...' is an unexpected token.
+		f(t, parser.ErrUnexpectedToken, "{ . }")
+		f(t, parser.ErrUnexpectedToken, "{ .. }")
+		f(t, parser.ErrUnexpectedToken, "{ ..")
+	}
+
+	{ // Values (https://spec.graphql.org/September2025/#Value).
+		// Deeply nested lists and input objects grow the value stack.
+		f(t, nil, "{f(a:"+strings.Repeat("[", 100)+strings.Repeat("]", 100)+")}")
+		f(t, nil, "{f(a:"+strings.Repeat("[", 100)+"1"+strings.Repeat("]", 100)+")}")
+		f(t, nil, "{f(a:"+strings.Repeat("{k:", 100)+"1"+strings.Repeat("}", 100)+")}")
+		// A list and an input object may nest within one another.
+		f(t, nil, "{f(a:[{k:[{k:1}]}])}")
+		// A closing bracket must match its opening one.
+		f(t, parser.ErrUnexpectedToken, "{f(a:[1})}")
+		f(t, parser.ErrUnexpectedToken, "{f(a:{k:1])}")
+	}
 }
 
-func TestReadDefinition(t *testing.T) {
-	f := func(t *testing.T, expectSuffix string, expectErr error, input string) {
+// TestParseCanonicalStream pins the canonical form of every kind of token.
+func TestParseCanonicalStream(t *testing.T) {
+	f := func(t *testing.T, expect string, inputs ...string) {
 		t.Helper()
-		suffix, err := parser.ReadDefinition(internal.NoopHash{}, []byte(input))
-		if expectErr != err {
-			t.Errorf("expected err: %v; received err: %v", expectErr, err)
-		}
-		if expectSuffix != string(suffix) {
-			t.Errorf("expected %q; received: %q", expectSuffix, suffix)
+		for _, input := range inputs {
+			actual, err := parse(parser.Options{}, input)
+			if err.Err != nil {
+				t.Fatalf("unexpected error: %v; input: %q", err, input)
+			}
+			if actual != expect {
+				t.Errorf("expected stream:\n%q\nreceived:\n%q\ninput: %q",
+					expect, actual, input)
+			}
 		}
 	}
 
-	f(t, "", parser.ErrUnexpectedEOF, "")
-	f(t, "()", parser.ErrUnexpectedToken, "()")
+	f(t, stream(
+		parser.HPrefQuery,
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "foo",
+		parser.HPrefSelectionSetEnd,
+	), "{foo}", "{ foo }", "query { foo }", "\t{\n\tfoo,\n}\n", "{#c\nfoo}")
 
-	suffix := ","
-	f(t, suffix, nil, "{ anonymousOperation }"+suffix)
-	f(t, suffix, nil, `fragment UserInfo on User {
-		__typename
-		... on Admin { privileges { id name } }
-		... on Customer { id email }
-	}`+suffix)
-	f(t, suffix, nil, "mutation {likeStory(storyID: 12345) {story {likeCount}}}"+suffix)
-	f(t, suffix, nil, "query Stories { stories ( limit : 5 ) { id } }"+suffix)
-	f(t, suffix, nil, "subscription Updates { updates }"+suffix)
+	f(t, stream(
+		parser.HPrefMutation, "M",
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "a",
+		parser.HPrefFieldAliasedName, "b",
+		parser.HPrefSelectionSetEnd,
+	), "mutation M{a:b}", "mutation M { a : b }")
+
+	f(t, stream(
+		parser.HPrefSubscription, "S",
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "a",
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "b",
+		parser.HPrefSelectionSetEnd,
+		parser.HPrefSelectionSetEnd,
+	), "subscription S{a{b}}")
+
+	// A description is documentation and must not appear in the stream.
+	f(t, stream(
+		parser.HPrefQuery, "Q",
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "f",
+		parser.HPrefSelectionSetEnd,
+	), `query Q{f}`, `"Description" query Q{f}`, `"""Block""" query Q{f}`)
+
+	// Variable definitions, types, default values and directives.
+	f(t, stream(
+		parser.HPrefQuery, "Q",
+		parser.HPrefVariableDefinition, "x",
+		parser.HPrefType, "[Int!]!",
+		parser.HPrefValueInteger, "1",
+		parser.HPrefDirective, "dep",
+		parser.HPrefArgument, "since",
+		parser.HPrefValueString, "v2",
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "f",
+		parser.HPrefSelectionSetEnd,
+	), `query Q($x:[Int!]!=1@dep(since:"v2")){f}`,
+		"query Q (\n\t\"Doc\"\n\t$x : [ Int ! ] ! = 1 @dep ( since : \"v2\" )\n) { f }")
+
+	// Fragments and inline fragments.
+	f(t, stream(
+		parser.HPrefFragmentDefinition, "F",
+		parser.HPrefType, "T",
+		parser.HPrefDirective, "d",
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "a",
+		parser.HPrefSelectionSetEnd,
+		parser.HPrefQuery,
+		parser.HPrefSelectionSet,
+		parser.HPrefFragmentSpread, "F",
+		parser.HPrefInlineFragment,
+		parser.HPrefType, "T",
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "b",
+		parser.HPrefSelectionSetEnd,
+		parser.HPrefInlineFragment,
+		parser.HPrefDirective, "skip",
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "c",
+		parser.HPrefSelectionSetEnd,
+		parser.HPrefSelectionSetEnd,
+	), "fragment F on T@d{a} {...F ...on T{b} ...@skip{c}}")
+
+	// Every kind of value.
+	f(t, stream(
+		parser.HPrefQuery,
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "f",
+		parser.HPrefArgument, "i", parser.HPrefValueInteger, "-42",
+		parser.HPrefArgument, "fl", parser.HPrefValueFloat, "3.14e-2",
+		parser.HPrefArgument, "s", parser.HPrefValueString, "text",
+		parser.HPrefArgument, "b", parser.HPrefValueString, "block",
+		parser.HPrefArgument, "t", parser.HPrefValueTrue,
+		parser.HPrefArgument, "f", parser.HPrefValueFalse,
+		parser.HPrefArgument, "n", parser.HPrefValueNull,
+		parser.HPrefArgument, "e", parser.HPrefValueEnum, "ENUM",
+		parser.HPrefArgument, "v", parser.HPrefValueVariable, "var",
+		parser.HPrefArgument, "l", parser.HPrefValueList,
+		parser.HPrefValueInteger, "1", parser.HPrefValueInteger, "2",
+		parser.HPrefValueListEnd,
+		parser.HPrefArgument, "o", parser.HPrefValueInputObject,
+		parser.HPrefValueInputObjectField, "k", parser.HPrefValueInteger, "1",
+		parser.HPrefInputObjectEnd,
+		parser.HPrefSelectionSetEnd,
+	), `{f(i:-42 fl:3.14e-2 s:"text" b:"""block""" t:true f:false n:null`+
+		` e:ENUM v:$var l:[1 2] o:{k:1})}`)
+
+	// An empty list and an empty input object have no items to separate,
+	// so neither gets an end marker.
+	// Two sibling fields. Without the prefixes the two names collapse into the
+	// single field `foobar`.
+	f(t, stream(
+		parser.HPrefQuery,
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "foo",
+		parser.HPrefField, "bar",
+		parser.HPrefSelectionSetEnd,
+	), "{foo bar}", "{ foo  bar }", "query{foo,bar}")
+
+	// A ListValue nested in an InputObjectValue.
+	f(t, stream(
+		parser.HPrefQuery,
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "x",
+		parser.HPrefDirective, "translate",
+		parser.HPrefArgument, "lang",
+		parser.HPrefValueInputObject,
+		parser.HPrefValueInputObjectField, "codes",
+		parser.HPrefValueList,
+		parser.HPrefValueEnum, "EN",
+		parser.HPrefValueEnum, "DE",
+		parser.HPrefValueListEnd,
+		parser.HPrefInputObjectEnd,
+		parser.HPrefSelectionSetEnd,
+	), "{x @translate(lang:{codes:[EN,DE]})}",
+		"{\n\tx @ translate (\n\t\tlang : {\n\t\t\tcodes : [\n\t\t\t\tEN\n\t\t\t\tDE\n\t\t\t]\n\t\t}\n\t)\n}")
+
+	f(t, stream(
+		parser.HPrefQuery,
+		parser.HPrefSelectionSet,
+		parser.HPrefField, "f",
+		parser.HPrefArgument, "l", parser.HPrefValueList,
+		parser.HPrefArgument, "o", parser.HPrefValueInputObject,
+		parser.HPrefSelectionSetEnd,
+	), "{f(l:[] o:{})}", "{f(l:[,] o:{,})}", "{f(l:[ ] o:{ })}")
 }
 
-func TestReadSelectionSet(t *testing.T) {
-	f := func(t *testing.T, expectSuffix string, expectErr error, input string) {
+// stringValueOf returns the bytes the string value input is hashed as,
+// read as the only argument of a minimal document.
+func stringValueOf(t *testing.T, input string) string {
+	t.Helper()
+	s, err := parse(parser.Options{}, `{f(a:`+input+`)}`)
+	if err.Err != nil {
+		t.Fatalf("unexpected error: %v; input: %q", err, input)
+	}
+	prefix := stream(
+		parser.HPrefQuery, parser.HPrefSelectionSet,
+		parser.HPrefField, "f", parser.HPrefArgument, "a",
+		parser.HPrefValueString,
+	)
+	suffix := stream(parser.HPrefSelectionSetEnd)
+	if !strings.HasPrefix(s, prefix) || !strings.HasSuffix(s, suffix) {
+		t.Fatalf("unexpected stream: %q", s)
+	}
+	return s[len(prefix) : len(s)-len(suffix)]
+}
+
+// TestParseStringValue asserts that a string is written as the value it stands
+// for and not as it's spelled
+// (https://spec.graphql.org/September2025/#sec-String-Value).
+func TestParseStringValue(t *testing.T) {
+	f := func(t *testing.T, expect string, inputs ...string) {
 		t.Helper()
-		suffix, err := parser.ReadSelectionSet(internal.NoopHash{}, []byte(input))
-		if expectErr != err {
-			t.Errorf("expected err: %v; received err: %v", expectErr, err)
-		}
-		if expectSuffix != string(suffix) {
-			t.Errorf("expected %q; received: %q", expectSuffix, suffix)
+		for _, input := range inputs {
+			if a := stringValueOf(t, input); a != expect {
+				t.Errorf("expected value %q; received %q; input: %q", expect, a, input)
+			}
 		}
 	}
 
-	f(t, "", parser.ErrUnexpectedEOF, "")
-	f(t, "()", parser.ErrUnexpectedToken, "()")
+	f(t, "", `""`, `""""""`, `"""    """`, "\"\"\"\n \t\n\"\"\"", "\"\"\"\n   \"\"\"")
+	f(t, "ok", `"ok"`, `"""ok"""`, "\"\"\"\nok\n\"\"\"", "\"\"\"\n\n  ok\n  \"\"\"")
 
-	suffix := ","
-	f(t, suffix, nil, "{ foo }"+suffix)
-	f(t, suffix, nil, "{ foo bar bazz }"+suffix)
-	f(t, suffix, nil, "{ foo ...Foo bazz }"+suffix)
-	f(t, suffix, nil, `{
-		foo
-		... @ include ( if : $this ) {
-			included
-		}
-		bazz
-	}`+suffix)
-	f(t, suffix, nil, `{
-		foo @directive
-		...Foo @directive
-		... on Bar @directive {
-			fraz @directive
-		}
-		mazz : bazz @directive
-	}`+suffix)
-	f(t, suffix, nil, "{ likeStory ( storyID: 12345 ) { story { likeCount } } }"+suffix)
+	{ // EscapedCharacter
+		// (https://spec.graphql.org/September2025/#EscapedCharacter).
+		f(t, `"`, `"\""`)
+		f(t, `/`, `"\/"`)
+		f(t, "\t", `"\t"`)
+		f(t, "\n", `"\n"`)
+		f(t, "\r", `"\r"`)
+		// A backslash and the control bytes the hash prefixes are taken from are
+		// escaped again, so no string value can imitate a prefix.
+		// Every one of them is written differently,
+		// see [TestParseStringEscapesAreDistinct].
+		f(t, `\|`, `"\\"`)
+		f(t, `\H`, `"\b"`, `"\u0008"`, `"\u{8}"`)
+		f(t, `\L`, `"\f"`, `"\u000C"`, `"\u{c}"`)
+		f(t, `\@`, `"\u0000"`, `"\u{0}"`)
+		f(t, `\A`, `"\u0001"`)
+		f(t, `\_`, `"\u001f"`)
+	}
+
+	{ // EscapedUnicode (https://spec.graphql.org/September2025/#EscapedUnicode).
+		// The fixed-width, the variable-width and the literal spelling of one
+		// character all hash alike.
+		f(t, "A", `"\u0041"`, `"\u{41}"`, `"\u{0000041}"`, `"A"`)
+		f(t, "é", `"\u00e9"`, `"\u00E9"`, `"\u{e9}"`, `"é"`)
+		f(t, "こんにちは", `"\u3053\u3093\u306b\u3061\u306f"`, `"こんにちは"`)
+		// A supplementary-plane character, as a surrogate pair, as a
+		// variable-width escape and as the literal character.
+		f(t, astral1, `"\uD83D\uDCA9"`, `"\u{1F4A9}"`, `"\u{1f4a9}"`, `"`+astral1+`"`)
+		f(t, astral2, `"\u{1D11E}"`, `"`+astral2+`"`)
+		f(t, "\U0010FFFF", `"\u{10FFFF}"`)
+	}
+
+	{ // BlockStringValue
+		// (https://spec.graphql.org/September2025/#BlockStringValue()).
+		// Escape sequences aren't interpreted, only `\"""` is. The backslash is
+		// still escaped on the way out, so it reads as `\|` and the 'n' stands alone.
+		f(t, `\|n`, `"""\n"""`)
+		f(t, `"""`, `"""\""""""`)
+		// A pair of quotes is ordinary content, and so is a quote that opens no
+		// delimiter, even as the first byte of the block.
+		f(t, `" x`, `"""" x"""`)
+		f(t, `x"" y`, `"""x"" y"""`)
+		f(t, `a"""b`, `"""a\"""b"""`)
+		// The lines are joined by a single line feed, so LF, CRLF and CR agree.
+		f(t, "a\nb", "\"\"\"a\nb\"\"\"", "\"\"\"a\r\nb\"\"\"", "\"\"\"a\rb\"\"\"")
+		// The common indentation is stripped from every line but the first.
+		f(t, "line one.\n\tline two.\nline three.",
+			"\"\"\"line one.\n\t\t\t\t\tline two.\n\t\t\t\tline three.\n\"\"\"")
+		f(t, "a\n b", "\"\"\"\n  a\n   b\n  \"\"\"")
+		// A blank line between two content lines is kept.
+		f(t, "a\n\nb", "\"\"\"a\n\nb\"\"\"", "\"\"\"\n  a\n\n  b\n  \"\"\"")
+		// Leading and trailing blank lines are dropped.
+		f(t, "foo", "\"\"\"\n\nfoo\n\n\"\"\"", "\"\"\"foo\n\n\t\n  \n\n  \"\"\"")
+		f(t, "foo", "\"\"\"foo\r\n\r\n\"\"\"", "\"\"\"\r\nfoo\r\n  \r\n\"\"\"")
+		// Trailing WhiteSpace of a content line is content.
+		f(t, "foo  ", "\"\"\"foo  \n\n\t\n  \n\n  \"\"\"")
+		// A control character stays a BlockStringCharacter but is escaped, so it
+		// can't imitate a hash prefix either.
+		f(t, `a\@b`, "\"\"\"a\x00b\"\"\"")
+		f(t, "a\tb", "\"\"\"a\tb\"\"\"")
+		// GraphQL WhiteSpace is only space and tab, so U+00A0 is content.
+		f(t, "\u00a0", "\"\"\"\u00a0\"\"\"")
+	}
 }
 
-func TestReadArguments(t *testing.T) {
-	f := func(t *testing.T, expect, expectSuffix string, expectErr error, input string) {
+// TestParseStringEscapesAreDistinct asserts that writing a string value into
+// the canonical form is injective: no two values that differ are written alike.
+//
+// Two values sharing a canonical form is a hash collision between documents
+// carrying different arguments, which for an allowlist means one document
+// standing in for another.
+func TestParseStringEscapesAreDistinct(t *testing.T) {
+	f := func(t *testing.T, spell func(b int) (input string, ok bool)) {
 		t.Helper()
-		a, suffix, err := parser.ReadArguments(internal.NoopHash{}, []byte(input))
-		if expectErr != err {
-			t.Errorf("expected err: %v; received err: %v", expectErr, err)
-		}
-		if expectSuffix != string(suffix) {
-			t.Errorf("expected %q; received: %q", expectSuffix, suffix)
-		}
-		if expect != string(a) {
-			t.Errorf("expected %q; received: %q", expect, a)
+		seen := make(map[string]int, 0x80)
+		for b := range 0x80 {
+			input, ok := spell(b)
+			if !ok {
+				continue
+			}
+			written := stringValueOf(t, input)
+			if prev, ok := seen[written]; ok {
+				t.Errorf("U+%04X and U+%04X are both written as %q; input: %q",
+					prev, b, written, input)
+				continue
+			}
+			seen[written] = b
 		}
 	}
 
-	f(t, "", "", parser.ErrUnexpectedEOF, "")
-	f(t, "", "{", parser.ErrUnexpectedToken, "{")
-	f(t, "", ")", parser.ErrUnexpectedToken, "()")
+	t.Run("single line", func(t *testing.T) {
+		// Every byte is spelled as a fixed-width escape, so the source says
+		// nothing about how the value comes out.
+		f(t, func(b int) (string, bool) {
+			return fmt.Sprintf(`"\u%04X"`, b), true
+		})
+	})
 
-	f(t, "(life:42)", "", nil, "(life:42)")
-	f(t, "(x: 4.13\ny : 62.0)", "", nil, "(x: 4.13\ny : 62.0)")
-	f(t, `(foo:"bar",bazz:"fuzz")`, "", nil, `(foo:"bar",bazz:"fuzz")`)
+	t.Run("block string", func(t *testing.T) {
+		// A block string takes a control byte as it is, and the same table
+		// escapes it on the way out. Wrapped in letters so no byte lands next to
+		// a delimiter or at the edge of a line.
+		f(t, func(b int) (string, bool) {
+			if b == '\t' || b == '\n' || b == '\r' {
+				// WhiteSpace and LineTerminators carry the block string
+				// semantics of their own and are meant to collide:
+				// a line is indented, and CR, LF and CRLF all join as one line feed.
+				return "", false
+			}
+			return fmt.Sprintf(`"""a%cb"""`, b), true
+		})
+	})
+
+	// The backslash reaches the escape table by its own spelling rather than as
+	// a code point, which neither sweep above covers. U+001C is the byte whose
+	// name it comes closest to taking, see [parser.lutStringEscapeSeq].
+	t.Run("backslash", func(t *testing.T) {
+		a, b := stringValueOf(t, `"\u001C"`), stringValueOf(t, `"\\"`)
+		if a == b {
+			t.Errorf("U+001C and the backslash are both written as %q", a)
+		}
+	})
 }
 
-func TestReadDirectives(t *testing.T) {
-	f := func(t *testing.T, expect, expectSuffix string, expectErr error, input string) {
+// TestParseValueErrors covers the lexical rules of the individual values. Each
+// value is read in an argument, which takes a Value, and in a variable
+// definition's default value, which takes a Value[Const].
+func TestParseValueErrors(t *testing.T) {
+	f := func(t *testing.T, expectErr error, values ...string) {
 		t.Helper()
-		a, suffix, err := parser.ReadDirectives(internal.NoopHash{}, []byte(input))
-		if expectErr != err {
-			t.Errorf("expected err: %v; received err: %v", expectErr, err)
-		}
-		if expectSuffix != string(suffix) {
-			t.Errorf("expected %q; received: %q", expectSuffix, suffix)
-		}
-		if expect != string(a) {
-			t.Errorf("expected %q; received: %q", expect, a)
-		}
-	}
-
-	// Not a directives list (since directives are optional).
-	f(t, "", "", nil, "")
-	f(t, "", "{", nil, "{")
-	f(t, "", "directive", nil, "directive")
-	f(t, "", "(foo:42)", nil, "(foo:42)")
-
-	// Malformed directives.
-	f(t, "", "(foo:42)", parser.ErrUnexpectedToken, "@(foo:42)")
-	f(t, "", "", parser.ErrUnexpectedEOF, "@")
-
-	f(t, "@directive(life:42)", "", nil,
-		"@directive(life:42)")
-	{
-		input := "@translation(\n" +
-			"\tlang: {\n\t\tcode: DE,\n\t\tabbr: true\n\t},\n" +
-			"\tapplyFilters: true\n)\n" +
-			"@flip @rel(direction: XYZ)@public"
-		f(t, input, "{foo}", nil, input+"{foo}")
-	}
-}
-
-func TestHasPrefix(t *testing.T) {
-	f := func(t *testing.T, s, prefix string) {
-		t.Helper()
-		a, e := parser.HasPrefix([]byte(s), prefix), strings.HasPrefix(s, prefix)
-		if a != e {
-			t.Errorf("expected %t; received: %t", e, a)
+		for _, v := range values {
+			for _, input := range []string{
+				`{f(a:` + v + `)}`,
+				`{f(a:[` + v + `])}`,
+				`{f(a:{k:` + v + `})}`,
+				`{f @d(a:` + v + `)}`,
+				`query Q($x:T=` + v + `){f}`,
+				`query Q($x:T@d(a:` + v + `)){f}`,
+			} {
+				_, err := parse(parser.Options{}, input)
+				if err.Err != expectErr {
+					t.Errorf("expected err: %v; received: %v; input: %q",
+						expectErr, err, input)
+				}
+			}
 		}
 	}
 
-	f(t, "", "")
-	f(t, "", "prefix")
-	f(t, "prefix", "prefix")
-	f(t, "prefixsuffix", "prefix")
-	f(t, "prefixsuffix", "suffix")
-}
+	{ // IntValue (https://spec.graphql.org/September2025/#sec-Int-Value).
+		f(t, nil, "0", "-0", "42", "-42", "1234567890",
+			"10000000000000000000000000")
+		// A number is either a single 0 or starts with 1-9, so a leading zero
+		// is illegal (https://spec.graphql.org/September2025/#IntegerPart).
+		f(t, parser.ErrMalformedNumber, "00", "01", "0123", "-01")
+		// A NegativeSign must be followed by a Digit.
+		f(t, parser.ErrMalformedNumber, "-", "-.1", "-foo", "- 1")
+		// No digit, '.' or NameStart may follow a number, so a broken number
+		// is one invalid number and not two valid tokens.
+		f(t, parser.ErrMalformedNumber, "0x123", "123L", "1foo", "1_")
+	}
 
-func TestReadName(t *testing.T) {
-	f := func(t *testing.T, expectName, expectSuffix string, expectErr error, s string) {
-		t.Helper()
-		name, suffix, err := parser.ReadName([]byte(s))
-		if expectErr != err {
-			t.Errorf("expected err: %v; received err: %v", expectErr, err)
-		}
-		if expectName != string(name) {
-			t.Errorf("expected name: %q; received name: %q", expectName, name)
-		}
-		if expectSuffix != string(suffix) {
-			t.Errorf("expected suffix: %q; received suffix: %q", expectSuffix, suffix)
+	{ // FloatValue (https://spec.graphql.org/September2025/#sec-Float-Value).
+		f(t, nil, "0.1", "-0.1", "42.123", "-3.14159265359",
+			"10000000000000000000000000.0", "0.1e1234567890",
+			"0.1e+1234567890", "0.1e-1234567890", "0.1E+1234567890",
+			"1e2", "1E2", "1e+2", "1e-2", "1.0e2", "0e0", "1.05", "1e05")
+		// A fraction and an exponent both need at least one digit.
+		f(t, parser.ErrMalformedNumber, "1.", "1e", "1E", "1e+", "1e-",
+			"1.0e", "1.0E-", "1.e2", "1.E2")
+		// The same end-of-number rule applies.
+		f(t, parser.ErrMalformedNumber, "1e2foo", "1.5x", "1.2.3", "1.5e3.4",
+			"1e2_", "01.5", "-01.5e2")
+	}
+
+	{ // A Variable is a '$' followed by a Name
+		// (https://spec.graphql.org/September2025/#Variable).
+		for _, input := range []string{
+			`{f(a:$1)}`, `{f(a:$$x)}`, `{f(a:$ )}`, `{f(a:[$!])}`,
+		} {
+			if _, err := parse(parser.Options{}, input); err.Err !=
+				parser.ErrUnexpectedToken {
+				t.Errorf("expected %v; received: %v; input: %q",
+					parser.ErrUnexpectedToken, err, input)
+			}
 		}
 	}
 
-	// Errors.
-	f(t, "", "", parser.ErrUnexpectedEOF, "")
-	f(t, "", "(", parser.ErrUnexpectedToken, "(")
-	f(t, "", "{", parser.ErrUnexpectedToken, "{")
-	f(t, "", "ж", parser.ErrUnexpectedToken, "ж")
-	f(t, "", "ツ", parser.ErrUnexpectedToken, "ツ")
-	f(t, "", "@", parser.ErrUnexpectedToken, "@")
-
-	// Different suffixes.
-	f(t, "x", "", nil, "x") // No suffix.
-	f(t, "x", " ", nil, "x ")
-	f(t, "x", " space", nil, "x space")
-	f(t, "x", ",comma", nil, "x,comma")
-	f(t, "x", "\nline-break", nil, "x\nline-break")
-	f(t, "x", "\ttab", nil, "x\ttab")
-	f(t, "x", "(left parenthesis", nil, "x(left parenthesis")
-	f(t, "x", "юникoд", nil, "xюникoд")
-	f(t, "x", "-dash", nil, "x-dash")
-
-	{ // Different names.
-		const suffix = " suffix"
-		f(t, "name", suffix, nil, "name"+suffix)
-		f(t, "_0", suffix, nil, "_0"+suffix)
-		f(t, "_name", suffix, nil, "_name"+suffix)
-		f(t, "__typename", suffix, nil, "__typename"+suffix)
-		f(t, "fooBar", suffix, nil, "fooBar"+suffix)
-		f(t, "foo_Bar42", suffix, nil, "foo_Bar42"+suffix)
+	{ // NullValue, BooleanValue and EnumValue.
+		f(t, nil, "null", "true", "false", "x", "foo", "Bar", "_x", "_0",
+			// A name that merely starts with a keyword is an enum value.
+			"nullable", "trueStory", "falseFlag")
+		f(t, parser.ErrUnexpectedToken, "@", "ж", "ツ", ")", ":", "!")
 	}
 
-	// A Letter is the ASCII letter a Name is built from. '_' and digits are
-	// part of a Name too, but no Letters
-	// (https://spec.graphql.org/September2025/#Letter).
-	for _, b := range []byte{'a', 'z', 'A', 'Z', 'm'} {
-		if !parser.IsLetter(b) {
-			t.Errorf("expected %q to be a letter", b)
-		}
-	}
-	for _, b := range []byte{'_', '0', '9', '-', '\xd0', 0} {
-		if parser.IsLetter(b) {
-			t.Errorf("expected %q not to be a letter", b)
-		}
-	}
-}
+	{ // Single-line strings
+		// (https://spec.graphql.org/September2025/#sec-String-Value).
+		f(t, nil, `""`, `"ok"`, `"\""`, `"\\"`, `"\/"`, `"\b"`, `"\f"`, `"\n"`,
+			`"\r"`, `"\t"`, `"\uabcd"`, `"\uABCD"`, `"\u{0}"`, `"\u{10FFFF}"`,
+			`"one two\t\nthree 123"`, `"ツ ёж ïх жэ こんにちは\n"`)
 
-func TestReadType(t *testing.T) {
-	f := func(
-		t *testing.T,
-		expectRaw string,
-		expectNullable bool,
-		expectArray bool,
-		expectSuffix string,
-		expectErr error,
-		s string,
-	) {
-		t.Helper()
-		raw, nullable, array, suffix, err := parser.ReadType([]byte(s))
-		if expectErr != err {
-			t.Errorf("expected err: %v; received err: %v", expectErr, err)
-		}
-		if expectRaw != string(raw) {
-			t.Errorf("expected raw: %q; received raw: %q", expectRaw, raw)
-		}
-		if expectNullable != nullable {
-			t.Errorf("expected nullable: %t", expectNullable)
-		}
-		if expectArray != array {
-			t.Errorf("expected array: %t", expectArray)
-		}
-		if expectSuffix != string(suffix) {
-			t.Errorf("expected suffix: %q; received suffix: %q", expectSuffix, suffix)
-		}
+		// An unknown escape character.
+		f(t, parser.ErrInvalidEscape, `"\k"`, `"\q"`, `"\ "`, `"\0"`)
+		// A fixed-width escape needs four hexadecimal digits.
+		f(t, parser.ErrInvalidEscape, `"\uGGGG"`, `"\u123G"`)
+		// StringCharacter :: \u EscapedUnicode asserts the escaped value is a
+		// Unicode scalar value, so out-of-range and surrogate escapes are a parse
+		// error even though their syntax is valid
+		// (https://spec.graphql.org/September2025/#StringCharacter).
+		f(t, parser.ErrInvalidEscape, `"\u{110000}"`, `"\u{FFFFFFFF}"`,
+			`"\u{D800}"`, `"\u{DFFF}"`)
+		// A variable-width escape needs at least one hexadecimal digit and a
+		// closing brace.
+		f(t, parser.ErrInvalidEscape, `"\u{}"`, `"\u{G}"`, `"\u{1F4A9"`,
+			`"\u{41 }"`)
+
+		// The legacy pair production is the only way a surrogate may appear: a
+		// leading surrogate must be followed by a trailing one.
+		f(t, nil, `"\uD83D\uDCA9"`)
+		f(t, parser.ErrInvalidEscape,
+			`"\uD800"`,       // Lone leading.
+			`"\uDC00"`,       // Lone trailing.
+			`"\uD800\uD800"`, // Leading + leading.
+			`"\uDC00\uDC00"`, // Trailing + trailing.
+			`"\uDC00\uD800"`, // Reversed pair.
+			`"\uD800a"`,      // Leading, not paired.
+			`"\uD800\n"`,     // Second half is no `\uXXXX` escape.
+			`"\uD800\uZZZZ"`, // Second half is no hexadecimal.
+		)
 	}
 
-	// Errors (always nullable by default).
-	f(t, "", true, false, "", parser.ErrUnexpectedEOF, "")
-	f(t, "", true, false, "(", parser.ErrUnexpectedToken, "(")
-	f(t, "", true, false, "{", parser.ErrUnexpectedToken, "{")
-	f(t, "", true, false, "ж", parser.ErrUnexpectedToken, "ж")
-	f(t, "", true, false, "ツ", parser.ErrUnexpectedToken, "ツ")
-	f(t, "", true, false, "@", parser.ErrUnexpectedToken, "@")
-	f(t, "", true, true, "]", parser.ErrUnexpectedToken, "[]")
-
-	// Different suffixes.
-	f(t, "x", true, false, "", nil, "x") // No suffix
-	f(t, "x", true, false, " ", nil, "x ")
-	f(t, "x", true, false, " space", nil, "x space")
-	f(t, "x", true, false, ",comma", nil, "x,comma")
-	f(t, "x", true, false, "\nline-break", nil, "x\nline-break")
-	f(t, "x", true, false, "\ttab", nil, "x\ttab")
-	f(t, "x", true, false, "(left parenthesis", nil, "x(left parenthesis")
-	f(t, "x", true, false, "юникoд", nil, "xюникoд")
-	f(t, "x", true, false, "-dash", nil, "x-dash")
-
-	{ // Different types.
-		const suffix = " suffix"
-		f(t, "type", true, false, suffix, nil, "type"+suffix)
-		f(t, "type!", false, false, suffix, nil, "type!"+suffix)
-		f(t, "Type", true, false, suffix, nil, "Type"+suffix)
-		f(t, "Type42", true, false, suffix, nil, "Type42"+suffix)
-		f(t, "Type_42", true, false, suffix, nil, "Type_42"+suffix)
-		f(t, "_Type_42", true, false, suffix, nil, "_Type_42"+suffix)
-		f(t, "[_Type_42]", true, true, suffix, nil, "[_Type_42]"+suffix)
-		f(t, "[_Type_42]!", false, true, suffix, nil, "[_Type_42]!"+suffix)
-	}
-
-	{ // Ignored tokens may appear anywhere within a type reference. They remain
-		// part of the raw slice, but must not affect nullable, array or suffix
-		// (https://spec.graphql.org/September2025/#sec-Language.Source-Text.Ignored-Tokens).
-		const suffix = " suffix"
-		f(t, "[ Int ]", true, true, suffix, nil, "[ Int ]"+suffix)
-		f(t, "Int !", false, false, suffix, nil, "Int !"+suffix)
-		f(t, "[Int] !", false, true, suffix, nil, "[Int] !"+suffix)
-		f(t, "[ Int ! ] !", false, true, suffix, nil, "[ Int ! ] !"+suffix)
-		f(t, "[\n\tInt\n]", true, true, suffix, nil, "[\n\tInt\n]"+suffix)
-		f(t, "[Int,]", true, true, suffix, nil, "[Int,]"+suffix)
-		f(t, "[# comment\nInt]", true, true, suffix, nil, "[# comment\nInt]"+suffix)
-		f(t, "["+bom+"Int"+bom+"]", true, true, suffix, nil,
-			"["+bom+"Int"+bom+"]"+suffix)
+	{ // Block strings.
+		f(t, nil, `""""""`, `"""ok"""`, `"""\uGGGG"""`,
+			`"""\""""""`, "\"\"\"a\nb\"\"\"", `"""`+astral1+`"""`)
+		// A `\"""` escapes the closing delimiter, so this block string is
+		// unterminated (https://spec.graphql.org/September2025/#BlockStringCharacter).
+		f(t, parser.ErrUnexpectedEOF, `"""\\"""`, `"""\""""`)
 	}
 }
 
-// TestReadTypeFormatting makes sure Ignored tokens inside a variable type
-// reference don't change the hash while structural differences still do
+// TestParseValueErrorsEOF covers the values that end with the document, which
+// makes them [parser.ErrUnexpectedEOF] instead of a lexical error.
+func TestParseValueErrorsEOF(t *testing.T) {
+	for _, v := range []string{
+		`"`, `"\`, `"\u`, `"\uAB`, `"\uD800`, `"\uD800\`, `"\uD800\u12`,
+		`"\u{1F4A9`, `"""`, `"""\`, `"""\u`, `"""a`, `[`, `[1`, `{`, `{k`, `{k:`,
+		`{k:1`, `$`,
+	} {
+		input := `{f(a:` + v
+		_, err := parse(parser.Options{}, input)
+		if !errors.Is(err.Err, parser.ErrUnexpectedEOF) {
+			t.Errorf("expected %v; received: %v; input: %q",
+				parser.ErrUnexpectedEOF, err, input)
+		}
+	}
+}
+
+// TestParseTypeFormatting asserts that Ignored tokens inside a variable type
+// reference leave the hash alone while structural differences change it
 // (https://spec.graphql.org/September2025/#Type).
-func TestReadTypeFormatting(t *testing.T) {
+func TestParseTypeFormatting(t *testing.T) {
 	o := parser.Options{}
 	const canonical = `query Q($x: [Int!]!) { f }`
 	canonicalHash := hash(t, o, canonical)
@@ -614,25 +843,27 @@ func TestReadTypeFormatting(t *testing.T) {
 		}
 	}
 
-	// Nested list types are normalized at every level of the recursion.
+	// Nested list types are normalized at every level.
 	if hash(t, o, `query Q($x: [[Int!]!]!) { f }`) !=
 		hash(t, o, "query Q($x: [ [\tInt ! ] ! # comment\n]  !) { f }") {
 		t.Error("formatting must not change the hash of a nested list type")
 	}
 
-	// [parser.Options.IgnoreInputs] keeps the variable signature, so the type
+	// [parser.IgnoreInputs] keeps the variable signature, so the type
 	// is still hashed and must still be normalized. Under
-	// [parser.Options.IgnoreVariables] the whole definition is dropped, which
+	// [parser.IgnoreVariables] the whole definition is dropped, which
 	// makes even structurally different types equal.
-	ignoreInputs := parser.Options{IgnoreInputs: true}
+	ignoreInputs := parser.Options{Ignore: parser.IgnoreInputs}
 	if hash(t, ignoreInputs, canonical) !=
 		hash(t, ignoreInputs, `query Q($x: [ Int ! ] !) { f }`) {
 		t.Error("IgnoreInputs must normalize the type as well")
 	}
-	if hash(t, ignoreInputs, canonical) == hash(t, ignoreInputs, `query Q($x: Int) { f }`) {
+	if hash(t, ignoreInputs, canonical) == hash(
+		t, ignoreInputs, `query Q($x: Int) { f }`,
+	) {
 		t.Error("IgnoreInputs must keep distinguishing types")
 	}
-	ignoreVars := parser.Options{IgnoreVariables: true}
+	ignoreVars := parser.Options{Ignore: parser.IgnoreVariables}
 	if hash(t, ignoreVars, canonical) != hash(t, ignoreVars, `query Q($x: Int) { f }`) {
 		t.Error("IgnoreVariables must drop the type entirely")
 	}
@@ -650,483 +881,87 @@ func TestReadTypeFormatting(t *testing.T) {
 			}
 		}
 	}
-}
 
-func TestReadIntValue(t *testing.T) {
-	f := func(
-		t *testing.T, expectValue, expectSuffix string, expectErr error, s string,
-	) {
-		t.Helper()
-		value, suffix, err := parser.ReadIntValue([]byte(s))
-		if expectErr != err {
-			t.Errorf("expected err: %v; received err: %v; input: %q", expectErr, err, s)
-		}
-		if expectValue != string(value) {
-			t.Errorf("expected value: %q; received value: %q", expectValue, value)
-		}
-		if expectSuffix != string(suffix) {
-			t.Errorf("expected suffix: %q; received suffix: %q", expectSuffix, suffix)
-		}
-	}
-
-	f(t, "0", "", nil, "0")
-	f(t, "-0", "", nil, "-0")
-	f(t, "42", "", nil, "42")
-	f(t, "-42", " rest", nil, "-42 rest")
-	f(t, "7", ")", nil, "7)")
-
-	f(t, "", "", parser.ErrUnexpectedEOF, "")
-
-	// A NegativeSign must be followed by a Digit.
-	f(t, "", "-", parser.ErrUnexpectedToken, "-")
-	f(t, "", "- 1", parser.ErrUnexpectedToken, "- 1")
-	f(t, "", "-x", parser.ErrUnexpectedToken, "-x")
-	f(t, "", ".1", parser.ErrUnexpectedToken, ".1")
-
-	// No digit, '.' or NameStart may follow an IntValue. That also rules out
-	// leading zeroes and floats
-	// (https://spec.graphql.org/September2025/#IntValue).
-	f(t, "", "01", parser.ErrUnexpectedToken, "01")
-	f(t, "", "-01", parser.ErrUnexpectedToken, "-01")
-	f(t, "", "1.5", parser.ErrUnexpectedToken, "1.5")
-	f(t, "", "1e2", parser.ErrUnexpectedToken, "1e2")
-	f(t, "", "123L", parser.ErrUnexpectedToken, "123L")
-	f(t, "", "0x1", parser.ErrUnexpectedToken, "0x1")
-}
-
-func TestReadValue(t *testing.T) {
-	f := func(
-		t *testing.T,
-		expectRaw string,
-		expectType parser.ValueType,
-		expectSuffix string,
-		expectErr error,
-		s string,
-	) {
-		t.Helper()
-		raw, valueType, suffix, err := parser.ReadValue(internal.NoopHash{}, []byte(s))
-		if expectErr != err {
-			t.Errorf("expected err: %v; received err: %v", expectErr, err)
-		}
-		if expectRaw != string(raw) {
-			t.Errorf("expected raw: %q; received raw: %q", expectRaw, raw)
-		}
-		if expectType != valueType {
-			t.Errorf("expected valueType: %v; received valueType: %v",
-				expectType, valueType)
-		}
-		if expectSuffix != string(suffix) {
-			t.Errorf("expected suffix: %q; received suffix: %q", expectSuffix, suffix)
-		}
-	}
-
-	// fErr asserts only the returned error, used for malformed inputs where the
-	// exact raw/suffix of the error recovery isn't specified by the grammar.
-	fErr := func(t *testing.T, expectErr error, s string) {
-		t.Helper()
-		_, _, _, err := parser.ReadValue(internal.NoopHash{}, []byte(s))
-		if expectErr != err {
-			t.Errorf("expected err: %v; received err: %v; input: %q",
-				expectErr, err, s)
-		}
-	}
-
-	// Errors (always nullable by default).
-	f(t, "", 0, "", parser.ErrUnexpectedEOF, "")
-	f(t, "", 0, "(", parser.ErrUnexpectedToken, "(")
-	f(t, "", 0, "ж", parser.ErrUnexpectedToken, "ж")
-	f(t, "", 0, "ツ", parser.ErrUnexpectedToken, "ツ")
-	f(t, "", 0, "@", parser.ErrUnexpectedToken, "@")
-
-	f(t, "0", parser.ValueTypeInt, "", nil, "0") // No suffix.
-	f(t, "0", parser.ValueTypeInt, " ", nil, "0 ")
-	f(t, "0", parser.ValueTypeInt, " space", nil, "0 space")
-	f(t, "0", parser.ValueTypeInt, ",comma", nil, "0,comma")
-	f(t, "0", parser.ValueTypeInt, "\nline-break", nil, "0\nline-break")
-	f(t, "0", parser.ValueTypeInt, "\ttab", nil, "0\ttab")
-	f(t, "0", parser.ValueTypeInt, "(left parenthesis", nil, "0(left parenthesis")
-	f(t, "0", parser.ValueTypeInt, "юникoд", nil, "0юникoд")
-	f(t, "0", parser.ValueTypeInt, "-dash", nil, "0-dash")
-
-	const suffix = " suffix"
-
-	{ // NullValue (https://spec.graphql.org/September2025/#sec-Null-Value).
-		f(t, "null", parser.ValueTypeNull, suffix, nil, "null"+suffix)
-	}
-
-	{ // BooleanValue (https://spec.graphql.org/September2025/#sec-Boolean-Value).
-		f(t, "true", parser.ValueTypeBooleanTrue, suffix, nil, "true"+suffix)
-		f(t, "false", parser.ValueTypeBooleanFalse, suffix, nil, "false"+suffix)
-	}
-
-	{ // EnumValue (https://spec.graphql.org/September2025/#sec-Enum-Value).
-		f(t, "x", parser.ValueTypeEnum, suffix, nil, "x"+suffix)
-		f(t, "foo", parser.ValueTypeEnum, suffix, nil, "foo"+suffix)
-		f(t, "Bar", parser.ValueTypeEnum, suffix, nil, "Bar"+suffix)
-		f(t, "_x", parser.ValueTypeEnum, suffix, nil, "_x"+suffix)
-		f(t, "_0", parser.ValueTypeEnum, suffix, nil, "_0"+suffix)
-
-		f(t, "nullable", parser.ValueTypeEnum, suffix, nil, "nullable"+suffix)
-		f(t, "trueStory", parser.ValueTypeEnum, suffix, nil, "trueStory"+suffix)
-		f(t, "falseFlag", parser.ValueTypeEnum, suffix, nil, "falseFlag"+suffix)
-	}
-
-	{ // IntValue (https://spec.graphql.org/September2025/#sec-Int-Value).
-		f(t, "0", parser.ValueTypeInt, suffix, nil, "0"+suffix)
-		f(t, "-0", parser.ValueTypeInt, suffix, nil, "-0"+suffix)
-		f(t, "42", parser.ValueTypeInt, suffix, nil, "42"+suffix)
-		f(t, "-42", parser.ValueTypeInt, suffix, nil, "-42"+suffix)
-		f(t, "1234567890", parser.ValueTypeInt, suffix, nil, "1234567890"+suffix)
-		f(t, "-1234567890", parser.ValueTypeInt, suffix, nil, "-1234567890"+suffix)
-		f(t, "10000000000000000000000000", parser.ValueTypeInt, suffix, nil,
-			"10000000000000000000000000"+suffix)
-		f(t, "-10000000000000000000000000", parser.ValueTypeInt, suffix, nil,
-			"-10000000000000000000000000"+suffix)
-
-		// A number is either a single 0 or starts with 1-9, so a leading zero
-		// is illegal (https://spec.graphql.org/September2025/#IntegerPart).
-		fErr(t, parser.ErrUnexpectedToken, "00"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "01"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "0123"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "-01"+suffix)
-
-		// A NegativeSign must be followed by a Digit.
-		fErr(t, parser.ErrUnexpectedToken, "-"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "-.1"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "-foo"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "-")
-
-		// No digit, '.' or NameStart may follow an IntValue, so a broken number
-		// is one invalid number, not two valid tokens
-		// (https://spec.graphql.org/September2025/#IntValue).
-		fErr(t, parser.ErrUnexpectedToken, "0x123"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "123L"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1foo"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1_"+suffix)
-	}
-
-	{ // FloatValue (https://spec.graphql.org/September2025/#sec-Float-Value).
-		f(t, "0.1", parser.ValueTypeFloat, suffix, nil,
-			"0.1"+suffix)
-		f(t, "-0.1", parser.ValueTypeFloat, suffix, nil,
-			"-0.1"+suffix)
-		f(t, "42.123", parser.ValueTypeFloat, suffix, nil,
-			"42.123"+suffix)
-		f(t, "-42.123", parser.ValueTypeFloat, suffix, nil,
-			"-42.123"+suffix)
-		f(t, "3.14159265359", parser.ValueTypeFloat, suffix, nil,
-			"3.14159265359"+suffix) // 🥧
-		f(t, "-3.14159265359", parser.ValueTypeFloat, suffix, nil,
-			"-3.14159265359"+suffix)
-		f(t, "10000000000000000000000000.0", parser.ValueTypeFloat, suffix, nil,
-			"10000000000000000000000000.0"+suffix)
-		f(t, "-10000000000000000000000000.0", parser.ValueTypeFloat, suffix, nil,
-			"-10000000000000000000000000.0"+suffix)
-		f(t, "0.1e1234567890", parser.ValueTypeFloat, suffix, nil,
-			"0.1e1234567890"+suffix)
-
-		f(t, "0.1e1234567890", parser.ValueTypeFloat, suffix, nil,
-			"0.1e1234567890"+suffix)
-		f(t, "0.1e+1234567890", parser.ValueTypeFloat, suffix, nil,
-			"0.1e+1234567890"+suffix)
-		f(t, "0.1e-1234567890", parser.ValueTypeFloat, suffix, nil,
-			"0.1e-1234567890"+suffix)
-		f(t, "0.1E+1234567890", parser.ValueTypeFloat, suffix, nil,
-			"0.1E+1234567890"+suffix)
-		f(t, "0.1E-1234567890", parser.ValueTypeFloat, suffix, nil,
-			"0.1E-1234567890"+suffix)
-
-		f(t, "1e1234567890", parser.ValueTypeFloat, suffix, nil,
-			"1e1234567890"+suffix)
-		f(t, "1e+1234567890", parser.ValueTypeFloat, suffix, nil,
-			"1e+1234567890"+suffix)
-		f(t, "1e-1234567890", parser.ValueTypeFloat, suffix, nil,
-			"1e-1234567890"+suffix)
-		f(t, "1E+1234567890", parser.ValueTypeFloat, suffix, nil,
-			"1E+1234567890"+suffix)
-		f(t, "1E-1234567890", parser.ValueTypeFloat, suffix, nil,
-			"1E-1234567890"+suffix)
-
-		f(t, "10000000000000000000000000.0e+23", parser.ValueTypeFloat, suffix, nil,
-			"10000000000000000000000000.0e+23"+suffix)
-		f(t, "-10000000000000000000000000.0E+23", parser.ValueTypeFloat, suffix, nil,
-			"-10000000000000000000000000.0E+23"+suffix)
-
-		// The exponent needs at least one digit after e/E and the optional sign.
-		fErr(t, parser.ErrUnexpectedToken, "1e"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1E"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1e+"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1e-"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1.0e"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1.0E-"+suffix)
-
-		// The same goes for a FloatValue
-		// (https://spec.graphql.org/September2025/#FloatValue).
-		fErr(t, parser.ErrUnexpectedToken, "1e2foo"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1.5x"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1.2.3"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1.5e3.4"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "1e2_"+suffix)
-		// The IntegerPart of a float follows the same rules.
-		fErr(t, parser.ErrUnexpectedToken, "01.5"+suffix)
-		fErr(t, parser.ErrUnexpectedToken, "-01.5e2"+suffix)
-	}
-
-	{ // Single-line strings (https://spec.graphql.org/September2025/#sec-String-Value).
-		f(t, ``, parser.ValueTypeString, `uGGGG"`+suffix, parser.ErrUnexpectedToken,
-			`"\uGGGG"`+suffix)
-		f(t, "", parser.ValueTypeString, "", parser.ErrUnexpectedEOF, `"\"`)
-		f(t, "", parser.ValueTypeString, "", parser.ErrUnexpectedEOF, `"`)
-		f(t, "", parser.ValueTypeString, `\k"`+suffix, parser.ErrUnexpectedToken,
-			`"\k"`+suffix)
-
-		f(t, ``, parser.ValueTypeString, suffix, nil, `""`+suffix)
-		f(t, `\"`, parser.ValueTypeString, suffix, nil, `"\""`+suffix)
-		f(t, `\\`, parser.ValueTypeString, suffix, nil, `"\\"`+suffix)
-		f(t, `\b`, parser.ValueTypeString, suffix, nil, `"\b"`+suffix)
-		f(t, `\f`, parser.ValueTypeString, suffix, nil, `"\f"`+suffix)
-		f(t, `\n`, parser.ValueTypeString, suffix, nil, `"\n"`+suffix)
-		f(t, `\r`, parser.ValueTypeString, suffix, nil, `"\r"`+suffix)
-		f(t, `\t`, parser.ValueTypeString, suffix, nil, `"\t"`+suffix)
-		f(t, `\uabcd`, parser.ValueTypeString, suffix, nil, `"\uabcd"`+suffix)
-		f(t, `\uABCD`, parser.ValueTypeString, suffix, nil, `"\uABCD"`+suffix)
-		f(t, `\u1234`, parser.ValueTypeString, suffix, nil, `"\u1234"`+suffix)
-		f(t, `\u5678`, parser.ValueTypeString, suffix, nil, `"\u5678"`+suffix)
-		f(t, `\u90aA`, parser.ValueTypeString, suffix, nil, `"\u90aA"`+suffix)
-		f(t, `\u3053\u3093\u306b\u3061\u306f`, parser.ValueTypeString, suffix, nil,
-			`"\u3053\u3093\u306b\u3061\u306f"`+suffix)
-
-		// Variable-width Unicode escape sequence `\u{HexDigit+}`, according to
-		// September 2025 spec (https://spec.graphql.org/September2025/#EscapedUnicode).
-		f(t, `\u{0}`, parser.ValueTypeString, suffix, nil, `"\u{0}"`+suffix)
-		f(t, `\u{41}`, parser.ValueTypeString, suffix, nil, `"\u{41}"`+suffix)
-		f(t, `\u{1F4A9}`, parser.ValueTypeString, suffix, nil, `"\u{1F4A9}"`+suffix)
-		f(t, `\u{1f4a9}`, parser.ValueTypeString, suffix, nil, `"\u{1f4a9}"`+suffix)
-		f(t, `\u{10FFFF}`, parser.ValueTypeString, suffix, nil, `"\u{10FFFF}"`+suffix)
-		f(t, `a\u{1F600}b`, parser.ValueTypeString, suffix, nil, `"a\u{1F600}b"`+suffix)
-
-		// StringCharacter :: \u EscapedUnicode asserts the escaped value is within
-		// the Unicode scalar value range (<= 0xD7FF or 0xE000..0x10FFFF), so
-		// out-of-range and surrogate escapes are a parse error even though their
-		// syntax is valid (https://spec.graphql.org/September2025/#StringCharacter).
-		fErr(t, parser.ErrUnexpectedToken, `"\u{110000}"`+suffix)   // Above U+10FFFF.
-		fErr(t, parser.ErrUnexpectedToken, `"\u{FFFFFFFF}"`+suffix) // Far above U+10FFFF.
-		fErr(t, parser.ErrUnexpectedToken, `"\u{D800}"`+suffix)     // Leading surrogate.
-		fErr(t, parser.ErrUnexpectedToken, `"\u{DFFF}"`+suffix)     // Trailing surrogate.
-
-		// The legacy pair production `\u XXXX \u XXXX` is the only way a surrogate
-		// may appear: a leading surrogate must be followed by a trailing one, and
-		// otherwise both halves must each be scalar values.
-		// pairPoo is the surrogate pair for U+1F4A9 PILE OF POO, written as a
-		// concatenation so the two escapes stay literal in the source.
-		const pairPoo = `\uD83D` + `\uDCA9`
-		f(t, pairPoo, parser.ValueTypeString, suffix, nil, `"`+pairPoo+`"`+suffix)
-		// Lone leading.
-		fErr(t, parser.ErrUnexpectedToken, `"\uD800"`+suffix)
-		// Lone trailing.
-		fErr(t, parser.ErrUnexpectedToken, `"\uDC00"`+suffix)
-		// Leading + leading.
-		fErr(t, parser.ErrUnexpectedToken, `"\uD800\uD800"`+suffix)
-		// Trailing + trailing.
-		fErr(t, parser.ErrUnexpectedToken, `"\uDC00\uDC00"`+suffix)
-		// Reversed pair.
-		fErr(t, parser.ErrUnexpectedToken, `"\uDC00\uD800"`+suffix)
-		// Leading, not paired.
-		fErr(t, parser.ErrUnexpectedToken, `"\uD800a"`+suffix)
-		// The second half of the pair is cut off or isn't a `\uXXXX` escape.
-		// Ends after the first half.
-		fErr(t, parser.ErrUnexpectedEOF, `"\uD800`)
-		// Ends after the backslash.
-		fErr(t, parser.ErrUnexpectedEOF, `"\uD800\`)
-		// No 'u'.
-		fErr(t, parser.ErrUnexpectedToken, `"\uD800\n"`+suffix)
-		// Too few hex digits.
-		fErr(t, parser.ErrUnexpectedEOF, `"\uD800\u12`)
-		// Not hex.
-		fErr(t, parser.ErrUnexpectedToken, `"\uD800\uZZZZ"`+suffix)
-
-		// Malformed variable-width escapes must be rejected (September 2025).
-		fErr(t, parser.ErrUnexpectedToken, `"\u{}"`+suffix)     // No hex digits.
-		fErr(t, parser.ErrUnexpectedToken, `"\u{G}"`+suffix)    // Non-hex digit.
-		fErr(t, parser.ErrUnexpectedToken, `"\u{1F4A9"`+suffix) // Missing closing brace.
-		fErr(t, parser.ErrUnexpectedEOF, `"\u{1F4A9`)           // Unterminated at EOF.
-
-		// Fixed-width escape truncated by EOF before four hex digits.
-		fErr(t, parser.ErrUnexpectedEOF, `"\uAB`)
-
-		// Literal supplementary-plane (astral, 4-byte UTF-8) characters.
-		// SourceCharacter spans the full Unicode range (September 2025); gqlhash
-		// handles them since it operates on raw UTF-8 bytes.
-		f(t, astral1, parser.ValueTypeString, suffix, nil, `"`+astral1+`"`+suffix)
-		f(t, "a"+astral2+"b", parser.ValueTypeString, suffix, nil,
-			`"a`+astral2+`b"`+suffix)
-
-		f(t, `ok`, parser.ValueTypeString, suffix, nil, `"ok"`+suffix)
-		f(t, `one two\t\nthree 123`, parser.ValueTypeString, suffix, nil,
-			`"one two\t\nthree 123"`+suffix)
-		f(t, `ツ`, parser.ValueTypeString, suffix, nil,
-			`"ツ"`+suffix)
-		f(t, `ツ\n`, parser.ValueTypeString, suffix, nil,
-			`"ツ\n"`+suffix)
-		f(t, `ツ ёж ïх жэ こんにちは\n`, parser.ValueTypeString, suffix, nil,
-			`"ツ ёж ïх жэ こんにちは\n"`+suffix)
-	}
-
-	{ // Block strings (https://spec.graphql.org/September2025/#sec-String-Value).
-		f(t, ``, parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF, `"""`)
-		f(t, ``, parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF,
-			`"""\"""`+suffix)
-		f(t, ``, parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF,
-			`"""\""""`+suffix)
-		f(t, ``, parser.ValueTypeStringBlock, "", parser.ErrUnexpectedEOF,
-			`"""\\"""`+suffix)
-
-		// Empty block string.
-		f(t, ``, parser.ValueTypeStringBlock, suffix, nil,
-			`""""""`+suffix)
-
-		// Empty block string filled with just tabs, spaces and line-breaks.
-		f(t, "", parser.ValueTypeStringBlock, suffix, nil,
-			`"""`+"\n"+`"""`+suffix)
-		f(t, "", parser.ValueTypeStringBlock, suffix, nil,
-			`"""`+"\n \t\n \t\n"+`"""`+suffix)
-		f(t, "", parser.ValueTypeStringBlock, suffix, nil,
-			`"""    """`+suffix)
-
-		// Empty block string because prefix is stripped.
-		f(t, "", parser.ValueTypeStringBlock, suffix, nil,
-			`"""`+"\n   "+`"""`+suffix)
-
-		// Empty block string because prefix is stripped.
-		f(t, "", parser.ValueTypeStringBlock, suffix, nil,
-			`"""`+"\n\t"+`"""`+suffix)
-
-		// Empty block string followed by unclosed string.
-		f(t, "", parser.ValueTypeStringBlock, `"`+suffix, nil,
-			`"""""""`+suffix)
-
-		// Empty block string followed by string.
-		f(t, "", parser.ValueTypeStringBlock, `""`+suffix, nil,
-			`""""""""`+suffix)
-
-		// Empty block string followed by unclosed block string.
-		f(t, "", parser.ValueTypeStringBlock, `""`+suffix, nil,
-			`""""""""`+suffix)
-
-		// Terminators
-		f(t, "line1\nline2", parser.ValueTypeStringBlock, suffix, nil,
-			`"""`+"line1\nline2\n"+`"""`+suffix)
-
-		f(t, `\uGGGG`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\uGGGG"""`+suffix)
-		f(t, "\n\\\"", parser.ValueTypeStringBlock, suffix, nil,
-			`"""`+"\n\\\"\n"+`"""`+suffix)
-		f(t, `\\`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\\`+"\n"+`"""`+suffix)
-		f(t, `\b`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\b"""`+suffix)
-		f(t, `\f`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\f"""`+suffix)
-		f(t, `\n`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\n"""`+suffix)
-		f(t, `\r`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\r"""`+suffix)
-		f(t, `\t`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\t"""`+suffix)
-		f(t, `\uabcd`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\uabcd"""`+suffix)
-		f(t, `\uABCD`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\uABCD"""`+suffix)
-		f(t, `\u1234`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\u1234"""`+suffix)
-		f(t, `\u5678`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\u5678"""`+suffix)
-		f(t, `\u90aA`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\u90aA"""`+suffix)
-		f(t, `\u3053\u3093\u306b\u3061\u306f`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\u3053\u3093\u306b\u3061\u306f"""`+suffix)
-
-		// Escape sequences are not interpreted in block strings, so the
-		// variable-width `\u{...}` form is just literal characters and parses unchanged.
-		// Literal astral characters are handled as raw UTF-8 bytes.
-		f(t, `\u{1F4A9}`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""\u{1F4A9}"""`+suffix)
-		f(t, astral1, parser.ValueTypeStringBlock, suffix, nil,
-			`"""`+astral1+`"""`+suffix)
-
-		f(t, `ok`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""ok"""`+suffix)
-		f(t, `one two\t\nthree 123`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""one two\t\nthree 123"""`+suffix)
-		f(t, `ツ`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""ツ"""`+suffix)
-		f(t, `ツ\n`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""ツ\n"""`+suffix)
-		f(t, `ツ ёж ïх жэ こんにちは\n`, parser.ValueTypeStringBlock, suffix, nil,
-			`"""ツ ёж ïх жэ こんにちは\n"""`+suffix)
-
-		// Empty line suffix.
-		f(t, "foo",
-			parser.ValueTypeStringBlock, suffix, nil,
-			`"""`+"foo\n\n\t\n  \n\n  "+`"""`+suffix)
-		f(t, "foo  ",
-			parser.ValueTypeStringBlock, suffix, nil,
-			`"""`+"foo  \n\n\t\n  \n\n  "+`"""`+suffix)
-
-		f(t, "line one.\n\t\t\t\t\tline two.\n\t\t\t\tline three.",
-			parser.ValueTypeStringBlock, suffix, nil,
-			`"""`+"line one.\n\t\t\t\t\tline two.\n\t\t\t\tline three.\n"+`"""`+suffix)
-
-		// A leading blank line is dropped and the common indentation stripped,
-		// so this block string encodes just "foo".
-		f(t, "\n\n    foo",
-			parser.ValueTypeStringBlock, suffix, nil,
-			`"""`+"\n\n    foo\n    "+`"""`+suffix)
-	}
-
-	{ // ListValue (https://spec.graphql.org/September2025/#sec-List-Value).
-		f(t, "[]", parser.ValueTypeList, suffix, nil, "[]"+suffix)
-		f(t, "[ ]", parser.ValueTypeList, suffix, nil, "[ ]"+suffix)
-		f(t, "[,]", parser.ValueTypeList, suffix, nil, "[,]"+suffix)
-		f(t, "[12,13 3.14]", parser.ValueTypeList, suffix, nil,
-			"[12,13 3.14]"+suffix)
-		f(t, `["text" 1 EnumVal]`, parser.ValueTypeList, suffix, nil,
-			`["text" 1 EnumVal]`+suffix)
-		f(t, `["text" 1 EnumVal ,,,]`, parser.ValueTypeList, suffix, nil,
-			`["text" 1 EnumVal ,,,]`+suffix)
-	}
-
-	{ // InputObject (https://spec.graphql.org/September2025/#sec-Input-Object-Values).
-		f(t, "{}", parser.ValueTypeInputObject, suffix, nil, "{}"+suffix)
-		f(t, "{ }", parser.ValueTypeInputObject, suffix, nil, "{ }"+suffix)
-		f(t, "{,}", parser.ValueTypeInputObject, suffix, nil, "{,}"+suffix)
-		{
-			value := `{foo:12,Bar: "13"  __bazz:  3.14}`
-			f(t, value, parser.ValueTypeInputObject, suffix, nil, value+suffix)
-		}
-		{
-			value := "{flipAxis : {\n" +
-				"\tx: Y_AXIS , # flip x->y\n" +
-				"\ty: Z_AXIS , # flip y->z\n" +
-				"\tz: null     # don't flip\n" +
-				"}}"
-			f(t, value, parser.ValueTypeInputObject, suffix, nil, value+suffix)
+	// A malformed type reference.
+	for _, s := range []string{
+		`query Q($x: ) { f }`, `query Q($x: [) { f }`, `query Q($x: []) { f }`,
+		`query Q($x: [Int) { f }`, `query Q($x: [Int!) { f }`,
+		`query Q($x: Int]) { f }`, `query Q($x: @d) { f }`,
+	} {
+		if _, err := parse(o, s); !errors.Is(err.Err, parser.ErrUnexpectedToken) &&
+			!errors.Is(err.Err, parser.ErrUnexpectedEOF) {
+			t.Errorf("expected a syntax error; received: %v; input: %q", err, s)
 		}
 	}
 }
 
-// TestReadDocumentErrEOF tests all possible EOF situations.
-func TestReadDocumentErrEOF(t *testing.T) {
-	for _, s := range internal.TestUnexpectedEOF {
+// TestErrorPosition pins the character the offset of a [parser.Result] points at,
+// as [parser.Position] reports it.
+func TestErrorPosition(t *testing.T) {
+	f := func(t *testing.T, expectLine, expectColumn int, input string) {
 		t.Helper()
-		if err := parser.ReadDocument(internal.NoopHash{}, []byte(s)); err == nil {
-			t.Errorf("expected %v", parser.ErrUnexpectedEOF)
-		} else if !errors.Is(err, parser.ErrUnexpectedEOF) {
-			t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, err)
+		_, e := parse(parser.Options{}, input)
+		if e.Err == nil {
+			t.Fatalf("expected an error; received none")
+		}
+		if e.ErrOffset < 0 || e.ErrOffset > len(input) {
+			t.Errorf("offset %d out of range for %q", e.ErrOffset, input)
+		}
+		line, column := parser.Position(input, e.ErrOffset)
+		if line != expectLine || column != expectColumn {
+			t.Errorf("expected line %d, column %d; received line %d, column %d;"+
+				" input: %q", expectLine, expectColumn, line, column, input)
+		}
+		// Both input types report the same position.
+		if l, c := parser.Position([]byte(input), e.ErrOffset); l != line || c != column {
+			t.Errorf("[]byte: expected line %d, column %d; received line %d,"+
+				" column %d", line, column, l, c)
+		}
+	}
+
+	f(t, 1, 1, "")
+	f(t, 1, 1, "?")
+	f(t, 1, 2, "{")
+	f(t, 1, 3, "{ ?")
+
+	// Every LineTerminator starts a new line, CRLF counts as one.
+	f(t, 2, 1, "{\n?")
+	f(t, 2, 1, "{\r\n?")
+	f(t, 2, 1, "{\r?")
+	f(t, 3, 4, "query Q {\n\tf(a: 1)\n\t\t\t?")
+
+	// A column counts characters, not bytes: the 3-byte ツ counts as one.
+	f(t, 1, 13, `{ f(a: "ok" ?) }`)
+	f(t, 1, 13, `{ f(a: "ツ") ? }`)
+	f(t, 1, 3, "{ ツ? }")
+
+	// The position of a value that breaks a rule.
+	f(t, 2, 9, "query Q {\n  f(a: 01)\n}")
+	f(t, 1, 19, `query Q($x: Int = $y) { f }`)
+
+	// A comment doesn't shift the line count.
+	f(t, 2, 1, "# comment\n?")
+
+	// A control character in a string, and a byte that is no SourceCharacter,
+	// are reported where they are and not at the end of the document.
+	f(t, 1, 9, "{ f(a: \"\x00\") }")
+	f(t, 2, 3, "{ f(a:\n\t\"\x1f\") }")
+	f(t, 1, 9, "{ f(a: \"\xff\") }")
+	f(t, 1, 11, "{ f(a: \"\"\"\xff\"\"\") }")
+}
+
+// TestParseErrEOF tests all possible EOF situations.
+func TestParseErrEOF(t *testing.T) {
+	for _, s := range gqlhashtest.UnexpectedEOF {
+		if _, err := parse(parser.Options{}, s); err.Err == nil {
+			t.Errorf("expected %v; input: %q", parser.ErrUnexpectedEOF, s)
+		} else if !errors.Is(err.Err, parser.ErrUnexpectedEOF) {
+			t.Errorf("expected %v; received: %v; input: %q",
+				parser.ErrUnexpectedEOF, err, s)
 		}
 
 		// The queries that end with a string with an unfinished escape sequence
-		// should would produce [parser.ErrUnexpectedToken], skip those.
+		// produce [parser.ErrUnexpectedToken] once a byte follows, skip those.
 		if strings.HasSuffix(s, `"\`) ||
 			strings.HasSuffix(s, `"\u`) ||
 			strings.HasSuffix(s, `"""\`) ||
@@ -1135,239 +970,105 @@ func TestReadDocumentErrEOF(t *testing.T) {
 		}
 
 		in := s + "\n"
-		err := parser.ReadDocument(internal.NoopHash{}, []byte(in))
-		if !errors.Is(err, parser.ErrUnexpectedEOF) {
-			t.Errorf(
-				"(with ignorable suffix) expected %v; received: %v in %q",
-				parser.ErrUnexpectedEOF, err, in,
-			)
+		if _, err := parse(parser.Options{}, in); !errors.Is(
+			err.Err, parser.ErrUnexpectedEOF,
+		) {
+			t.Errorf("(with ignorable suffix) expected %v; received: %v in %q",
+				parser.ErrUnexpectedEOF, err, in)
 		}
 	}
 }
 
-// TestReadDocumentErrUnexpectedToken tests all possible unexpected token situations.
-func TestReadDocumentErrUnexpectedToken(t *testing.T) {
-	for _, s := range internal.TestErrUnexpectedToken {
-		err := parser.ReadDocument(internal.NoopHash{}, []byte(s))
-		if !errors.Is(err, parser.ErrUnexpectedToken) {
+// TestParseErrUnexpectedToken tests all possible unexpected token situations.
+func TestParseErrUnexpectedToken(t *testing.T) {
+	for _, s := range gqlhashtest.UnexpectedToken {
+		if _, err := parse(parser.Options{}, s); !errors.Is(
+			err.Err, parser.ErrUnexpectedToken,
+		) {
 			t.Errorf("expected ErrUnexpectedToken; received: %v (input: %q)", err, s)
 		}
 	}
 }
 
-func TestIterateBlockStringLines(t *testing.T) {
-	f := func(t *testing.T, expect []string, input string, prefixLen int) {
-		t.Helper()
-		var r []string
-		for s := range parser.IterateBlockStringLines([]byte(input), prefixLen) {
-			r = append(r, string(s))
-		}
-		if !slices.Equal(expect, r) {
-			t.Errorf("expected: %#v; received: %#v", expect, r)
-		}
-	}
-
-	f(t, nil, "", 0)
-	f(t, []string{"abc"}, "abc", 0)
-	f(t, []string{"abc def"}, "abc def", 0)
-	f(t, []string{"abc", " def"}, "abc\n def", 0)
-	f(t, []string{"abc", "", " def"}, "abc\n\n def", 0)
-	f(t, []string{"abc", " ", " def"}, "abc\n \n def", 0)
-	f(t, []string{"abc", " ", " def"}, "\nabc\n \n def", 0)
-
-	// CR and CRLF are LineTerminators too, and CRLF is a single one
-	// (https://spec.graphql.org/September2025/#LineTerminator).
-	f(t, []string{"abc", " def"}, "abc\r\n def", 0)
-	f(t, []string{"abc", " def"}, "abc\r def", 0)
-	f(t, []string{"abc", "", " def"}, "abc\r\n\r\n def", 0)
-	f(t, []string{"a", "b", "c", "d"}, "a\r\nb\rc\nd", 0)
-
-	// First line no prefix.
-	f(t, []string{" abc", "", "def"}, " abc\n \n def", 1)
-	f(t, []string{" abc", " ", "def"}, " abc\n  \n def", 1)
-	f(t, []string{"\tabc", "\t", "def"}, "\tabc\n\t\t\n\tdef", 1)
-
-	// Empty (this should be handled by the parser func,
-	// because the parser func needs to return ""/nil for this input).
-	// f(t, nil, "\n \n \n ", 1)
-	// f(t, nil, "\n\t \n\t \n\t ", 2)
-
-	// Trailing whitespace (again, parser func needs to return no trailing empty lines).
-	// f(t, []string{"x\n"}, "x\n", 0)
-
-	f(t, []string{"ж", "ツ", "\\"}, "\nж\nツ\n\\", 0)
-	f(t, []string{"ж", "ツ", "\\"}, "\n ж\n ツ\n \\", 1)
-	f(t, []string{"ж", "ツ", "\\"}, "\n  ж\n  ツ\n  \\", 2)
-	f(t, []string{"ж", "ツ", "\\"}, "\n   ж\n   ツ\n   \\", 3)
-	f(t, []string{"ж", "ツ", "\\"}, "\n\t\t\tж\n\t\t\tツ\n\t\t\t\\", 3)
-	f(t, []string{"line one.", "\tline two.", "line three."},
-		"line one.\n\t\t\t\t\tline two.\n\t\t\t\tline three.", 4)
-
-	t.Run("break", func(t *testing.T) {
-		var r []string
-		for s := range parser.IterateBlockStringLines([]byte("foo\nbar"), 0) {
-			r = append(r, string(s))
-			break
-		}
-		if !slices.Equal([]string{"foo"}, r) {
-			t.Errorf("expected only foo, received: %#v", r)
-		}
-	})
-
-	t.Run("break2", func(t *testing.T) {
-		var r []string
-		for s := range parser.IterateBlockStringLines([]byte("foo\nbar"), 0) {
-			if len(r) == 1 {
-				break
-			}
-			r = append(r, string(s))
-		}
-		if !slices.Equal([]string{"foo"}, r) {
-			t.Errorf("expected only foo, received: %#v", r)
-		}
-	})
+// hashPrefixes lists every prefix of the canonical form.
+var hashPrefixes = []byte{
+	parser.HPrefQuery,
+	parser.HPrefMutation,
+	parser.HPrefSubscription,
+	parser.HPrefFragmentDefinition,
+	parser.HPrefVariableDefinition,
+	parser.HPrefDirective,
+	parser.HPrefField,
+	parser.HPrefType,
+	parser.HPrefFieldAliasedName,
+	parser.HPrefFragmentSpread,
+	parser.HPrefInlineFragment,
+	parser.HPrefArgument,
+	parser.HPrefSelectionSet,
+	parser.HPrefSelectionSetEnd,
+	parser.HPrefValueInputObject,
+	parser.HPrefValueInputObjectField,
+	parser.HPrefInputObjectEnd,
+	parser.HPrefValueNull,
+	parser.HPrefValueTrue,
+	parser.HPrefValueFalse,
+	parser.HPrefValueInteger,
+	parser.HPrefValueFloat,
+	parser.HPrefValueEnum,
+	parser.HPrefValueString,
+	parser.HPrefValueList,
+	parser.HPrefValueListEnd,
+	parser.HPrefValueVariable,
 }
 
-func TestReadStringBlockAfterQuotesCommonIndent(t *testing.T) {
-	// A pair of quotes is ordinary block-string content. This first content
-	// line must therefore participate in common-indent calculation.
-	// https://spec.graphql.org/September2025/#BlockStringValue()
-	input := "\n  x\"\"\n    y\n\"\"\"suffix"
-
-	_, prefixLen, suffix, err := parser.ReadStringBlockAfterQuotes([]byte(input))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if prefixLen != 2 {
-		t.Errorf("expected common indent 2; received: %d", prefixLen)
-	}
-	if string(suffix) != "suffix" {
-		t.Errorf("expected suffix %q; received: %q", "suffix", suffix)
-	}
-}
-
-func TestTrimEmptyLinesSuffix(t *testing.T) {
-	f := func(t *testing.T, expect, input string) {
-		t.Helper()
-		a := parser.TrimEmptyLinesSuffix([]byte(input))
-		if expect != string(a) {
-			t.Errorf("expected: %q; received: %q", expect, string(a))
-		}
-	}
-
-	f(t, "", "")
-	f(t, "", "   \n  \n")
-	f(t, "", " \t\t  \n\t  \n \t")
-	f(t, "foo", "foo")
-	f(t, "foo", "foo\n")
-	f(t, "foo", "foo\n  ")
-	f(t, "foo", "foo\n  \t\n\n  ")
-	f(t, "foo  ", "foo  \n  ")
-	f(t, "foo\t \t", "foo\t \t\n  ")
-	f(t, "foo\t \t", "foo\t \t\n  \n   \n\t\n")
-
-	// Unicode.
-	f(t, "ツ ж", "ツ ж")
-	f(t, "ツ ж", "ツ ж\n")
-	f(t, "ツ ж", "ツ ж\n  ")
-	f(t, "ツ ж", "ツ ж\n  \t\n\n  ")
-	f(t, "ツ ж  ", "ツ ж  \n  ")
-	f(t, "ツ ж\t \t", "ツ ж\t \t\n  ")
-	f(t, "ツ ж\t \t", "ツ ж\t \t\n  \n   \n\t\n")
-
-	// GraphQL Whitespace includes only space and horizontal tab. A non-breaking
-	// space (U+00A0) is content, so it must not be treated as an empty line.
-	f(t, "\u00a0", "\u00a0")
-	f(t, "foo\n\u00a0", "foo\n\u00a0")
-}
-
-// TestHPrefInStringValue makes sure none of the parser.HPref separators
-// can appear in string values without resulting in [parser.ErrUnexpectedToken]
+// TestHPrefInStringValue asserts that no prefix of the canonical form can appear
+// in a string value unescaped.
 func TestHPrefInStringValue(t *testing.T) {
-	f := func(t *testing.T, hpref []byte) {
-		t.Helper()
-		{
-			s := `{f(a:"` + string(hpref) + `")}`
-
-			if expectLen := len(`{f(a:"`) + 1 + len(`")}`); len(s) != expectLen {
-				t.Fatalf(
-					"expected string value slice len: %d; received: %d",
-					expectLen, len(s),
-				)
-			}
-
-			err := parser.ReadDocument(internal.NoopHash{}, []byte(s))
-			if err != parser.ErrUnexpectedToken {
-				t.Errorf(
-					"hpref %v must not be valid within a string value: %q; "+
-						"expected: %v; received: %v",
-					hpref, s, parser.ErrUnexpectedToken, err,
-				)
-			}
+	for _, hpref := range hashPrefixes {
+		// A single-line string rejects the byte, it's a control character.
+		s := `{f(a:"` + string(hpref) + `")}`
+		if expectLen := len(`{f(a:"`) + 1 + len(`")}`); len(s) != expectLen {
+			t.Fatalf("expected string value slice len: %d; received: %d",
+				expectLen, len(s))
 		}
-		{
-			s := `{f(a:"""` + string(hpref) + `""")}`
+		if _, err := parse(
+			parser.Options{}, s,
+		); err.Err != parser.ErrUnescapedControlChar {
+			t.Errorf("hpref %#x must not be valid within a string value: %q; "+
+				"expected: %v; received: %v",
+				hpref, s, parser.ErrUnescapedControlChar, err)
+		}
 
-			if expectLen := len(`{f(a:"""`) + 1 + len(`""")}`); len(s) != expectLen {
-				t.Fatalf(
-					"expected block string value slice len: %d; received: %d",
-					expectLen, len(s),
-				)
-			}
-
-			// A block string may hold the byte. What keeps it from imitating a
-			// record prefix is the escaping of the value, see TestCompare.
-			if err := parser.ReadDocument(internal.NoopHash{}, []byte(s)); err != nil {
-				t.Errorf(
-					"hpref %v must be valid within a block string value: %q; "+
-						"received: %v",
-					hpref, s, err,
-				)
-			}
+		// A block string may hold the byte, but it's escaped in the stream, so
+		// it can't imitate a prefix.
+		s = `{f(a:"""` + string(hpref) + `""")}`
+		if expectLen := len(`{f(a:"""`) + 1 + len(`""")}`); len(s) != expectLen {
+			t.Fatalf("expected block string value slice len: %d; received: %d",
+				expectLen, len(s))
+		}
+		got, err := parse(parser.Options{}, s)
+		if err.Err != nil {
+			t.Errorf("hpref %#x must be valid within a block string value: %q; "+
+				"received: %v", hpref, s, err)
+		}
+		// Adding 0x40 turns the control byte into a printable character,
+		// so the stream holds the escape sequence and not the prefix itself.
+		expect := stream(
+			parser.HPrefQuery, parser.HPrefSelectionSet,
+			parser.HPrefField, "f", parser.HPrefArgument, "a",
+			parser.HPrefValueString, `\`, hpref+0x40,
+			parser.HPrefSelectionSetEnd,
+		)
+		if got != expect {
+			t.Errorf("hpref %#x is not escaped in the stream: %q; want %q",
+				hpref, got, expect)
 		}
 	}
-
-	f(t, parser.HPrefQuery)
-	f(t, parser.HPrefMutation)
-	f(t, parser.HPrefSubscription)
-	f(t, parser.HPrefFragmentDefinition)
-	f(t, parser.HPrefVariableDefinition)
-	f(t, parser.HPrefDirective)
-	f(t, parser.HPrefField)
-	f(t, parser.HPrefType)
-	f(t, parser.HPrefFieldAliasedName)
-	f(t, parser.HPrefFragmentSpread)
-	f(t, parser.HPrefInlineFragment)
-	f(t, parser.HPrefArgument)
-	f(t, parser.HPrefSelectionSet)
-	f(t, parser.HPrefSelectionSetEnd)
-	f(t, parser.HPrefValueInputObject)
-	f(t, parser.HPrefValueInputObjectField)
-	f(t, parser.HPrefInputObjectEnd)
-	f(t, parser.HPrefValueNull)
-	f(t, parser.HPrefValueTrue)
-	f(t, parser.HPrefValueFalse)
-	f(t, parser.HPrefValueInteger)
-	f(t, parser.HPrefValueFloat)
-	f(t, parser.HPrefValueEnum)
-	f(t, parser.HPrefValueString)
-	f(t, parser.HPrefValueList)
-	f(t, parser.HPrefValueListEnd)
-	f(t, parser.HPrefValueVariable)
 }
 
-func hash(t *testing.T, options parser.Options, s string) string {
-	t.Helper()
-	h := sha1.New()
-	if err := parser.ReadDocumentWithOptions(h, options, []byte(s)); err != nil {
-		t.Fatalf("ReadDocumentWithOptions(%q): %v", s, err)
-	}
-	return string(h.Sum(nil))
-}
-
-func TestReadDocumentIgnoreInputs(t *testing.T) {
+func TestParseIgnoreInputs(t *testing.T) {
 	// Exercises every value kind so the
-	// [parser.Options.IgnoreInputs] branches are covered.
+	// [parser.IgnoreInputs] branches are covered.
 	const dense = `query Q($v: Int = 7) {
 		f(
 			i: 42, fl: 3.14, s: "text", bs: """block""",
@@ -1389,7 +1090,7 @@ func TestReadDocumentIgnoreInputs(t *testing.T) {
 		f(i: 42) @dir(k: 9) { sub extra }
 	}`
 
-	ignore := parser.Options{IgnoreInputs: true}
+	ignore := parser.Options{Ignore: parser.IgnoreInputs}
 	full := parser.Options{}
 
 	// Ignoring inputs: identical structure with different values must match.
@@ -1400,7 +1101,7 @@ func TestReadDocumentIgnoreInputs(t *testing.T) {
 	if hash(t, ignore, dense) == hash(t, ignore, denseExtraField) {
 		t.Error("structure hash must still distinguish structure")
 	}
-	// Every argument value collapses entirely under [parser.Options.IgnoreInputs],
+	// Every argument value collapses entirely under [parser.IgnoreInputs],
 	// not just the content but the type and container structure too. Scalars of any type,
 	// lists of any length (incl. empty), input objects with any fields, and
 	// variable usages (nested or not) all become equivalent to a bare value.
@@ -1411,13 +1112,14 @@ func TestReadDocumentIgnoreInputs(t *testing.T) {
 		`[1, 2]`, `[1, 4, 6, 1]`, `[]`, // lists of any length
 		`{a: 1}`, `{k: "ok", y: 42}`, `{}`, // objects with any fields
 		`[$a, 1]`, `{k: $v}`, // nested variables collapse too
+		`[[[1]]]`, `{a: {b: {c: 1}}}`, // any depth collapses
 	} {
 		if hash(t, ignore, `{ f(x: `+v+`) }`) != base {
 			t.Errorf("value %s should collapse to a bare value under IgnoreInputs", v)
 		}
 	}
 	// The variable signature is kept, though: a query declaring a variable
-	// differs from one that doesn't (the boundary with [parser.Options.IgnoreVariables]).
+	// differs from one that doesn't (the boundary with [parser.IgnoreVariables]).
 	if hash(t, ignore, `query ($v: Int) { f }`) == hash(t, ignore, `query { f }`) {
 		t.Error("IgnoreInputs must keep the variable signature")
 	}
@@ -1430,20 +1132,29 @@ func TestReadDocumentIgnoreInputs(t *testing.T) {
 	if hash(t, full, noInputs) != hash(t, ignore, noInputs) {
 		t.Error("without input values, full and structure hashes must match")
 	}
+	// An ignored value is still parsed, so it must still be valid.
+	if _, err := parse(ignore, `{ f(x: 01) }`); err.Err != parser.ErrMalformedNumber {
+		t.Errorf("an ignored value must still be validated; received: %v", err)
+	}
+	if _, err := parse(ignore, `query Q($x: Int = $y) { f }`); err.Err !=
+		parser.ErrUnexpectedVariable {
+		t.Errorf("an ignored value must still be validated; received: %v", err)
+	}
 }
 
-func TestReadDocumentIgnoreVariables(t *testing.T) {
-	ignoreVars := parser.Options{IgnoreVariables: true}
+func TestParseIgnoreVariables(t *testing.T) {
+	ignoreVars := parser.Options{Ignore: parser.IgnoreVariables}
 
-	// [parser.Options.IgnoreVariables] is a superset of [parser.Options.IgnoreInputs]:
+	// [parser.IgnoreVariables] is a superset of [parser.IgnoreInputs]:
 	// variable definitions, variable usages AND literal input values all collapse.
 	// The `@dep` directive and default value on the base also exercise the
 	// parse-but-don't-hash path.
 	base := hash(t, ignoreVars, `query Q($x: Int = 1 @dep) { f(a: $x) }`)
 	for _, q := range []string{
-		`query Q($y: String) { f(a: $y) }`, // different variable
-		`query Q { f(a: 1) }`,              // literal instead of variable
-		`query Q { f(a: "different") }`,    // different literal type
+		`query Q($y: String) { f(a: $y) }`,             // different variable
+		`query Q { f(a: 1) }`,                          // literal instead of variable
+		`query Q { f(a: "different") }`,                // different literal type
+		`query Q("Doc" $y: [Int!]! = [1]) { f(a: 2) }`, // description and list default
 	} {
 		if hash(t, ignoreVars, q) != base {
 			t.Errorf("IgnoreVariables should produce the base hash for %q", q)
@@ -1456,9 +1167,9 @@ func TestReadDocumentIgnoreVariables(t *testing.T) {
 		t.Error("IgnoreVariables must ignore the variable definition signature")
 	}
 
-	// Superset check: whatever [parser.Options.IgnoreInputs] makes equal,
-	// [parser.Options.IgnoreVariables] does too.
-	inputs := parser.Options{IgnoreInputs: true}
+	// Superset check: whatever [parser.IgnoreInputs] makes equal,
+	// [parser.IgnoreVariables] does too.
+	inputs := parser.Options{Ignore: parser.IgnoreInputs}
 	q1, q2 := `{ f(a: 1, b: ENUM) }`, `{ f(a: 2, b: OTHER) }`
 	if hash(t, inputs, q1) != hash(t, inputs, q2) {
 		t.Fatal("precondition: IgnoreInputs should equate q1 and q2")
@@ -1472,18 +1183,366 @@ func TestReadDocumentIgnoreVariables(t *testing.T) {
 		hash(t, ignoreVars, `{ g(a: 1) }`) {
 		t.Error("IgnoreVariables must still distinguish structure")
 	}
+
+	// An ignored variable definition is still parsed, so it must still be valid.
+	for _, q := range []string{
+		`query Q($x) { f }`, `query Q($x: ) { f }`, `query Q($) { f }`,
+		`query Q($x: Int = 01) { f }`, `query Q($x: Int = $y) { f }`,
+	} {
+		if _, err := parse(ignoreVars, q); err.Err == nil {
+			t.Errorf("an ignored variable definition must still be validated: %q", q)
+		}
+	}
 }
 
-// TestExportedWrappersDelegate exercises the thin exported wrappers that are
-// otherwise only reached indirectly through [parser.ReadDocument].
-func TestExportedWrappersDelegate(t *testing.T) {
-	h := sha1.New()
-	if _, err := parser.ReadOperationDefinition(h, []byte("query Q { f }")); err != nil {
-		t.Fatalf("ReadOperationDefinition: %v", err)
+// TestParseInputTypes asserts that every input type produces the same result.
+func TestParseInputTypes(t *testing.T) {
+
+	const input = `query Q($x: [Int!]! = [1, 2]) { f(a: "s") @d { b } }`
+	expect, err := parse(parser.Options{}, input)
+	if err.Err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := parser.ReadVariableDefinitionsAfterParenthesis(
-		h, []byte("$x: Int)"),
-	); err != nil {
-		t.Fatalf("ReadVariableDefinitionsAfterParenthesis: %v", err)
+
+	check := func(name, got string, e parser.Result) {
+		t.Helper()
+		if e.Err != nil {
+			t.Errorf("%s: unexpected error: %v", name, e)
+		}
+		if got != expect {
+			t.Errorf("%s: expected stream %q; received %q", name, expect, got)
+		}
+	}
+
+	{
+		r := new(recorder)
+		e := parser.Parse(r, parser.Options{}, []byte(input))
+		check("[]byte", r.String(), e)
+	}
+	{
+		r := new(recorder)
+		e := parser.NewParser[string](0).Parse(r, parser.Options{}, input)
+		check("Parser[string]", r.String(), e)
+	}
+	{
+		r := new(recorder)
+		e := parser.NewParser[[]byte](0).Parse(r, parser.Options{}, []byte(input))
+		check("Parser[[]byte]", r.String(), e)
+	}
+
+	// An empty input is no document, whatever its type.
+	for _, e := range []parser.Result{
+		parser.Parse(new(recorder), parser.Options{}, ""),
+		parser.Parse(new(recorder), parser.Options{}, []byte(nil)),
+		parser.Parse(new(recorder), parser.Options{}, []byte{}),
+	} {
+		if e.Err != parser.ErrUnexpectedEOF {
+			t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, e)
+		}
+	}
+}
+
+// TestParserReuse asserts that a reused parser produces the result of a fresh
+// one, whatever it read before, and that it stops allocating.
+func TestParserReuse(t *testing.T) {
+	inputs := []string{
+		`{f}`,
+		`query Q($x: Int = 1) { f(a: [1, {k: "s"}]) @d }`,
+		// Grows the buffer.
+		`{f(a:"` + strings.Repeat("x", 8192) + `")}`,
+		// Grows the stack.
+		"{f(a:" + strings.Repeat("[", 64) + strings.Repeat("]", 64) + ")}",
+		// An error must not leave the parser in a bad state.
+		`{`,
+		`fragment F on T { f } { ...F }`,
+	}
+
+	p := parser.NewParser[string](1)
+	for round := range 3 {
+		for _, input := range inputs {
+			r, fresh := new(recorder), new(recorder)
+			errReuse := p.Parse(r, parser.Options{}, input)
+			errFresh := parser.NewParser[string](0).Parse(
+				fresh, parser.Options{}, input,
+			)
+			if errReuse != errFresh {
+				t.Errorf("round %d: error %v; want %v; input: %.32q",
+					round, errReuse, errFresh, input)
+			}
+			if r.String() != fresh.String() {
+				t.Errorf("round %d: stream differs for %.32q", round, input)
+			}
+		}
+	}
+
+	// A warmed-up parser allocates nothing.
+	h := gqlhashtest.NoopHash{}
+	const doc = `query Q($x: Int = 1) { f(a: [1, {k: "s"}]) @d { b c } }`
+	_ = p.Parse(h, parser.Options{}, doc)
+	if n := testing.AllocsPerRun(100, func() {
+		_ = p.Parse(h, parser.Options{}, doc)
+	}); n != 0 {
+		t.Errorf("expected no allocations; received %v", n)
+	}
+}
+
+// TestParseConcurrent asserts that the buffers the package-level [parser.Parse]
+// takes from its pool are never shared between goroutines.
+func TestParseConcurrent(t *testing.T) {
+	inputs := []string{
+		`{f}`,
+		`query Q($x: Int = 1) { f(a: [1, {k: "s"}]) @d { b } }`,
+		`fragment F on T { a b } { ...F }`,
+		`{f(a:"` + strings.Repeat("x", 6000) + `")}`,
+		`{`,
+	}
+	want := make([]string, len(inputs))
+	for i, input := range inputs {
+		s, err := parse(parser.Options{}, input)
+		want[i] = s + "|" + fmt.Sprint(err.Err)
+	}
+
+	const goroutines = 8
+	errs := make(chan string, goroutines*len(inputs))
+	done := make(chan struct{})
+	for range goroutines {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for range 200 {
+				for i, input := range inputs {
+					r := new(recorder)
+					err := parser.Parse(r, parser.Options{}, input)
+					if got := r.String() + "|" + fmt.Sprint(err.Err); got != want[i] {
+						errs <- fmt.Sprintf("input %q: %q; want %q",
+							input, got, want[i])
+						return
+					}
+				}
+			}
+		}()
+	}
+	for range goroutines {
+		<-done
+	}
+	close(errs)
+	for e := range errs {
+		t.Error(e)
+	}
+}
+
+// failWriter fails every write, like a file that ran out of space.
+type failWriter struct{ err error }
+
+func (w failWriter) Write([]byte) (int, error) { return 0, w.err }
+
+// TestParseWriteError asserts that the error of the destination reaches the
+// caller.
+func TestParseWriteError(t *testing.T) {
+	wantErr := errors.New("no space left on device")
+	w := failWriter{err: wantErr}
+
+	for _, input := range []string{
+		`{f}`,
+		`query Q($x: Int = 1) { f(a: [1, {k: "s"}]) @d { b } }`,
+		`{f(a:"` + strings.Repeat("x", 9000) + `")}`, // Outgrows the buffer.
+	} {
+		e := parser.Parse(w, parser.Options{}, input)
+		if e.Err != wantErr {
+			t.Errorf("expected %v; received: %v; input: %.32q", wantErr, e, input)
+		}
+		if !errors.Is(e.Err, wantErr) {
+			t.Error("expected errors.Is to match the write error")
+		}
+		// A write error has no position, so the message stays the message of the writer.
+		if e.ErrOffset != -1 {
+			t.Errorf("expected offset -1; received %+v", e)
+		}
+		if line, column := parser.Position(input, e.ErrOffset); line != 0 || column != 0 {
+			t.Errorf("expected no position; received line %d, column %d", line, column)
+		}
+		if e.String() != wantErr.Error() {
+			t.Errorf("expected message %q; received %q", wantErr, e.String())
+		}
+	}
+
+	// An invalid document is rejected before anything is written, so the syntax
+	// error wins over the write error.
+	if e := parser.Parse(w, parser.Options{}, `{`); e.Err != parser.ErrUnexpectedEOF {
+		t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, e)
+	}
+
+	// The parser stays usable after a failed write.
+	r := new(recorder)
+	if e := parser.Parse(r, parser.Options{}, `{f}`); e.Err != nil {
+		t.Errorf("unexpected error: %v", e)
+	}
+	if want := stream(
+		parser.HPrefQuery, parser.HPrefSelectionSet,
+		parser.HPrefField, "f", parser.HPrefSelectionSetEnd,
+	); r.String() != want {
+		t.Errorf("expected stream %q; received %q", want, r.String())
+	}
+}
+
+// TestParseDepthLimit covers [parser.Options.DepthLimit]:
+// the nesting a document may reach, and what it costs to pass it.
+func TestParseDepthLimit(t *testing.T) {
+	nest := func(depth int) string {
+		return "{" + strings.Repeat("f{", depth-1) + "f" + strings.Repeat("}", depth)
+	}
+	values := func(depth int) string {
+		return "{f(a:" + strings.Repeat("[", depth) + "1" +
+			strings.Repeat("]", depth) + ")}"
+	}
+	objects := func(depth int) string {
+		return "{f(a:" + strings.Repeat("{k:", depth) + "1" +
+			strings.Repeat("}", depth) + ")}"
+	}
+
+	f := func(t *testing.T, expect error, o parser.Options, input string) {
+		t.Helper()
+		if e := parser.Parse(io.Discard, o, input); e.Err != expect {
+			t.Errorf("expected %v; received %v", expect, e)
+		}
+	}
+
+	// The default takes what an API is asked for and rejects what it isn't.
+	for _, at := range []func(int) string{nest, values, objects} {
+		f(t, nil, parser.Options{}, at(parser.DefaultDepthLimit))
+		f(t, parser.ErrTooDeep, parser.Options{}, at(parser.DefaultDepthLimit+1))
+	}
+
+	// A limit of its own replaces it, whichever way.
+	f(t, nil, parser.Options{DepthLimit: 3}, nest(3))
+	f(t, parser.ErrTooDeep, parser.Options{DepthLimit: 3}, nest(4))
+	f(t, nil, parser.Options{DepthLimit: 1000}, nest(1000))
+
+	// The error carries the offset it gave up at, like every other one.
+	e := parser.Parse(io.Discard, parser.Options{DepthLimit: 2}, nest(3))
+	if e.Err != parser.ErrTooDeep || e.ErrOffset < 1 {
+		t.Errorf("expected an offset with the error; received %v", e)
+	}
+	if line, column := parser.Position(nest(3), e.ErrOffset); line != 1 || column < 1 {
+		t.Errorf("expected a position; received %d:%d", line, column)
+	}
+}
+
+// TestPosition covers the offsets [parser.Position] takes that no
+// [parser.Result] carries.
+func TestPosition(t *testing.T) {
+	const src = "{\n\tf\n}"
+
+	// A negative offset is what an error without a position carries.
+	for _, offset := range []int{-1, -2, math.MinInt} {
+		if line, column := parser.Position(src, offset); line != 0 || column != 0 {
+			t.Errorf("offset %d: expected 0, 0; received %d, %d",
+				offset, line, column)
+		}
+	}
+
+	// An offset past the end is clamped to the end.
+	end, endColumn := parser.Position(src, len(src))
+	for _, offset := range []int{len(src) + 1, math.MaxInt} {
+		line, column := parser.Position(src, offset)
+		if line != end || column != endColumn {
+			t.Errorf("offset %d: expected %d, %d; received %d, %d",
+				offset, end, endColumn, line, column)
+		}
+	}
+
+	// The first byte of an empty document is line 1, column 1.
+	if line, column := parser.Position("", 0); line != 1 || column != 1 {
+		t.Errorf("expected 1, 1; received %d, %d", line, column)
+	}
+}
+
+// TestIgnoreDocExamples pins the examples documented on [parser.IgnoreInputs] and
+// [parser.IgnoreVariables]. A doc example is a claim about the hash,
+// so it belongs in a test.
+func TestIgnoreDocExamples(t *testing.T) {
+	equal := func(t *testing.T, ignore parser.Ignore, documents ...string) {
+		t.Helper()
+		o := parser.Options{Ignore: ignore}
+		want := hash(t, o, documents[0])
+		for _, d := range documents[1:] {
+			if got := hash(t, o, d); got != want {
+				t.Errorf("expected %q to hash like %q", d, documents[0])
+			}
+		}
+	}
+	differ := func(t *testing.T, ignore parser.Ignore, a, b string) {
+		t.Helper()
+		o := parser.Options{Ignore: ignore}
+		if hash(t, o, a) == hash(t, o, b) {
+			t.Errorf("expected %q and %q to differ", a, b)
+		}
+	}
+
+	equal(t, parser.IgnoreInputs,
+		`{ user(id: 1, role: ADMIN) { name } }`,
+		`{ user(id: 42, role: GUEST) { name } }`,
+		`{ user(id: "42", role: GUEST) { name } }`)
+	differ(t, parser.IgnoreInputs,
+		`{ user(id: 1, role: ADMIN) { name } }`,
+		`query($id: ID) { user(id: $id, role: GUEST) { name } }`)
+	// The name of an argument is kept, so dropping the argument still differs.
+	differ(t, parser.IgnoreInputs, `{ f(x: 1) }`, `{ f }`)
+
+	equal(t, parser.IgnoreVariables,
+		`query Q($x: Int = 1) { f(a: $x) }`,
+		`query Q($y: String) { f(a: $y) }`,
+		`query Q { f(a: 1) }`)
+	equal(t, parser.IgnoreVariables,
+		`query Q($x: Int) { f(x: $x) }`,
+		`query Q { f(x: 1) }`)
+	differ(t, parser.IgnoreVariables, `{ f(x: 1) }`, `{ f }`)
+}
+
+// TestResultSemantics pins what [parser.Result] is: a value saying whether
+// parsing failed and where, and deliberately not an error.
+//
+// An interface holding a zero value isn't nil, so a Result that satisfied error
+// would read as a failure for every document, the ones that parsed included.
+// Not satisfying it makes that unspellable, and Err carries what an error is
+// wanted for.
+func TestResultSemantics(t *testing.T) {
+	errorType := reflect.TypeOf((*error)(nil)).Elem()
+	if reflect.TypeOf(parser.Result{}).Implements(errorType) {
+		t.Error("expected Result not to satisfy error")
+	}
+	if reflect.TypeOf(&parser.Result{}).Implements(errorType) {
+		t.Error("expected *Result not to satisfy error either")
+	}
+
+	// The zero value holds nothing and says so.
+	zero := parser.Result{}
+	if zero.IsErr() {
+		t.Error("expected the zero value to hold no error")
+	}
+	if got := zero.String(); got != "no error" {
+		t.Errorf("expected the zero value to say so; received %q", got)
+	}
+
+	// A failure carries the sentinel in Err, which is what errors.Is takes,
+	// and the offset in the message, which Err alone doesn't.
+	e := parser.Result{Err: parser.ErrUnexpectedToken, ErrOffset: 7}
+	if !errors.Is(e.Err, parser.ErrUnexpectedToken) {
+		t.Error("expected Err to hold the sentinel")
+	}
+	if errors.Is(e.Err, parser.ErrUnexpectedEOF) {
+		t.Error("expected Err not to match another sentinel")
+	}
+	if got := fmt.Sprintf("%v", e); !strings.Contains(got, "offset 7") {
+		t.Errorf("expected the offset in the message; received %q", got)
+	}
+	// Wrapping keeps the sentinel reachable, which is how a failure travels on.
+	if !errors.Is(fmt.Errorf("hashing: %w", e.Err), parser.ErrUnexpectedToken) {
+		t.Error("expected errors.Is to reach the sentinel through a wrap")
+	}
+
+	// A failure with no position says only what happened.
+	noPos := parser.Result{Err: parser.ErrUnexpectedEOF, ErrOffset: -1}
+	if got := noPos.String(); got != parser.ErrUnexpectedEOF.Error() {
+		t.Errorf("expected no offset where there is none; received %q", got)
 	}
 }

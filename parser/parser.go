@@ -3,9 +3,11 @@ package parser
 import (
 	"errors"
 	"fmt"
-	"hash"
-	"iter"
+	"io"
+	"strings"
+	"sync"
 	"unicode/utf8"
+	"unsafe"
 )
 
 var (
@@ -14,121 +16,184 @@ var (
 
 	// ErrUnexpectedVariable is a variable usage where the grammar asks for a
 	// Value[Const]: the default value or a directive argument of a variable definition.
-	// It wraps [ErrUnexpectedToken], so matching that one with [errors.Is] still works.
 	// Reference:
 	//
 	//   - https://spec.graphql.org/September2025/#VariableDefinition
 	ErrUnexpectedVariable = fmt.Errorf("%w: variable in constant value",
 		ErrUnexpectedToken)
+
+	// ErrTooDeep is a document nesting deeper than [Options.DepthLimit] allows.
+	ErrTooDeep = errors.New("too deep")
+
+	// ErrInvalidEscape is a broken escape sequence in a string value:
+	// an unknown escape character, a bad hexadecimal digit,
+	// or a Unicode escape that is no scalar value.
+	// Reference:
+	//
+	//   - https://spec.graphql.org/September2025/#EscapedCharacter
+	//   - https://spec.graphql.org/September2025/#EscapedUnicode
+	ErrInvalidEscape = fmt.Errorf("%w: invalid escape sequence",
+		ErrUnexpectedToken)
+
+	// ErrMalformedNumber is an IntValue or FloatValue that breaks a lexical
+	// rule: a leading zero, a '-' or a fraction or exponent without digits,
+	// or a digit, '.' or NameStart right after the number.
+	// Reference:
+	//
+	//   - https://spec.graphql.org/September2025/#IntValue
+	//   - https://spec.graphql.org/September2025/#FloatValue
+	ErrMalformedNumber = fmt.Errorf("%w: malformed number", ErrUnexpectedToken)
+
+	// ErrMalformedUTF8 is a byte sequence that is no UTF-8 encoded Unicode
+	// scalar value and hence no SourceCharacter.
+	// Reference:
+	//
+	//   - https://spec.graphql.org/September2025/#SourceCharacter
+	ErrMalformedUTF8 = fmt.Errorf("%w: malformed UTF-8", ErrUnexpectedToken)
+
+	// ErrUnescapedControlChar is a control character written as it is in a single-line
+	// string, where it needs an escape sequence. A block string takes it unescaped.
+	// Reference:
+	//
+	//   - https://spec.graphql.org/September2025/#StringCharacter
+	ErrUnescapedControlChar = fmt.Errorf("%w: unescaped control character",
+		ErrUnexpectedToken)
 )
 
-// bom is the UTF-8 encoding of UnicodeBOM (U+FEFF). bomFirstByte is kept
-// separate so [SkipIgnorables] can dispatch on a single byte.
-// Reference:
+// Result says where in the document parsing stopped. Its zero value means no
+// error, so callers check [Result.Err], nil when nothing failed.
 //
-//   - https://spec.graphql.org/September2025/#UnicodeBOM
-const (
-	bom          = "\xef\xbb\xbf"
-	bomFirstByte = '\xef'
-)
+// [Result.Err] is an error like any other:
+// pass it to [errors.Is], or wrap it with %w where a failure travels on.
+type Result struct {
+	// Err is nil when there's no error. Otherwise it's [ErrUnexpectedEOF],
+	// [ErrUnexpectedToken], one of the errors wrapping [ErrUnexpectedToken],
+	// [ErrTooDeep], or the error of the [io.Writer].
+	Err error
 
-// Hash is a subset of the standard `hash.Hash`.
-type Hash interface {
-	Reset()
-	Sum([]byte) []byte
-	Write([]byte) (int, error)
+	// ErrOffset is the byte index where parsing stopped,
+	// and -1 where there is no position, which is the error of an [io.Writer].
+	// Offset 0 is the first byte of the document, so it can't stand for "no position".
+	//
+	// [Position] turns it into a line and a column.
+	ErrOffset int
 }
 
-var _ Hash = hash.Hash(nil)
+// IsErr returns true if the result is an error.
+func (e Result) IsErr() bool { return e.Err != nil }
 
-// The hash prefixes are used as magic bytes before writing actual query contents to
-// prevent tokens from collapsing into one if separators aren't written, for example:
-// query fields `{ foo bar }` might collapse into one field `{ foobar }`
-// producing the same hash for those two different queries.
-// 0x9, 0xA and 0xD cannot be used because they're valid bytes within string values
-// (https://spec.graphql.org/June2018/#SourceCharacter).
-var (
-	HPrefQuery                 = []byte{0x1}
-	HPrefMutation              = []byte{0x2}
-	HPrefSubscription          = []byte{0x3}
-	HPrefFragmentDefinition    = []byte{0x4}
-	HPrefVariableDefinition    = []byte{0x5}
-	HPrefDirective             = []byte{0x6}
-	HPrefField                 = []byte{0x7}
-	HPrefType                  = []byte{0x8}
-	HPrefFieldAliasedName      = []byte{0xb} // The actual name of the aliased field.
-	HPrefFragmentSpread        = []byte{0xc}
-	HPrefInlineFragment        = []byte{0xe}
-	HPrefArgument              = []byte{0xf}
-	HPrefSelectionSet          = []byte{0x11}
-	HPrefSelectionSetEnd       = []byte{0x12}
-	HPrefValueInputObject      = []byte{0x13}
-	HPrefValueInputObjectField = []byte{0x14}
-	HPrefInputObjectEnd        = []byte{0x15}
-	HPrefValueNull             = []byte{0x16}
-	HPrefValueTrue             = []byte{0x17}
-	HPrefValueFalse            = []byte{0x18}
-	HPrefValueInteger          = []byte{0x19}
-	HPrefValueFloat            = []byte{0x1a}
-	HPrefValueEnum             = []byte{0x1b}
-	HPrefValueString           = []byte{0x1c}
-	HPrefValueList             = []byte{0x1d}
-	HPrefValueListEnd          = []byte{0x1e}
-	HPrefValueVariable         = []byte{0x1f}
-)
-
-// hLineFeed joins block string lines, hTripleQuote is what a block string's
-// `\"""` stands for. Package-level so writing them doesn't allocate.
-var (
-	hLineFeed    = []byte{'\n'}
-	hTripleQuote = []byte(`"""`)
-)
-
-// allBytes lets a single byte be written without allocating: allBytes[b : b+1].
-var allBytes = func() (a [256]byte) {
-	for i := range a {
-		a[i] = byte(i)
+// String reads the value, so %v carries the offset, which [Result.Err] alone doesn't.
+// The zero value names itself: an empty string would leave a hole where a log
+// line expects a value, and read the same as a failure with no message.
+func (e Result) String() string {
+	switch {
+	case e.Err == nil:
+		return "no error"
+	case e.ErrOffset < 0:
+		return e.Err.Error()
 	}
-	return a
-}()
+	return fmt.Sprintf("%v (offset %d)", e.Err, e.ErrOffset)
+}
 
-// The punctuators of a type reference. [readType] writes them instead of the
-// raw source, which would include the Ignored tokens between them.
-// Package-level so writing them doesn't allocate.
-var (
-	hBracketLeft  = []byte{'['}
-	hBracketRight = []byte{']'}
-	hExclamation  = []byte{'!'}
+// errResult is the Result for err at offset, where the state machine stopped.
+func errResult(src string, offset int, err error) Result {
+	return Result{Err: err, ErrOffset: min(max(offset, 0), len(src))}
+}
+
+// Position returns the 1-based line and column of offset in s.
+// A column counts characters, not bytes: a malformed byte counts as one,
+// as it does for the parser. A negative offset,
+// which is what a [Result] without a position carries, returns 0, 0.
+//
+// It scans s up to offset, so call it where a message is formatted,
+// not on the path that rejects a document.
+// Reference:
+//
+//   - https://spec.graphql.org/September2025/#LineTerminator
+func Position[S string | []byte](s S, offset int) (line, column int) {
+	if offset < 0 {
+		return 0, 0
+	}
+	src := asString(s)
+	head := src[:min(offset, len(src))]
+
+	// CRLF is one LineTerminator, so a pair counts once.
+	line = 1 + strings.Count(head, "\n") + strings.Count(head, "\r") -
+		strings.Count(head, "\r\n")
+
+	// A column counts the characters after the last LineTerminator.
+	lineStart := max(
+		strings.LastIndexByte(head, '\n'), strings.LastIndexByte(head, '\r'),
+	) + 1
+	return line, utf8.RuneCountInString(head[lineStart:]) + 1
+}
+
+// The hash prefixes introduce the tokens of the canonical form.
+// Without them two tokens collapse into one: the fields of `{ foo bar }` would
+// produce the bytes of the single field `{ foobar }`.
+//
+// Requirement: no prefix may be 0x9, 0xA or 0xD. Those are valid bytes within a
+// string value (https://spec.graphql.org/September2025/#SourceCharacter).
+const (
+	HPrefQuery                 byte = 0x1
+	HPrefMutation              byte = 0x2
+	HPrefSubscription          byte = 0x3
+	HPrefFragmentDefinition    byte = 0x4
+	HPrefVariableDefinition    byte = 0x5
+	HPrefDirective             byte = 0x6
+	HPrefField                 byte = 0x7
+	HPrefType                  byte = 0x8
+	HPrefFieldAliasedName      byte = 0xb // The actual name of the aliased field.
+	HPrefFragmentSpread        byte = 0xc
+	HPrefInlineFragment        byte = 0xe
+	HPrefArgument              byte = 0xf
+	HPrefSelectionSet          byte = 0x11
+	HPrefSelectionSetEnd       byte = 0x12
+	HPrefValueInputObject      byte = 0x13
+	HPrefValueInputObjectField byte = 0x14
+	HPrefInputObjectEnd        byte = 0x15
+	HPrefValueNull             byte = 0x16
+	HPrefValueTrue             byte = 0x17
+	HPrefValueFalse            byte = 0x18
+	HPrefValueInteger          byte = 0x19
+	HPrefValueFloat            byte = 0x1a
+	HPrefValueEnum             byte = 0x1b
+	HPrefValueString           byte = 0x1c
+	HPrefValueList             byte = 0x1d
+	HPrefValueListEnd          byte = 0x1e
+	HPrefValueVariable         byte = 0x1f
 )
 
-// Options configures how a document is hashed.
-type Options struct {
-	// IgnoreInputs produces the same hash for two documents that differ only in
-	// their input values. Every argument value (literals, lists, input objects
-	// and variable usages alike) is ignored; only the variable signature (the
-	// definitions in the operation) is kept.
+// Ignore says how much of the input a document is hashed without.
+// The values are ordered: each one leaves out what the one before it leaves out,
+// and more.
+type Ignore uint8
+
+const (
+	// IgnoreNothing keeps every input value and every variable.
+	// Only formatting, comments and descriptions are left out.
+	IgnoreNothing Ignore = iota
+
+	// IgnoreInputs leaves out every argument value: literals, lists,
+	// input objects and variable usages alike. The argument name is kept,
+	// so `f(x: 1)` and `f` still differ, and so is the variable signature.
 	//
-	// For example, these 3 queries produce the same hash:
+	// These 3 queries produce the same hash:
 	//
 	//	{ user(id: 1, role: ADMIN) { name } }
 	//	{ user(id: 42, role: GUEST) { name } }
 	//	{ user(id: "42", role: GUEST) { name } }
 	//
-	// The following query differs though, because it declares a variable:
+	// This one differs, because it declares a variable:
 	//
 	//	query($id: ID) { user(id: $id, role: GUEST) { name } }
-	//
-	// IgnoreInputs is a subset of [Options.IgnoreVariables].
-	IgnoreInputs bool
+	IgnoreInputs
 
-	// IgnoreVariables skips hashing variables entirely: both variable definitions and
-	// variable usages. Two documents that differ only in their variable
-	// definitions and references then produce the same hash.
+	// IgnoreVariables leaves out what [IgnoreInputs] leaves out and the variable
+	// definitions on top of that, so nothing of a variable is hashed:
+	// neither the signature nor a usage.
 	//
-	// [Options.IgnoreInputs] already ignores variable usages; IgnoreVariables
-	// additionally ignores the variable definitions (the signature).
-	//
-	// For example, these two queries produce the same hash:
+	// These 3 queries produce the same hash:
 	//
 	//	query Q($x: Int = 1) { f(a: $x) }
 	//	query Q($y: String) { f(a: $y) }
@@ -136,862 +201,122 @@ type Options struct {
 	//
 	// and a parameterized operation matches its unparameterized form:
 	//
-	//	query Q($x: Int) { f }
-	//	query Q { f }
+	//	query Q($x: Int) { f(x: $x) }
+	//	query Q { f(x: 1) }
+	IgnoreVariables
+)
+
+type Options struct {
+	// Ignore is how much of the input to leave out. The zero value is [IgnoreNothing].
+	Ignore Ignore
+
+	// DepthLimit is how deeply selection sets, list values and input object
+	// values may nest before a document is rejected with [ErrTooDeep].
+	// Below 1 takes [DefaultDepthLimit]: no value turns the limit off.
 	//
-	// IgnoreVariables is a superset of [Options.IgnoreInputs].
-	IgnoreVariables bool
+	// Nesting is what a document grows cheaply, so this bounds what one costs.
+	DepthLimit int
 }
 
-// ReadDocument reads one or many ExecutableDefinitions
+// Default sizes a [Parser] starts at, see [NewParser].
+const (
+	// DefaultBufferSize is how many bytes of canonical form a fresh parser holds.
+	// It's a starting size and no limit.
+	DefaultBufferSize = 4096
+
+	// DefaultDepthLimit is the nesting an [Options] with no DepthLimit takes.
+	//
+	// Past what a document written for an API reaches — a Relay-style query
+	// costs two levels per page, a filter of nested input objects a few more —
+	// and far below what a document costs to attack with.
+	DefaultDepthLimit = 128
+
+	// maxRetainedBufferSize is the largest buffer a parser keeps between calls,
+	// so one oversized document doesn't leave it holding an oversized buffer.
+	maxRetainedBufferSize = 1 << 20
+)
+
+// state holds the buffers a [Parser] reuses across calls.
+// Not generic: the state machine works on a string, whatever the input type.
+type state struct {
+	// buf holds the canonical token stream until it's written out.
+	buf []byte
+
+	// stack holds one frame per ListValue and InputObjectValue currently open.
+	stack []byte
+}
+
+func newState(bufferSize int) *state {
+	if bufferSize < 1 {
+		bufferSize = DefaultBufferSize
+	}
+	return &state{
+		buf: make([]byte, 0, bufferSize),
+		// The depth limit caps the stack, so the default one never grows it.
+		stack: make([]byte, 0, DefaultDepthLimit),
+	}
+}
+
+var pool = sync.Pool{New: func() any {
+	return newState(DefaultBufferSize)
+}}
+
+// Parse reads a Document, which is one or many ExecutableDefinitions,
+// and writes its canonical form to w, applying options.
+//
+// w receives the canonical form in a single Write,
+// and nothing at all for a document that turns out to be invalid.
+//
+// The returned [Result] is the zero value if s is a valid document, and carries
+// the error of w if the write failed. Parse never resets w,
+// so several documents can be written into one sum.
+//
+// A named type such as json.RawMessage takes a conversion,
+// which copies nothing: Parse(w, options, []byte(raw)).
+//
+// Reuse a [Parser] where this is called per request, it can be more efficient.
+//
+// Reference:
 //
 //   - https://spec.graphql.org/September2025/#Document
 //   - https://spec.graphql.org/September2025/#ExecutableDefinition
-func ReadDocument(h Hash, s []byte) error {
-	return readDocument(h, Options{}, s)
+func Parse[S string | []byte](w io.Writer, options Options, s S) Result {
+	p := pool.Get().(*state)
+	err := parse(p, w, options, asString(s))
+	pool.Put(p)
+	return err
 }
 
-// ReadDocumentWithOptions reads one or many ExecutableDefinitions like
-// [ReadDocument], applying options.
+// Parser is a reusable parser instance. Reusing one is more efficient than
+// calling [Parse].
 //
-//   - https://spec.graphql.org/September2025/#Document
-//   - https://spec.graphql.org/September2025/#ExecutableDefinition
-func ReadDocumentWithOptions(h Hash, options Options, s []byte) error {
-	return readDocument(h, options, s)
+// WARNING: A Parser is not safe for concurrent use.
+type Parser[S string | []byte] struct{ s *state }
+
+// NewParser creates a new reusable parser instance.
+//
+// bufferSize is the buffer's starting size; below 1 takes [DefaultBufferSize].
+func NewParser[S string | []byte](bufferSize int) *Parser[S] {
+	return &Parser[S]{s: newState(bufferSize)}
 }
 
-// ReadDefinition reads Definition.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#Definition
-func ReadDefinition(h Hash, s []byte) (suffix []byte, err error) {
-	return readDefinition(h, Options{}, s)
+// Parse is identical to the [Parse] function.
+func (p *Parser[S]) Parse(w io.Writer, options Options, s S) Result {
+	return parse(p.s, w, options, asString(s))
 }
 
-// ReadOperationDefinition reads OperationDefinition but not the
-// SelectionSet-only version of it. The optional Description is read by
-// [ReadDefinition], which needs it to tell the definitions apart.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#sec-Language.Operations
-func ReadOperationDefinition(h Hash, s []byte) (suffix []byte, err error) {
-	return readOperationDefinition(h, Options{}, s)
-}
-
-// ReadSelectionSet reads SelectionSet.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#sec-Selection-Sets
-func ReadSelectionSet(h Hash, s []byte) (suffix []byte, err error) {
-	return readSelectionSet(h, Options{}, s)
-}
-
-// ReadVariableDefinitionsAfterParenthesis reads VariableDefinitions
-// after '(' and any ignorables.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#VariableDefinitions
-func ReadVariableDefinitionsAfterParenthesis(
-	h Hash, s []byte,
-) (suffix []byte, err error) {
-	return readVariableDefinitionsAfterParenthesis(h, Options{}, s)
-}
-
-// ReadDirectives reads Directives.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#sec-Language.Directives
-func ReadDirectives(h Hash, s []byte) (directives, suffix []byte, err error) {
-	return readDirectives(h, Options{}, s, false)
-}
-
-// ReadArguments reads Arguments.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#Arguments
-func ReadArguments(h Hash, s []byte) (arguments, suffix []byte, err error) {
-	return readArguments(h, Options{}, s, false)
-}
-
-// ReadToken expects token to be prefix of s and returns []byte the token trimmed.
-func ReadToken(s []byte, token string) (suffix []byte, err error) {
-	if err = ExpectNoEOF(s); err != nil {
-		return s, err
-	}
-	if !HasPrefix(s, token) {
-		return s, ErrUnexpectedToken
-	}
-	return s[len(token):], nil
-}
-
-// ReadType reads Type. typeDef is the raw source text of the type reference,
-// including any Ignored tokens within it.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#Type
-func ReadType(s []byte) (typeDef []byte, nullable, array bool, suffix []byte, err error) {
-	return readType(noopHash{}, s)
-}
-
-// ValueType represents the type of a value
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#Value
-type ValueType int8
-
-const (
-	_ ValueType = iota
-	ValueTypeInt
-	ValueTypeFloat
-	ValueTypeString
-	ValueTypeStringBlock
-	ValueTypeBooleanTrue
-	ValueTypeBooleanFalse
-	ValueTypeNull
-	ValueTypeEnum
-	ValueTypeList
-	ValueTypeInputObject
-	ValueTypeVariable
-)
-
-// ReadValue reads Value.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#Value
-func ReadValue(h Hash, s []byte) (
-	value []byte, valueType ValueType, suffix []byte, err error,
-) {
-	return readValue(h, Options{}, s, false)
-}
-
-// ReadIntValue reads IntValue.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#IntValue
-func ReadIntValue(s []byte) (value []byte, suffix []byte, err error) {
-	if value, suffix, err = readIntegerPart(s); err != nil {
-		return value, suffix, err
-	}
-	if err = expectNumberEnd(suffix); err != nil {
-		return nil, s, err
-	}
-	return value, suffix, nil
-}
-
-// readIntegerPart reads the IntegerPart that IntValue and FloatValue share.
-// A '-' needs a digit after it, just like a fraction or exponent does. Leading
-// zeroes are left to [expectNumberEnd], which the caller calls once it knows
-// where the number ends.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#IntegerPart
-func readIntegerPart(s []byte) (value []byte, suffix []byte, err error) {
-	suffix = s
-	if err = ExpectNoEOF(suffix); err != nil {
-		return value, s, err
-	}
-	if suffix[0] == '-' {
-		suffix = suffix[1:]
-	}
-	if len(suffix) < 1 || !IsDigit(suffix[0]) {
-		return value, s, ErrUnexpectedToken
-	}
-	if suffix[0] == '0' {
-		// digit after the zero would be a leading zero, which [expectNumberEnd] rejects.
-		suffix = suffix[1:]
-		return s[:len(s)-len(suffix)], suffix, nil
-	}
-	for ; len(suffix) > 0 && IsDigit(suffix[0]); suffix = suffix[1:] {
-	}
-	return s[:len(s)-len(suffix)], suffix, nil
-}
-
-// expectNumberEnd returns [ErrUnexpectedToken] if s begins with a byte that may
-// not follow a number. A digit, '.' or NameStart still belongs to the number,
-// which makes it one broken number instead of two tokens.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#IntValue
-//   - https://spec.graphql.org/September2025/#FloatValue
-func expectNumberEnd(s []byte) error {
-	if len(s) > 0 && (IsDigit(s[0]) || s[0] == '.' || IsNameStart(s[0])) {
-		return ErrUnexpectedToken
-	}
-	return nil
-}
-
-// ReadStringLineAfterQuotes reads a single-line StringValue contents after '"'.
-// Tip: Use ReadStringBlockAfterQuotes for block strings.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#sec-String-Value
-func ReadStringLineAfterQuotes(s []byte) (value []byte, suffix []byte, err error) {
-	for i := 0; i < len(s); {
-		switch s[i] {
-		case '"': // End of string.
-			return s[:i], s[i+1:], nil
-		case '\\':
-			// EscapedCharacter
-			// (https://spec.graphql.org/September2025/#EscapedCharacter).
-			if i+1 >= len(s) {
-				return s[:i], s[i:], ErrUnexpectedEOF
-			}
-			switch s[i+1] {
-			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
-				i += 2
-			case 'u':
-				// EscapedUnicode
-				// (https://spec.graphql.org/September2025/#EscapedUnicode).
-				if i+2 >= len(s) {
-					return s[:i+1], s[i+1:], ErrUnexpectedEOF
-				}
-				if s[i+2] == '{' {
-					// Variable-width form `\u{HexDigit+}` (spec of September 2025).
-					j := i + 3
-					// Leading zeros are permitted, so accumulate but stop growing
-					// the value once it's certainly out of range to avoid overflow.
-					var value uint32
-					outOfRange := false
-					for ; j < len(s) && IsHexByte(s[j]); j++ {
-						if !outOfRange {
-							value = value<<4 | hexByteValue(s[j])
-							outOfRange = value > 0x10FFFF
-						}
-					}
-					if j >= len(s) {
-						return s[:i+1], s[i+1:], ErrUnexpectedEOF
-					}
-					if j == i+3 || s[j] != '}' {
-						// No hex digits, or an unexpected non-hex character.
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
-					}
-					if outOfRange || !isUnicodeScalarValue(value) {
-						// Above U+10FFFF, or a surrogate code point.
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
-					}
-					i = j + 1
-					continue
-				}
-				// Fixed-width form `\uXXXX`.
-				if i+5 >= len(s) {
-					return s[:i+1], s[i+1:], ErrUnexpectedEOF
-				}
-				if !IsHexByte(s[i+2]) ||
-					!IsHexByte(s[i+3]) ||
-					!IsHexByte(s[i+4]) ||
-					!IsHexByte(s[i+5]) {
-					return s[:i+1], s[i+1:], ErrUnexpectedToken
-				}
-				leading := hexByteValue(s[i+2])<<12 | hexByteValue(s[i+3])<<8 |
-					hexByteValue(s[i+4])<<4 | hexByteValue(s[i+5])
-				if isLeadingSurrogate(leading) {
-					// A Leading Surrogate is only legal as the first half of a
-					// surrogate pair, which must be a second fixed-width escape
-					// holding a Trailing Surrogate.
-					if i+6 >= len(s) {
-						return s[:i+1], s[i+1:], ErrUnexpectedEOF
-					}
-					if s[i+6] != '\\' {
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
-					}
-					if i+7 >= len(s) {
-						return s[:i+1], s[i+1:], ErrUnexpectedEOF
-					}
-					if s[i+7] != 'u' {
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
-					}
-					if i+11 >= len(s) {
-						return s[:i+1], s[i+1:], ErrUnexpectedEOF
-					}
-					if !IsHexByte(s[i+8]) ||
-						!IsHexByte(s[i+9]) ||
-						!IsHexByte(s[i+10]) ||
-						!IsHexByte(s[i+11]) {
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
-					}
-					trailing := hexByteValue(s[i+8])<<12 | hexByteValue(s[i+9])<<8 |
-						hexByteValue(s[i+10])<<4 | hexByteValue(s[i+11])
-					if !isTrailingSurrogate(trailing) {
-						return s[:i+1], s[i+1:], ErrUnexpectedToken
-					}
-					i += 12
-					continue
-				}
-				if !isUnicodeScalarValue(leading) {
-					// A Trailing Surrogate without a preceding Leading Surrogate.
-					return s[:i+1], s[i+1:], ErrUnexpectedToken
-				}
-				i += 5
-			default:
-				return s, s[i:], ErrUnexpectedToken
-			}
-		default:
-			if s[i] < 0x20 {
-				// Illegal control character in string value.
-				return s, suffix, ErrUnexpectedToken
-			}
-			size := sourceCharacterLen(s[i:])
-			if size == 0 {
-				// Malformed UTF-8, so not a SourceCharacter.
-				return s, suffix, ErrUnexpectedToken
-			}
-			i += size
+// asString views s as a string without copying it. The state machine only reads
+// the source and keeps no reference, so the view doesn't outlive the call.
+// The return after the switch is unreachable: the constraint admits no third type.
+func asString[S string | []byte](s S) string {
+	switch v := any(s).(type) {
+	case string:
+		return v
+	case []byte:
+		if len(v) == 0 {
+			return ""
 		}
+		return unsafe.String(unsafe.SliceData(v), len(v))
 	}
-	return s, suffix, ErrUnexpectedEOF
-}
-
-// ReadStringBlockAfterQuotes reads a block string StringValue after the opening
-// '"""'. A non-empty value still has the closing '"""' attached, so callers that
-// want just the contents must cut it off. value is nil when the block holds
-// nothing but WhiteSpace and LineTerminators. prefixLen is the common
-// indentation to strip from every line except the first.
-// Tip: Use ReadStringLineAfterQuotes for single-line strings.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#sec-String-Value
-func ReadStringBlockAfterQuotes(s []byte) (
-	value []byte, prefixLen int, suffix []byte, err error,
-) {
-	prefixLenSet := false
-	// firstNonWhiteSpaceAndNewLine stores the index of the first byte that is
-	// neither WhiteSpace nor a LineTerminator. setNWSNL keeps that first index
-	// and ignores every later call.
-	firstNonWhiteSpaceAndNewLineFound := false
-	firstNonWhiteSpaceAndNewLine := 0
-	setNWSNL := func(i int) {
-		if !firstNonWhiteSpaceAndNewLineFound {
-			firstNonWhiteSpaceAndNewLine = i
-			firstNonWhiteSpaceAndNewLineFound = true
-		}
-	}
-	for i := 0; i < len(s); {
-		switch s[i] {
-		case '"':
-			if i+2 < len(s) && s[i+1] == '"' && s[i+2] == '"' {
-				// End of the block string found.
-				if firstNonWhiteSpaceAndNewLineFound &&
-					firstNonWhiteSpaceAndNewLine != i {
-					// The block isn't filled with just whitespace and line-breaks.
-					value = s[:i+3]
-				}
-				return value, prefixLen, s[i+3:], nil
-			}
-			// Just a quote, not the end of the block string yet.
-			setNWSNL(i)
-		case '\\':
-			setNWSNL(i)
-			if i+3 < len(s) && s[i+1] == '"' && s[i+2] == '"' && s[i+3] == '"' {
-				// Escaped `\"""`.
-				i += 4
-				continue
-			}
-		case '\n', '\r':
-			// Consume the LineTerminator, then skip any WhiteSpace
-			// (https://spec.graphql.org/September2025/#WhiteSpace).
-			c := 0
-			for i += lineTerminatorLen(s, i); i < len(s) &&
-				IsWhiteSpace(s[i]); i, c = i+1, c+1 {
-			}
-
-			if i < len(s) && !IsWhiteSpace(s[i]) && lineTerminatorLen(s, i) == 0 {
-				setNWSNL(i)
-			}
-
-			// Only lines with non-whitespace text set the common indentation.
-			// Blank lines and the closing-quote line are excluded
-			// (https://spec.graphql.org/September2025/#BlockStringValue()).
-			isBlankLine := i >= len(s) || lineTerminatorLen(s, i) > 0
-			isLastLine := i+2 < len(s) && s[i] == '"' && s[i+1] == '"' && s[i+2] == '"'
-			if !isBlankLine && !isLastLine {
-				if prefixLenSet {
-					prefixLen = min(prefixLen, c)
-				} else {
-					prefixLen, prefixLenSet = c, true
-				}
-			}
-			continue
-		case ' ', '\t':
-			// Ignore WhiteSpace bytes.
-		default:
-			// A BlockStringCharacter is any SourceCharacter, control ones included.
-			// The escaped value keeps them off the hash prefixes.
-			size := sourceCharacterLen(s[i:])
-			if size == 0 {
-				// Malformed UTF-8, so not a SourceCharacter.
-				return nil, prefixLen, suffix, ErrUnexpectedToken
-			}
-			// Don't ignore non-WhiteSpace bytes.
-			setNWSNL(i)
-			i += size
-			continue
-		}
-		i++
-	}
-	return nil, prefixLen, suffix, ErrUnexpectedEOF
-}
-
-// ReadFloatAfterInteger reads the part of the FloatValue that
-// comes after the first IntegerPart.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#sec-Float-Value
-func ReadFloatAfterInteger(s []byte) (value []byte, suffix []byte, err error) {
-	// Fractional part.
-	suffix = s
-	if len(s) > 0 && (s[0] == '.') {
-		suffix = suffix[1:]
-		before := suffix
-		for ; len(suffix) > 0 && IsDigit(suffix[0]); suffix = suffix[1:] {
-		}
-		if len(before) == len(suffix) {
-			// No digits after dot
-			return nil, suffix, ErrUnexpectedToken
-		}
-	}
-	if len(suffix) > 0 && (suffix[0] == 'e' || suffix[0] == 'E') {
-		// Exponential part.
-		suffix = suffix[1:]
-		if len(suffix) > 0 && (suffix[0] == '-' || suffix[0] == '+') {
-			// Signed exponential part.
-			suffix = suffix[1:]
-		}
-		before := suffix
-		for ; len(suffix) > 0 && IsDigit(suffix[0]); suffix = suffix[1:] {
-		}
-		if len(before) == len(suffix) {
-			// No digits after the exponent indicator.
-			return nil, suffix, ErrUnexpectedToken
-		}
-	}
-	if err = expectNumberEnd(suffix); err != nil {
-		return nil, suffix, err
-	}
-	return s[:len(s)-len(suffix)], suffix, nil
-}
-
-type OperationType int8
-
-const (
-	_ OperationType = iota
-	OperationTypeQuery
-	OperationTypeMutation
-	OperationTypeSubscription
-)
-
-// ReadOperationType reads OperationType.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#OperationType
-func ReadOperationType(h Hash, s []byte) (
-	operationType OperationType, suffix []byte, err error,
-) {
-	if isKeyword(s, "query") || s[0] == '{' {
-		_, _ = h.Write(HPrefQuery)
-		return OperationTypeQuery, s[len("query"):], nil
-	} else if isKeyword(s, "mutation") {
-		_, _ = h.Write(HPrefMutation)
-		return OperationTypeMutation, s[len("mutation"):], nil
-	} else if isKeyword(s, "subscription") {
-		_, _ = h.Write(HPrefSubscription)
-		return OperationTypeSubscription, s[len("subscription"):], nil
-	}
-	return 0, s, ErrUnexpectedToken
-}
-
-// SkipIgnorables skips over any comments, spaces, tabs, line-breaks and
-// carriage-returns it encounters and returns the s suffix.
-//
-// It stops at the first byte that isn't part of an Ignored, which includes a
-// byte inside a comment that isn't valid UTF-8. Such a byte is no CommentChar,
-// so the comment ends there and the caller reports the leftover as unexpected.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#sec-Line-Terminators
-//   - https://spec.graphql.org/September2025/#sec-Comments
-//   - https://spec.graphql.org/September2025/#sec-White-Space
-//   - https://spec.graphql.org/September2025/#UnicodeBOM
-func SkipIgnorables(s []byte) []byte {
-	for len(s) > 0 {
-		switch s[0] {
-		case ' ', ',', '\t', '\n', '\r':
-			s = s[1:]
-		case '#':
-			// CommentChar is a SourceCharacter but not a LineTerminator
-			// (https://spec.graphql.org/September2025/#CommentChar).
-			i := 1
-			for i < len(s) && lineTerminatorLen(s, i) == 0 {
-				size := sourceCharacterLen(s[i:])
-				if size == 0 {
-					return s[i:] // Malformed UTF-8 ends the comment.
-				}
-				i += size
-			}
-			s = s[i:]
-		case bomFirstByte:
-			// UnicodeBOM (U+FEFF) may appear before or after any token, not just
-			// at the start of the document.
-			if !HasPrefix(s, bom) {
-				return s
-			}
-			s = s[len(bom):]
-		default:
-			return s
-		}
-	}
-	return s
-}
-
-// ExpectNoEOF returns [ErrUnexpectedEOF] if s is empty,
-// otherwise returns nil.
-func ExpectNoEOF(s []byte) error {
-	if len(s) < 1 {
-		return ErrUnexpectedEOF
-	}
-	return nil
-}
-
-// HasPrefix is equivalent to strings.HasPrefix and bytes.HasPrefix
-// except that it works for both string and []byte.
-func HasPrefix(s []byte, prefix string) bool {
-	return len(s) >= len(prefix) && string(s[0:len(prefix)]) == string(prefix)
-}
-
-// ReadName reads a Name token.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#sec-Names
-func ReadName(s []byte) (name, suffix []byte, err error) {
-	if len(s) < 1 {
-		return name, suffix, ErrUnexpectedEOF
-	}
-	if !IsNameStart(s[0]) {
-		return name, s, ErrUnexpectedToken
-	}
-	for suffix = s[1:]; len(suffix) > 0; {
-		if IsNameContinue(suffix[0]) {
-			suffix = suffix[1:]
-			continue
-		}
-		break
-	}
-	return s[:len(s)-len(suffix)], suffix, nil
-}
-
-// IsWhiteSpace returns true if b is a WhiteSpace.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#WhiteSpace
-func IsWhiteSpace(b byte) bool { return b == ' ' || b == '\t' }
-
-// IsIgnorableByte returns true if b is ignorable.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#sec-Language.Source-Text.Ignored-Tokens
-func IsIgnorableByte(b byte) bool {
-	return b == ' ' || b == ',' || b == '\t' || b == '\n' || b == '\r'
-}
-
-// IsNameStart returns true if b is NameStart.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#NameStart
-func IsNameStart(b byte) bool { return lutLetter[b] || b == '_' }
-
-// IsNameContinue returns true if b is NameContinue.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#NameContinue
-func IsNameContinue(b byte) bool { return lutLetter[b] || lutDigit[b] || b == '_' }
-
-// lineTerminatorLen returns the length in bytes of the LineTerminator at s[i],
-// or 0 if s[i] doesn't begin one. CRLF is a single LineTerminator, hence 2.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#LineTerminator
-func lineTerminatorLen(s []byte, i int) int {
-	switch s[i] {
-	case '\n':
-		return 1
-	case '\r':
-		if i+1 < len(s) && s[i+1] == '\n' {
-			return 2
-		}
-		return 1
-	}
-	return 0
-}
-
-// IsLetter returns true if b is Letter.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#Letter
-func IsLetter(b byte) bool { return lutLetter[b] }
-
-// IsDigit returns true if b is a Digit.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#Digit
-func IsDigit(b byte) bool { return lutDigit[b] }
-
-// IsHexByte returns true if b is a hexadecimal digit.
-func IsHexByte(b byte) bool { return lutHex[b] }
-
-// sourceCharacterLen returns the length in bytes of the SourceCharacter at the
-// start of s, or 0 if those bytes aren't a well-formed UTF-8 encoding of a
-// Unicode scalar value. Surrogates, overlong encodings, truncated sequences and
-// values above U+10FFFF all return 0. Expects s to be non-empty.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#SourceCharacter
-func sourceCharacterLen(s []byte) int {
-	if s[0] < utf8.RuneSelf {
-		return 1
-	}
-	// DecodeRune reports every malformed encoding as (RuneError, 1), which a
-	// literal U+FFFD can't be confused with because it decodes to 3 bytes.
-	if r, size := utf8.DecodeRune(s); r != utf8.RuneError || size > 1 {
-		return size
-	}
-	return 0
-}
-
-// hexByteValue returns the numeric value of hexadecimal digit b.
-// The result is meaningless unless IsHexByte(b) is true.
-func hexByteValue(b byte) uint32 {
-	switch {
-	case b >= '0' && b <= '9':
-		return uint32(b - '0')
-	case b >= 'a' && b <= 'f':
-		return uint32(b-'a') + 10
-	}
-	return uint32(b-'A') + 10
-}
-
-// isUnicodeScalarValue returns true if v is within the Unicode scalar value
-// range, which excludes the surrogate code points 0xD800-0xDFFF.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#sec-Unicode
-func isUnicodeScalarValue(v uint32) bool {
-	return v <= 0xD7FF || (v >= 0xE000 && v <= 0x10FFFF)
-}
-
-// isLeadingSurrogate returns true if v is a Leading Surrogate code point.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#StringCharacter
-func isLeadingSurrogate(v uint32) bool { return v >= 0xD800 && v <= 0xDBFF }
-
-// isTrailingSurrogate returns true if v is a Trailing Surrogate code point.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#StringCharacter
-func isTrailingSurrogate(v uint32) bool { return v >= 0xDC00 && v <= 0xDFFF }
-
-// lutLetter is a lookup table for bytes representing a Letter.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#Letter
-var lutLetter = [256]bool{
-	// Upper case.
-	'A': true,
-	'B': true,
-	'C': true,
-	'D': true,
-	'E': true,
-	'F': true,
-	'G': true,
-	'H': true,
-	'I': true,
-	'J': true,
-	'K': true,
-	'L': true,
-	'M': true,
-	'N': true,
-	'O': true,
-	'P': true,
-	'Q': true,
-	'R': true,
-	'S': true,
-	'T': true,
-	'U': true,
-	'V': true,
-	'W': true,
-	'X': true,
-	'Y': true,
-	'Z': true,
-	// Lower case.
-	'a': true,
-	'b': true,
-	'c': true,
-	'd': true,
-	'e': true,
-	'f': true,
-	'g': true,
-	'h': true,
-	'i': true,
-	'j': true,
-	'k': true,
-	'l': true,
-	'm': true,
-	'n': true,
-	'o': true,
-	'p': true,
-	'q': true,
-	'r': true,
-	's': true,
-	't': true,
-	'u': true,
-	'v': true,
-	'w': true,
-	'x': true,
-	'y': true,
-	'z': true,
-}
-
-// lutDigit is a lookup table for bytes representing a Digit.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#Digit
-var lutDigit = [256]bool{
-	'0': true,
-	'1': true,
-	'2': true,
-	'3': true,
-	'4': true,
-	'5': true,
-	'6': true,
-	'7': true,
-	'8': true,
-	'9': true,
-}
-
-// lutHex is a lookup table for hexadecimal digits.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#EscapedUnicode
-var lutHex = [256]bool{
-	'0': true,
-	'1': true,
-	'2': true,
-	'3': true,
-	'4': true,
-	'5': true,
-	'6': true,
-	'7': true,
-	'8': true,
-	'9': true,
-	'a': true,
-	'b': true,
-	'c': true,
-	'd': true,
-	'e': true,
-	'f': true,
-	'A': true,
-	'B': true,
-	'C': true,
-	'D': true,
-	'E': true,
-	'F': true,
-}
-
-// IterateBlockStringLines iterates over individual lines of a GraphQL block string.
-// Expects s to be the content of the string without the surrounding `"""`.
-//
-// The caller must prepare both inputs: prefixLen is the common indentation as
-// returned by [ReadStringBlockAfterQuotes], and s must already have its trailing
-// blank lines removed by [TrimEmptyLinesSuffix]. Leading blank lines are dropped
-// here, so any blank line reached after content is treated as interior and kept.
-//
-// Lines are yielded without their LineTerminator. Per BlockStringValue the
-// lines are joined by a single line feed, so LF, CRLF and CR in the source all
-// produce the same sequence.
-// Reference:
-//
-//   - https://spec.graphql.org/September2025/#BlockStringValue()
-func IterateBlockStringLines(s []byte, prefixLen int) iter.Seq[[]byte] {
-	return func(yield func([]byte) bool) {
-		// The first line keeps its indentation (the common prefix never applies to it).
-		i, firstLineIsEmpty := 0, true
-		for ; i < len(s) && lineTerminatorLen(s, i) == 0; i++ {
-			if s[i] != ' ' && s[i] != '\t' {
-				firstLineIsEmpty = false
-			}
-		}
-		contentSeen := !firstLineIsEmpty
-		if !firstLineIsEmpty {
-			if !yield(s[:i]) {
-				return
-			}
-		}
-		for i < len(s) {
-			i += lineTerminatorLen(s, i)
-
-			// Strip up to prefixLen leading whitespace bytes.
-			for skipped := 0; i < len(s) && skipped < prefixLen &&
-				IsWhiteSpace(s[i]); skipped++ {
-				i++
-			}
-			lineStart, blank := i, true
-			for ; i < len(s) && lineTerminatorLen(s, i) == 0; i++ {
-				if !IsWhiteSpace(s[i]) {
-					blank = false
-				}
-			}
-			if blank && !contentSeen {
-				// Leading blank lines are dropped. Trailing ones are already
-				// removed by [TrimEmptyLinesSuffix], so any blank line seen after
-				// content is an interior line and must be kept.
-				continue
-			}
-			if !blank {
-				contentSeen = true
-			}
-			if !yield(s[lineStart:i]) {
-				return
-			}
-		}
-	}
-}
-
-// TrimEmptyLinesSuffix removes any trailing empty lines from the s.
-// An empty line is defined as a line that contains only whitespace characters.
-func TrimEmptyLinesSuffix(s []byte) []byte {
-	e := len(s)
-	for {
-		// Find the LineTerminator that ends the second-to-last line. Scanning
-		// for its last byte keeps CRLF intact: the '\n' is found first and the
-		// preceding '\r' is picked up below.
-		termEnd := -1
-		for i := e - 1; i >= 0; i-- {
-			if s[i] == '\n' || s[i] == '\r' {
-				termEnd = i
-				break
-			}
-		}
-		if termEnd < 0 {
-			// Only one line left.
-			if containsOnlyWhiteSpace(s[:e]) {
-				return s[:0]
-			}
-			return s[:e]
-		}
-		if !containsOnlyWhiteSpace(s[termEnd+1 : e]) {
-			return s[:e] // Line is not empty, stop trimming.
-		}
-		if s[termEnd] == '\n' && termEnd > 0 && s[termEnd-1] == '\r' {
-			termEnd-- // Drop the whole CRLF, not just the '\n'.
-		}
-		e = termEnd // Remove empty line.
-	}
-}
-
-func containsOnlyWhiteSpace(s []byte) bool {
-	for _, b := range s {
-		if !IsWhiteSpace(b) {
-			return false
-		}
-	}
-	return true
+	return string(s)
 }
