@@ -12,6 +12,10 @@ before:
 builds:
   - &build
     id: gqlhash
+    # Named, not defaulted. Without this every build takes the project name,
+    # so both archives carried a binary called gqlhash: the proxy one shipped the
+    # proxy under the hasher's name, which the cask then couldn't find.
+    binary: gqlhash
     main: ./cmd/gqlhash
     env:
       - CGO_ENABLED=0
@@ -26,6 +30,7 @@ builds:
   # the metrics client and the schema validator that gqlhash doesn't link.
   - <<: *build
     id: gqlhash-proxy
+    binary: gqlhash-proxy
     main: ./cmd/gqlhash-proxy
 
 # One archive per command, so installing the hashing command doesn't drag in the
@@ -82,8 +87,15 @@ homebrew_casks:
           if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gqlhash"]
           end
-    # Shared, so an upgrade never says two different things about the same release.
-    caveats: &caveats |
+    # Not shared with the proxy: only this command was ever a formula, so only
+    # this one has an install to undo. The paragraph below it is the same in both
+    # and has to stay that way — an upgrade must not say two different things
+    # about the same release.
+    caveats: |
+      v1 shipped as a formula and this is a cask. Homebrew replaces neither with
+      the other, so if `brew list --formula` still lists gqlhash, run
+      `brew uninstall --formula gqlhash` first.
+
       Upgrading from v1: gqlhash now hashes with SHA-256 by default where v1 used
       SHA-1, some documents hash differently under any function, and a few v1
       accepted are now refused. Anything holding a stored hash has to rebuild it;
@@ -108,5 +120,11 @@ homebrew_casks:
           if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gqlhash-proxy"]
           end
-    caveats: *caveats
+    # The same paragraph as gqlhash's second one, see there.
+    caveats: |
+      Upgrading from v1: gqlhash now hashes with SHA-256 by default where v1 used
+      SHA-1, some documents hash differently under any function, and a few v1
+      accepted are now refused. Anything holding a stored hash has to rebuild it;
+      -hash sha1 keeps what v1 printed. What changed:
+      https://github.com/romshark/gqlhash/blob/main/MIGRATION.md
     repository: *tap

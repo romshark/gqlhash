@@ -126,11 +126,17 @@ With [`-ignore=inputs`](#ignoring-input-values) documents that differ only in th
 
 ### Homebrew
 
+macOS only: both are casks, and Homebrew installs a cask nowhere else. On Linux
+take a released binary or build from source, below.
+
 ```sh
 brew tap romshark/tools
 brew install gqlhash       # the hashing command
 brew install gqlhash-proxy # the allowlist-firewall proxy
 ```
+
+v1 shipped `gqlhash` as a formula, which Homebrew doesn't replace with a cask.
+`brew uninstall --formula gqlhash` first if `brew list --formula` still names it.
 
 ### Compiled Binary
 
