@@ -103,9 +103,7 @@ func TestConcurrentReloads(t *testing.T) {
 		var wg sync.WaitGroup
 		codes := make([]int, concurrent)
 		for i := range concurrent {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				req, err := http.NewRequest(http.MethodPost,
 					"http://"+e.control+"/reload", nil)
 				if err != nil {
@@ -117,7 +115,7 @@ func TestConcurrentReloads(t *testing.T) {
 				}
 				defer func() { _ = res.Body.Close() }()
 				codes[i] = res.StatusCode
-			}()
+			})
 		}
 		wg.Wait()
 

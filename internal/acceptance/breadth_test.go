@@ -611,8 +611,8 @@ func documentsAndLoadedAt(status string) string {
 	for _, key := range []string{`"documents":`, `"loaded_at":`} {
 		if i := strings.Index(status, key); i >= 0 {
 			rest := status[i:]
-			if j := strings.IndexByte(rest, ','); j >= 0 {
-				out = append(out, rest[:j])
+			if before, _, ok := strings.Cut(rest, ","); ok {
+				out = append(out, before)
 			}
 		}
 	}

@@ -186,14 +186,12 @@ func TestConcurrentRequests(t *testing.T) {
 		codes := make(map[int]int, 2)
 		var wg sync.WaitGroup
 		for i := range concurrent {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				code := <-postAsync(e.address, requests[i])
 				mu.Lock()
 				codes[code]++
 				mu.Unlock()
-			}()
+			})
 		}
 		wg.Wait()
 

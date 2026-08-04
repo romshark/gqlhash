@@ -21,6 +21,8 @@ gqlhash-proxy \
 
 `-server.max-batch` is how many documents one request may carry as a JSON array, every one of which has to be allowed. It is `0` by default, which refuses an array outright, and that default is deliberate: a batch turns one request into as many operations as it holds, and the only other bound available is `-server.max-body` in **bytes**. At the default 1 MiB, the smallest allowed element — `{"query":"{foo bar}"}`, 22 bytes with its separator — fits **47,662** of them, so one request that passes the allowlist can ask the API for 47,662 executions while `/status` reports `"allowed":1` and any rate limit in front of the proxy sees a single request. Every document is on the allowlist and none of them is a document nobody registered; what a count bounds is how many of them run per request. Set it to what your clients actually batch. Past it a request is `413` with `BATCH_TOO_LARGE`, counted as `batch_too_large`, and the scan stops at the document that breaks the cap, so a megabyte of them costs the cap and not the megabyte.
 
+Every element of a batch has to carry a document of its own, or the request is `400`. The cap counts documents, so an element carrying none is one it never sees: `[{"query":"<allowed>"}, 7, 7, …]` would otherwise pass a cap of 1 whatever came after the first element, and reach the API to be parsed and answered whole. "Every document must be allowed" reads as "every element carries one", and that is what it now means — `7`, `{}`, `null` and `{"variables":{}}` are each a refusal, and the scan stops at the first of them.
+
 `-allowlist` is a directory of `.graphql` and `.gql` files holding the allowed documents. The proxy hashes them itself, so the documents are the source of truth. Formatting and comments may differ between a file and what a client sends. The set of definitions may not: one file is one entry.
 
 A `.graphqls` file in the same directory is read as the schema, and every document is then checked against it: one asking for a field the schema doesn't have is skipped like one that doesn't parse. Without such a file nothing is checked against a schema. Several `.graphqls` files are read as one schema, and a schema that doesn't parse is reported and leaves the documents unchecked rather than unserved.
@@ -30,6 +32,8 @@ The proxy rejects ambiguous requests with `400 Bad Request`. Both keys in `{"que
 Two files whose documents hash alike are both skipped: which one a request meant is unknowable, and allowing the wrong one is worse than allowing neither.
 
 A document that doesn't parse is skipped with an error log, at startup and on reload alike, so one broken file doesn't keep the rest from being served. A directory with no usable document serves an empty allowlist, rejects everything.
+
+The envelopes the proxy writes itself — every refusal, and an upstream failure — go out as `application/json; charset=utf-8`, the legacy watershed [GraphQL over HTTP](https://graphql.github.io/graphql-over-http/draft/) defines and every client parses. A request whose `Accept` names `application/graphql-response+json` is answered in that media type instead, envelope unchanged. Naming it is what asks for it: `*/*`, `application/*` and no `Accept` header at all are a client stating no preference, and they keep `application/json`. `-opaque-errors` doesn't reach this — what an answer is written in is no part of why it was refused.
 
 `-opaque-errors` answers every rejection with `403` and `OPERATION_NOT_ALLOWED`, so a caller can't tell a document that isn't on the list from one that's too deep, too large, malformed or ambiguous. It hides **why** a request was refused, not **whether** a document is on the list. Nothing can hide the latter: an allowed document is forwarded and comes back with the API's own answer, so a prober separates the two on any working deployment without needing an error to read. What the flag is for is the detail — the refusals name their reason otherwise, and that reason maps the shape of your allowlist and your limits.
 
@@ -119,7 +123,9 @@ Every flag of the proxy, with its default:
 | `-server.idle-timeout` | 2m | how long an idle keep-alive connection is held |
 | `-server.shutdown-timeout` | 10s | how long the requests in flight are waited for |
 
-`0` leaves any of the timeouts off. Four of them carry a constraint worth knowing:
+`0` leaves any of the timeouts off, with one exception: `-server.shutdown-timeout` is how long a shutdown *waits*, so `0` there waits for nothing and the requests in flight are abandoned. A negative duration is refused at startup on every one of them, that one included — it would otherwise read as the same "wait for nothing" nobody meant to ask for.
+
+These carry a constraint worth knowing:
 
 - `-server.write-timeout` must stay above `-upstream.timeout`, or the proxy cuts off a response the upstream is still allowed to be sending — and cuts it off as a dropped connection rather than a `504`, the write deadline having passed by the time there is an answer to write. It follows that flag unless you set it, and is off where that flag is off; a value at or below it is rejected at startup.
 - `-server.read-timeout` has to fit `-server.max-body` arriving over the slowest link you serve, and must not be below `-server.read-header-timeout`, which would leave that one without effect.

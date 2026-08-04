@@ -1505,11 +1505,11 @@ func TestIgnoreDocExamples(t *testing.T) {
 // Not satisfying it makes that unspellable, and Err carries what an error is
 // wanted for.
 func TestResultSemantics(t *testing.T) {
-	errorType := reflect.TypeOf((*error)(nil)).Elem()
-	if reflect.TypeOf(parser.Result{}).Implements(errorType) {
+	errorType := reflect.TypeFor[error]()
+	if reflect.TypeFor[parser.Result]().Implements(errorType) {
 		t.Error("expected Result not to satisfy error")
 	}
-	if reflect.TypeOf(&parser.Result{}).Implements(errorType) {
+	if reflect.TypeFor[*parser.Result]().Implements(errorType) {
 		t.Error("expected *Result not to satisfy error either")
 	}
 
