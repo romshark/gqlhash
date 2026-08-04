@@ -31,7 +31,7 @@ jobs:
       # it covers nothing in process that the second half doesn't cover.
       - name: Test and calculate coverage
         run: |
-          mkdir -p covdata/unit covdata/servers
+          mkdir -p covdata/unit covdata/servers covdata/merged
           go test -v -covermode=atomic -coverpkg=./... \
             $(go list ./... | grep -v /internal/acceptance) \
             -args -test.gocoverdir=$PWD/covdata/unit
