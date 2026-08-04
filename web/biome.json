@@ -11,7 +11,10 @@
       "!dist",
       "!src/wasm",
       "!pnpm-lock.yaml",
-      "!src/vendor/wasm_exec.js"
+      "!src/vendor/wasm_exec.js",
+      "!src/vendor/morpheus/bundle.js",
+      "!src/vendor/morpheus/morpheus.css",
+      "!public/icons"
     ]
   },
   "formatter": {
@@ -41,6 +44,16 @@
     }
   },
   "overrides": [
+    {
+      "includes": ["index.html"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noLabelWithoutControl": "off"
+          }
+        }
+      }
+    },
     {
       "includes": ["public/*.svg"],
       "linter": {

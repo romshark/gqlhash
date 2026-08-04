@@ -6,7 +6,7 @@
 // It installs a single global object, `gqlhash`, with:
 //
 //	gqlhash.version                 // gqlhash module version
-//	gqlhash.hashFunctions           // [{id, label}, ...]
+//	gqlhash.hashFunctions           // [{id, label, kind}, ...]
 //	gqlhash.formats                 // [{id, label}, ...]
 //	gqlhash.hash(source, options)   // {hash} | {error: {...}}
 package main
@@ -182,22 +182,39 @@ func encoderFor(id string) func([]byte) string {
 	return nil
 }
 
-// hashFunctionList mirrors the -hash flag documentation of cmd/gqlhash so the
-// page never has to keep its own copy of the list.
+// What a hash function is worth to an allowlist, which rests on one property:
+// collision resistance. The three groups are the README's — collision
+// resistant, broken, and the checksums, which are collidable by construction.
+// The last two are for grouping or bucketing documents, never for deciding
+// whether one may run.
+const (
+	kindResistant = "resistant"
+	kindBroken    = "broken"
+	kindChecksum  = "checksum"
+)
+
+// hashFunctionList holds every hash the -hash flag of cmd/gqlhash takes, so
+// the page never has to keep its own copy of the list, nor its own view of
+// which entries in it are safe to allowlist with.
+//
+// Widest first, and the same width in the flag's own order. A list ordered by
+// what it's worth to an allowlist would put every safe one at the top, which
+// reads as a recommendation the kind tags make better; this way the digest a
+// reader is looking for is where its width says it is.
 func hashFunctionList() []any {
 	return []any{
-		option("sha1", "SHA-1 (160 bit)"),
-		option("sha2", "SHA-256 (256 bit)"),
-		option("sha3", "SHA3-512 (512 bit)"),
-		option("md5", "MD5 (128 bit)"),
-		option("blake2b", "BLAKE2b, unkeyed (256 bit)"),
-		option("blake2s", "BLAKE2s, unkeyed (256 bit)"),
-		option("blake3", "BLAKE3, unkeyed (256 bit)"),
-		option("fnv", "FNV-1 (64 bit)"),
-		option("fnv1a", "FNV-1a (64 bit)"),
-		option("xxh64", "XXH64, unseeded (64 bit)"),
-		option("crc32", "CRC-32, IEEE (32 bit)"),
-		option("crc64", "CRC-64, ISO 3309 (64 bit)"),
+		hashOption("sha3", "SHA3-512 (512 bit)", kindResistant),
+		hashOption("sha2", "SHA-256 (256 bit)", kindResistant),
+		hashOption("blake2b", "BLAKE2b, unkeyed (256 bit)", kindResistant),
+		hashOption("blake2s", "BLAKE2s, unkeyed (256 bit)", kindResistant),
+		hashOption("blake3", "BLAKE3, unkeyed (256 bit)", kindResistant),
+		hashOption("sha1", "SHA-1 (160 bit)", kindBroken),
+		hashOption("md5", "MD5 (128 bit)", kindBroken),
+		hashOption("fnv", "FNV-1 (64 bit)", kindChecksum),
+		hashOption("fnv1a", "FNV-1a (64 bit)", kindChecksum),
+		hashOption("xxh64", "XXH64, unseeded (64 bit)", kindChecksum),
+		hashOption("crc64", "CRC-64, ISO 3309 (64 bit)", kindChecksum),
+		hashOption("crc32", "CRC-32, IEEE (32 bit)", kindChecksum),
 	}
 }
 
@@ -212,6 +229,10 @@ func formatList() []any {
 
 func option(id, label string) any {
 	return map[string]any{"id": id, "label": label}
+}
+
+func hashOption(id, label, kind string) any {
+	return map[string]any{"id": id, "label": label, "kind": kind}
 }
 
 // version reports the version of the gqlhash module this binary was built from.

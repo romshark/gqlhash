@@ -1,18 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <!--
-    The glyph follows the tab strip: brand magenta on light, the lighter tint the
-    dark scheme uses elsewhere. Drawn as strokes rather than a "#" character so
-    it rasterizes identically everywhere, with no font to substitute.
+    Rhodamine on either tab strip. The brand guidelines publish one color and
+    no dark variant — the logo appears in Rhodamine, white or black — so the
+    glyph doesn't wear the lighter tint the page's interface accent uses in
+    dark mode. Drawn as strokes rather than a "#" character so it rasterizes
+    identically everywhere, with no font to substitute.
   -->
   <style>
     .glyph {
       stroke: #e10098;
-    }
-
-    @media (prefers-color-scheme: dark) {
-      .glyph {
-        stroke: #ff6ec7;
-      }
     }
   </style>
   <path

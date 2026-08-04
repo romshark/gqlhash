@@ -1,17 +1,21 @@
-// CodeMirror setup: a GraphQL editor that takes its colors from the page and a
-// gutter that marks where the gqlhash parser stopped.
+// CodeMirror setup: a GraphQL editor that takes its colors from the page and
+// underlines where the gqlhash parser stopped.
 
 import { indentWithTab } from "@codemirror/commands";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { type Diagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
+import { type Diagnostic, setDiagnostics } from "@codemirror/lint";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
 import type { ParseError } from "./gqlhash.js";
 import { graphql } from "./graphql-language.js";
+import * as theme from "./theme.js";
 
-const darkQuery = "(prefers-color-scheme: dark)";
+// Which palette is in force is theme.ts's answer, not a media query's: the
+// header's switch can overrule the system. Every editor state is built for the
+// palette of the moment it's created in, and syncTheme puts a state that was
+// built under the other one back in step when it's swapped into a view.
 
 // The rules are the same in both schemes because every color is a CSS variable
 // the stylesheet redefines. Only CodeMirror's own dark flag has to be swapped,
@@ -38,6 +42,12 @@ const themeSpec = {
     color: "var(--fg-faint)",
     border: "none",
   },
+  // basicSetup brings a fold gutter, which reserves a column of its own for
+  // arrows that only appear on hover. The line numbers sit next to the code
+  // instead, and folding is still on Ctrl/Cmd-Alt-[ and -]. The !important is
+  // to beat CodeMirror's own, on the .cm-gutter class this element also has.
+  ".cm-foldGutter": { display: "none !important" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 10px 0 5px" },
   ".cm-activeLine": { backgroundColor: "var(--active-line)" },
   ".cm-activeLineGutter": {
     backgroundColor: "var(--active-line)",
@@ -86,53 +96,54 @@ const highlight = HighlightStyle.define([
   { tag: tags.punctuation, color: "var(--fg-muted)" },
 ]);
 
-export interface EditorOptions {
-  readonly parent: HTMLElement;
-  readonly doc: string;
-  /** onChange fires for every document edit, undebounced. */
-  readonly onChange: (doc: string) => void;
-}
-
-export function createEditor(options: EditorOptions): EditorView {
-  const media = window.matchMedia(darkQuery);
-
+/**
+ * createEditorState builds the state of one file. Each file keeps its own, so
+ * switching tabs keeps its cursor, scroll position and undo history — the view
+ * they're shown in is shared and holds only whichever one is on screen.
+ *
+ * onChange fires for every document edit, undebounced.
+ */
+export function createEditorState(
+  doc: string,
+  onChange: (doc: string) => void,
+): EditorState {
   const extensions: Extension[] = [
     basicSetup,
     keymap.of([indentWithTab]),
     graphql,
     syntaxHighlighting(highlight),
-    lintGutter(),
-    themeConfig.of(buildTheme(media.matches)),
+    themeConfig.of(buildTheme(theme.dark())),
     EditorView.lineWrapping,
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
-        options.onChange(update.state.doc.toString());
+        onChange(update.state.doc.toString());
       }
     }),
   ];
+  return EditorState.create({ doc, extensions });
+}
 
-  const view = new EditorView({
-    parent: options.parent,
-    state: EditorState.create({ doc: options.doc, extensions }),
-  });
+export function createEditor(
+  parent: HTMLElement,
+  state: EditorState,
+): EditorView {
+  const view = new EditorView({ parent, state });
 
-  // The stylesheet follows the system scheme on its own; this keeps the parts
-  // CodeMirror styles itself in step when the scheme changes while the page is
-  // open.
-  media.addEventListener("change", (event) => {
-    view.dispatch({
-      effects: themeConfig.reconfigure(buildTheme(event.matches)),
-    });
-  });
+  // The stylesheet follows the palette on its own; this keeps the parts
+  // CodeMirror styles itself in step when it changes while the page is open.
+  theme.onChange(() => syncTheme(view));
 
   return view;
 }
 
-/** setDocument replaces the whole document, e.g. to restore the example. */
-export function setDocument(view: EditorView, doc: string): void {
+/**
+ * syncTheme reconfigures the view for the palette in force now. A state
+ * carries the theme it was created with, so this is what a state built before
+ * the last switch needs when it's swapped in.
+ */
+export function syncTheme(view: EditorView): void {
   view.dispatch({
-    changes: { from: 0, to: view.state.doc.length, insert: doc },
-    selection: { anchor: Math.min(doc.length, view.state.doc.length) },
+    effects: themeConfig.reconfigure(buildTheme(theme.dark())),
   });
 }
 

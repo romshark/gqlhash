@@ -7,6 +7,13 @@ import wasmURL from "./wasm/gqlhash.wasm?url";
 export interface Option {
   readonly id: string;
   readonly label: string;
+  /**
+   * What the hash function is worth to an allowlist, which rests on one
+   * property: collision resistance. The value is the label as well — one
+   * vocabulary, no table to keep in step. Set on the hash functions, absent
+   * on the output formats. See hashFunctionList in ../wasm/main.go.
+   */
+  readonly kind?: "resistant" | "broken" | "checksum";
 }
 
 export interface HashOptions {

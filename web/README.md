@@ -1,16 +1,11 @@
 # gqlhash web
 
-A static, CDN-hostable page that runs [gqlhash](../) in the browser. Two editors
-sit side by side, each with its own hash, and a verdict above them says whether
-the two documents hash alike. Both are recomputed 200 ms after you stop typing,
-and immediately whenever an option changes.
-
-The editors start on the same document written two ways, so the page opens on
-the point it's making: the text differs, the hash doesn't.
-
-There's no backend. The Go hasher is compiled to WebAssembly and everything —
-parsing, hashing, encoding — happens on the client, so no document ever leaves
-the browser.
+A static, CDN-hostable playground for [gqlhash](../): two tabbed editors — the
+operations a client sends on the left, the
+[gqlhash-proxy](../cmd/gqlhash-proxy/README.md) allowlist directory on the right
+— and the verdict the proxy would give. There's no backend: the Go hasher is
+compiled to WebAssembly, so nothing leaves the browser. State is kept in
+`localStorage`.
 
 ## Requirements
 
@@ -24,16 +19,6 @@ pnpm install
 pnpm dev
 ```
 
-`pnpm dev` compiles the WebAssembly binary and then starts Vite with live
-reloading. TypeScript and CSS edits are swapped in without a page reload — the
-stylesheet is linked from [index.html](index.html) rather than imported from
-`main.ts`, which keeps it render-blocking so the splash screen never paints
-unstyled, and Vite still hot-updates the link. Go edits are covered too: the
-`go-wasm-watch` plugin in
-[vite.config.ts](vite.config.ts) watches [wasm/](wasm/) and the packages of the
-parent module it imports, rebuilds the binary, and the page reloads once the
-build finishes. Compile errors are printed to the terminal running `pnpm dev`.
-
 | Command          | Does                                                   |
 | ---------------- | ------------------------------------------------------ |
 | `pnpm dev`       | Build the WASM binary, then serve with hot reloading    |
@@ -44,80 +29,17 @@ build finishes. Compile errors are printed to the terminal running `pnpm dev`.
 | `pnpm lint`      | Report formatting, lint and import-order problems       |
 | `pnpm lint:fix`  | Fix everything above that's safely fixable             |
 | `pnpm format`    | Format only, no lint rules                             |
-| `pnpm ci`        | What CI runs: `biome ci .` plus the typecheck          |
+| `pnpm run ci`    | What CI checks: `biome ci .` plus the typecheck        |
 
-## Linting
+Go edits are covered by hot reloading too: the `go-wasm-watch` plugin in
+[vite.config.ts](vite.config.ts) watches [wasm/](wasm/) and the parent-module
+packages it imports, rebuilds, and reloads the page. Compile errors go to the
+terminal running `pnpm dev`.
 
-[Biome](https://biomejs.dev) handles formatting, lint rules and import sorting
-for the TypeScript, CSS and JSON in here; [biome.json](biome.json) is the
-config, on the recommended rule set. It reads `.gitignore`, so the generated
-`src/wasm/` and `dist/` are skipped, and `src/vendor/wasm_exec.js` is excluded
-explicitly because it ships with the Go toolchain and isn't ours to reformat.
-
-CI runs `biome ci .`, which never writes; use `pnpm lint:fix` locally. Go code
-is unaffected — use `gofmt` and `go vet` from the repository root as usual.
-
-## Deployment
-
-`pnpm build` writes a fully self-contained `dist/` that can be served from any
-static host or CDN — including a GitHub Pages project site, since all asset URLs
-are relative (`base: "./"` in [vite.config.ts](vite.config.ts)).
-
-[../.github/workflows/pages.yml](../.github/workflows/pages.yml) builds and
-publishes it on every push to `main` that touches the site or the hasher. It
-needs Pages enabled for the repository with "GitHub Actions" as the source
-(Settings → Pages → Build and deployment).
-
-The WebAssembly binary is ~3.3 MB, or ~950 KB over the wire once the host
-compresses it. Make sure the host serves `.wasm` with `Content-Encoding: gzip`
-or `br`; GitHub Pages does this by default. A splash screen reports the download
-progress while it loads.
-
-## Icons and the manifest
-
-`public/` holds the icons and a
-[web app manifest](public/manifest.webmanifest), so the page can be installed
-and pinned with a real icon rather than a default one:
-
-| File                                     | Used for                                        |
-| ---------------------------------------- | ----------------------------------------------- |
-| `favicon.svg`                            | Tab icon; follows light/dark on its own          |
-| `favicon.ico` (16/32/48)                 | Fallback for browsers without SVG icon support   |
-| `icon.svg`, `icon-192/512.png`            | Manifest icons for unmasked contexts            |
-| `icon-maskable.svg`, `-512.png`           | Manifest icons for platforms that apply a mask  |
-| `apple-touch-icon.png` (180)             | iOS home screen                                 |
-
-The three SVGs are the source of truth and their glyph is drawn as strokes, not
-as a `#` character, so there's no font to substitute when they're rasterized.
-The favicon carries its own `prefers-color-scheme` rule — brand magenta on a
-light tab strip, the lighter tint on a dark one — and `<meta name="theme-color">`
-is declared twice with `media` so the browser UI is tinted per scheme too.
-
-Regenerate the raster sizes with [scripts/build-icons.sh](scripts/build-icons.sh)
-after editing an SVG:
-
-```sh
-brew install librsvg imagemagick
-./scripts/build-icons.sh
-```
-
-The outputs are committed, so neither CI nor `pnpm build` needs a rasterizer.
-
-Note that this is installable metadata only — there's no service worker, so the
-page doesn't work offline and browsers that require one won't offer to install
-it. Adding [vite-plugin-pwa](https://vite-pwa-org.netlify.app/) would cover
-that; precaching the ~950 KB WebAssembly binary is the main thing it would buy.
-
-## Colors
-
-The palette is the GraphQL brand magenta (`#e10098`) on a mostly white base,
-with a dark counterpart that swaps in a lighter tint of the same hue. Which one
-you get follows the operating system through `prefers-color-scheme`; there's no
-toggle. Every color is a CSS variable declared in
-[src/style.css](src/style.css), including the ones CodeMirror uses, so the
-editor stays in step — the accent is deliberately split into `--accent` (the
-brand color as published, for the wordmark, caret and focus rings) and
-`--accent-text` (darkened enough to read as body text on white).
+[Biome](https://biomejs.dev) handles formatting, linting and import sorting;
+[biome.json](biome.json) excludes the vendored files, none of which are ours to
+reformat. Go code is unaffected — `gofmt` and `go vet` from the repository root
+as usual.
 
 ## Layout
 
@@ -127,39 +49,83 @@ brand color as published, for the wordmark, caret and focus rings) and
 | `src/gqlhash.ts`           | Loads the binary and wraps that global in a typed API  |
 | `src/editor.ts`            | CodeMirror setup, theme and error markers              |
 | `src/graphql-language.ts`  | GraphQL syntax highlighting for CodeMirror             |
-| `src/main.ts`              | Splash screen, controls, the two panes and the verdict |
-| `src/example.ts`           | The two documents the editors start with               |
+| `src/pane.ts`              | One tabbed editor: the files, their tabs and the swap  |
+| `src/main.ts`              | Splash screen, controls, the lookup and the verdict    |
+| `src/example.ts`           | The files the two panes start with                     |
+| `src/storage.ts`           | Reading and writing them in the browser                |
+| `src/style.css`            | The palette, the Morpheus theming, the frame           |
+| `src/vendor/morpheus/`     | The vendored UI kit, its own README beside it          |
+| `public/icons/`            | The SVGs `<neo-icon>` fetches                          |
 
 `src/wasm/gqlhash.wasm` and `src/vendor/wasm_exec.js` are build outputs of
 [scripts/build-wasm.sh](scripts/build-wasm.sh) and aren't checked in.
 `wasm_exec.js` is copied from the Go toolchain in use, because it has to match
 the compiler that produced the binary.
 
-## The options
+The controls mirror the flags of `cmd/gqlhash` (`-hash`, `-format`, `-ignore`)
+and apply to both panes at once. The lists of hash functions and formats come
+from the Go side at runtime, so the page can't drift out of sync with what the
+library supports.
 
-The controls mirror the flags of `cmd/gqlhash`:
+## Morpheus
 
-- **Hash function** — `-hash`, all twelve the CLI supports.
-- **Output format** — `-format`: hex, base32, base64 or base64url.
-- **`-ignore=inputs`** — hash argument and default values as if they weren't
-  there, keeping only the variable signature.
-- **`-ignore=variables`** — ignore variable definitions and usages entirely.
-  This implies `-ignore=inputs`, so that box is checked and disabled while it's
-  on, and your own setting comes back when you switch it off.
+The frame is built from [Morpheus](https://github.com/romshark/morpheus), a web
+component UI kit, vendored rather than installed: two files in
+[src/vendor/morpheus](src/vendor/morpheus), where
+[that README](src/vendor/morpheus/README.md) records the version, the commit and
+what to copy to update. `bundle.js` is imported for its side effect from
+`main.ts`; `morpheus.css` is `@import`ed at the top of
+[src/style.css](src/style.css), so this page's rules can override it.
 
-The list of hash functions and formats comes from the Go side at runtime, so the
-page can't drift out of sync with what the library actually supports.
+Two things the kit leaves to the user: the palette (`style.css` sets both the
+role tokens and the `--neo-*` layer its components read) and the icons
+(`<neo-icon>` fetches `<name>.svg` from `--neo-icon-base`, so the Lucide SVGs
+the page uses are in [public/icons](public/icons)).
 
-## Syntax errors
+## Colors
 
-A document that doesn't parse shows the parser's message next to the hash, in
-place of a hash.
+The palette is Rhodamine — `#E10098`, the one color the
+[GraphQL brand guidelines](https://graphql.org/brand/) publish — split across
+three tokens in [src/style.css](src/style.css): `--brand` (Rhodamine in both
+schemes, wordmark and favicon only), `--accent` (interface accent, lightened in
+dark where 4.1:1 isn't enough) and `--accent-text` (body text, 4.5:1 either
+way). Every color, including CodeMirror's, is a variable in the same block.
 
-Whether the editor also points at the offending spot depends on what the parser
-reports. If the error carries an offset, line and column, the gutter gets an
-error marker and the token is underlined; the version this builds against
-returns the message alone, so no marker is shown. That's deliberate — marking an
-arbitrary line would claim the problem is somewhere it isn't, which is worse
-than marking nothing. The page needs no change to take advantage of positions
-once the parser reports them: `offset`, `line` and `column` are already optional
-fields on the result.
+[src/theme.ts](src/theme.ts) puts `dark` or `light` on `<html>` — resolving
+"follow the system" itself, since a media query can't be overruled by a choice —
+and saves the choice under `gqlhash-theme`. An inline script in
+[index.html](index.html) reads that key before first paint to avoid a white
+flash; it and `theme.ts` agree on the key and class names by hand.
+
+## Icons and the manifest
+
+`public/` holds the app icons and a
+[web app manifest](public/manifest.webmanifest): `favicon.svg` and
+`favicon.ico`, `icon.svg` with its 192/512 PNGs, a maskable pair, and
+`apple-touch-icon.png`. The three SVGs are the source of truth and draw their
+glyph as strokes, not a `#` character, so there's no font to substitute when
+they're rasterized.
+
+Regenerate the raster sizes after editing an SVG; the outputs are committed, so
+neither CI nor `pnpm build` needs a rasterizer:
+
+```sh
+brew install librsvg imagemagick
+./scripts/build-icons.sh
+```
+
+This is installable metadata only — there's no service worker, so the page
+doesn't work offline.
+
+## Deployment
+
+`pnpm build` writes a self-contained `dist/` servable from any static host or
+CDN, including a GitHub Pages project site, since all asset URLs are relative
+(`base: "./"` in [vite.config.ts](vite.config.ts)).
+[../.github/workflows/pages.yml](../.github/workflows/pages.yml) publishes it on
+every push to `main` touching the site or the hasher; it needs Pages enabled with
+"GitHub Actions" as the source.
+
+The WebAssembly binary is ~3.3 MB, or ~950 KB over the wire — make sure the host
+serves `.wasm` with `Content-Encoding: gzip` or `br`. GitHub Pages does by
+default.
