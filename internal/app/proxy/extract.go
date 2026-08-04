@@ -22,6 +22,16 @@ var (
 	// errBatchTooLarge is a batch carrying more documents than -server.max-batch allows.
 	errBatchTooLarge = errors.New("too many documents in the batch")
 
+	// errBatchElementNoDocument is an element of a batch that carries no document.
+	// The cap counts documents, so an element without one is neither counted
+	// against it nor looked up in the allowlist: a batch of one allowed document
+	// and twenty thousand numbers would otherwise reach the API whole.
+	//
+	// Document rather than query in the message: the member is named query,
+	// but it carries the document whatever operation that runs, so a client
+	// told it carried no query would read it as one told to send no mutation.
+	errBatchElementNoDocument = errors.New("a batch element carries no document")
+
 	errInvalidEscape  = errors.New("invalid escape sequence in query")
 	errDuplicateQuery = errors.New("duplicate query parameter")
 	errQueryCollision = errors.New(`naming collision on field "query"`)
@@ -49,6 +59,11 @@ type span struct{ start, end int }
 // [errBatchTooLarge] and the scan stops there, so a body holding tens of
 // thousands of documents costs the cap and not the body.
 //
+// Every element of a batch has to carry a document of its own,
+// or it's [errBatchElementNoDocument] and the scan stops there too.
+// The cap counts documents, so an element carrying none is one the cap never sees,
+// see that error.
+//
 // A request object naming the query member twice is [errQueryCollision] rather
 // than two documents: which one an API runs is the API's business,
 // and checking one while the API runs the other allows a document nobody read.
@@ -62,10 +77,13 @@ func extractJSON(dst []span, body []byte, maxBatch int) ([]span, error) {
 	// One word, since the callback runs per member and every variable it closes
 	// over is a load and a store there.
 	const (
-		flagFound     = 1 << iota // A document has been found.
-		flagSeen                  // This request object names the member.
-		flagCollision             // It names it twice.
-		flagTooMany               // The batch carries more than maxBatch.
+		flagFound        = 1 << iota // A document has been found.
+		flagSeen                     // This request object names the member.
+		flagCollision                // It names it twice.
+		flagTooMany                  // The batch carries more than maxBatch.
+		flagInElement                // An element of a batch has been entered.
+		flagElementFound             // That element carries a document.
+		flagElementEmpty             // One carried none.
 	)
 	var flags uint8
 
@@ -80,9 +98,15 @@ func extractJSON(dst []span, body []byte, maxBatch int) ([]span, error) {
 			}
 			return false
 		}
-		// Each request of a batch is named once of its own.
+		// Each request of a batch is named once of its own, and carries one of its own:
+		// the element that just ended is checked as the next begins,
+		// and the last one after the scan.
 		if level == 2 && i.Level() == 1 {
-			flags &^= flagSeen
+			if flags&flagInElement != 0 && flags&flagElementFound == 0 {
+				flags |= flagElementEmpty
+				return true
+			}
+			flags = flags&^(flagSeen|flagElementFound) | flagInElement
 			return false
 		}
 		if i.Level() != level || !isQueryKey(i.Key()) {
@@ -101,7 +125,7 @@ func extractJSON(dst []span, body []byte, maxBatch int) ([]span, error) {
 		}
 		// ValueIndex and ValueIndexEnd include the quotes.
 		dst = append(dst, span{i.ValueIndex() + 1, i.ValueIndexEnd() - 1})
-		flags |= flagFound
+		flags |= flagFound | flagElementFound
 		// One past the cap is enough to refuse, so the rest of the array is never
 		// read: a megabyte of documents costs what the cap allows plus one.
 		// Only within an array — a lone request object is one document whatever
@@ -116,16 +140,24 @@ func extractJSON(dst []span, body []byte, maxBatch int) ([]span, error) {
 	if errScan.IsErr() {
 		if errScan.Code == jscan.ErrorCodeCallback {
 			// The callback breaks for an unexpected batch, for a collision,
-			// and for a batch past the cap.
+			// for a batch past the cap, and for an element carrying no document.
 			switch {
 			case flags&flagCollision != 0:
 				return dst, errQueryCollision
 			case flags&flagTooMany != 0:
 				return dst, errBatchTooLarge
+			case flags&flagElementEmpty != 0:
+				return dst, errBatchElementNoDocument
 			}
 			return dst, errBatch
 		}
 		return dst, errMalformedJSON
+	}
+	// The last element of a batch has no element after it to be checked by,
+	// so it's checked here. An empty array is no element at all and carries no
+	// document either, which the next line answers.
+	if flags&flagInElement != 0 && flags&flagElementFound == 0 {
+		return dst, errBatchElementNoDocument
 	}
 	if flags&flagFound == 0 {
 		return dst, errNoQuery

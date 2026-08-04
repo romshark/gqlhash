@@ -57,7 +57,56 @@ func TestExtractJSON(t *testing.T) {
 	f(t, errBatch, nil, `[{"query":"{a}"},{"query":"{b}"}]`, noBatch)
 	f(t, nil, []string{"{a}", "{b}"}, `[{"query":"{a}"},{"query":"{b}"}]`, inBatch)
 	f(t, nil, []string{"{a}"}, `{"query":"{a}"}`, inBatch)
-	f(t, errNoQuery, nil, `[{"variables":{}}]`, inBatch)
+	f(t, errBatchElementNoDocument, nil, `[{"variables":{}}]`, inBatch)
+}
+
+// TestExtractJSONBatchElementWithoutQuery covers the rule that every element of a
+// batch carries a document of its own.
+//
+// The cap counts documents, so an element carrying none is one it never sees:
+// without this rule a single allowed document lets any number of elements ride
+// along beside it — refused neither by the cap nor by the allowlist,
+// and parsed and answered by the API all the same:
+//
+//	[{"query":"<allowed>"}, 7, 7, … ×20000]
+//
+// So an element with no document is refused, whatever else the batch carries,
+// and the scan stops at the first one.
+func TestExtractJSONBatchElementWithoutQuery(t *testing.T) {
+	f := func(t *testing.T, expectErr error, body string) {
+		t.Helper()
+		if _, err := extractJSON(nil, []byte(body), inBatch); !errors.Is(err, expectErr) {
+			t.Errorf("expected err %v; received %v; body: %s", expectErr, err, body)
+		}
+	}
+
+	const allowed = `{"query":"{a}"}`
+
+	// Every shape an element with no document takes, in every position.
+	for _, element := range []string{
+		`7`, `{}`, `null`, `"text"`, `[]`, `true`,
+		`{"variables":{}}`, `{"query":null}`, `{"query":42}`, `{"operationName":"Q"}`,
+	} {
+		f(t, errBatchElementNoDocument, `[`+allowed+`,`+element+`]`)
+		f(t, errBatchElementNoDocument, `[`+element+`,`+allowed+`]`)
+		f(t, errBatchElementNoDocument, `[`+element+`]`)
+	}
+
+	// The element that measured the hole: one document and 20,000 elements past it.
+	junk := strings.Repeat(",7", 20_000)
+	f(t, errBatchElementNoDocument, `[`+allowed+junk+`]`)
+
+	// An empty array carries no document at all, which is the other error.
+	f(t, errNoQuery, `[]`)
+
+	// A batch of documents is unaffected, and so is a lone request object.
+	f(t, nil, `[`+allowed+`,`+allowed+`]`)
+	f(t, nil, allowed)
+
+	// A nested object naming query is no element of the batch:
+	// the rule reads the members of an element, not everything under it.
+	f(t, nil, `[{"query":"{a}","variables":{"query":"nope"}}]`)
+	f(t, errBatchElementNoDocument, `[{"variables":{"query":"nope"}}]`)
 }
 
 // TestExtractJSONBatchCap covers -server.max-batch:

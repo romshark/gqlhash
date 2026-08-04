@@ -377,6 +377,67 @@ func TestMaxBatch(t *testing.T) {
 	})
 }
 
+// TestBatchElementWithoutDocument covers the rule that every element of a batch
+// carries a document of its own.
+//
+// -server.max-batch counts documents, so an element carrying none is one it
+// never sees: without this rule, one allowed document lets any number of
+// elements ride along beside it — past the cap, never hashed, never looked up,
+// and forwarded to the API to be parsed and answered like the rest of the batch.
+// A cap that a client gets past by writing `7` bounds nothing.
+//
+// Refused as a malformed request, which is what it is: an element of a batched
+// GraphQL request that carries no query member is no GraphQL request.
+func TestBatchElementWithoutDocument(t *testing.T) {
+	each(t, func(t *testing.T, tgt target) {
+		e := newEnv(t, tgt, []string{allowedDoc}, "-server.max-batch", "4")
+
+		// Every shape an element with no document takes, before and after
+		// an allowed one: neither position is read past.
+		for _, element := range []string{
+			`7`, `{}`, `null`, `"text"`, `[]`, `true`,
+			`{"variables":{}}`, `{"query":null}`, `{"operationName":"GetUser"}`,
+		} {
+			for _, body := range []string{
+				"[" + docAllowed + "," + element + "]",
+				"[" + element + "," + docAllowed + "]",
+				"[" + element + "]",
+			} {
+				code, answer := post(t, e.server, body)
+				if code != http.StatusBadRequest {
+					t.Errorf("expected %s refused; received %d: %s", body, code, answer)
+				}
+				if !strings.Contains(answer, "BAD_REQUEST") {
+					t.Errorf("expected a malformed-request body for %s; received %s",
+						body, answer)
+				}
+			}
+		}
+
+		// The shape that measured the hole: one allowed document and twenty
+		// thousand elements past the cap, none of them carrying one.
+		big := docAllowed + strings.Repeat(",7", 20_000)
+		if code, answer := post(t, e.server, "["+big+"]"); code != http.StatusBadRequest {
+			t.Errorf("expected a batch of junk refused; received %d: %s", code, answer)
+		}
+
+		// Nothing of any of them reached the API.
+		if n := e.api.count(); n != 0 {
+			t.Errorf("a batch element with no document must not reach upstream; "+
+				"the API saw %d requests", n)
+		}
+
+		// A batch of documents is unaffected, and so is a lone request object.
+		if code, answer := post(t, e.server,
+			"["+docAllowed+","+docAllowed+"]"); code != http.StatusOK {
+			t.Errorf("expected a batch of two served; received %d: %s", code, answer)
+		}
+		if code, answer := post(t, e.server, docAllowed); code != http.StatusOK {
+			t.Errorf("expected an ordinary request served; received %d: %s", code, answer)
+		}
+	})
+}
+
 // TestNamedOperations covers documents holding more than one named operation,
 // where the request picks which to run with operationName.
 //

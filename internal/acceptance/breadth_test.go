@@ -57,14 +57,14 @@ func TestBatchShapes(t *testing.T) {
 				code, answer)
 		}
 
-		// Where the rule falls: every document a batch carries has to be
-		// allowed, and an element carrying none carries none. So an allowed
-		// document beside a number is served, where that number alone is
-		// refused for naming no document. Nothing unhashed reaches the API
-		// either way, but the two rows read oddly together.
+		// Where the rule falls: every element of a batch has to carry a document
+		// of its own, so an allowed document beside a number is refused the same
+		// way that number alone is. The rows above say it of a batch of one;
+		// this says it of the position the cap made attractive, where an element
+		// carrying no document is one the cap never counts.
 		if code, answer := post(t, e.server,
-			`[{"query":"`+allowedText+`"},7]`); code != http.StatusOK {
-			t.Errorf("expected the element carrying no document ignored;"+
+			`[{"query":"`+allowedText+`"},7]`); code != http.StatusBadRequest {
+			t.Errorf("expected the element carrying no document refused;"+
 				" received %d: %s", code, answer)
 		}
 		// And an element that does carry one is checked like any other.

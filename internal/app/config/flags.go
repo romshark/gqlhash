@@ -290,7 +290,8 @@ func ParseProxyFor(
 			"Largest request body to accept, in bytes")
 		fMaxBatch = cli.Int("server.max-batch", 0,
 			"How many documents a batched request may carry, every one of which\n"+
-				"must be allowed. 0 refuses a batch outright, which is the default:\n"+
+				"must be allowed, and every element of which must carry one.\n"+
+				"0 refuses a batch outright, which is the default:\n"+
 				"batching turns one request into as many operations as it holds,\n"+
 				"and -server.max-body bounds that in bytes rather than in documents.")
 		fOpaqueErrors = cli.Bool("opaque-errors", false,
