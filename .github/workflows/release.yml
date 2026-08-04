@@ -29,3 +29,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The casks are pushed to romshark/homebrew-tools,
+          # another repository, which the job's own GITHUB_TOKEN cannot write to.
+          # A PAT with contents:write on that repository,
+          # as a repository secret of this one.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

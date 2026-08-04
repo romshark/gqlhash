@@ -89,9 +89,12 @@ homebrew_casks:
       accepted are now refused. Anything holding a stored hash has to rebuild it;
       -hash sha1 keeps what v1 printed. What changed:
       https://github.com/romshark/gqlhash/blob/main/MIGRATION.md
+    # The repository, not the tap. `brew tap romshark/tools` reaches this by
+    # Homebrew's own convention, which puts the homebrew- prefix back on;
+    # GoReleaser pushes over the API and needs the name the repository has.
     repository: &tap
       owner: romshark
-      name: tools
+      name: homebrew-tools
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
 
   - name: gqlhash-proxy
