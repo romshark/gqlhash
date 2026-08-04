@@ -2,7 +2,7 @@
 
 v2 changes the hash of some documents, refuses some documents v1 accepted, and renames most of the Go API. Read [Hashes](#hashes) before upgrading anything that stored one.
 
-The import path carries the major version, so nothing moves until you change it:
+The import path carries the major version, so v1 keeps working until you change it:
 
 ```go
 import "github.com/romshark/gqlhash/v2"
@@ -12,8 +12,8 @@ import "github.com/romshark/gqlhash/v2"
 go install github.com/romshark/gqlhash/v2/cmd/gqlhash@latest
 ```
 
-`gqlhash-proxy` is new in v2 — v1 shipped the hashing command alone — so nothing
-below is a migration step for it, only what to know if you start serving one:
+`gqlhash-proxy` is new in v2, so nothing below is a migration step for it — just
+what to know if you start running one:
 
 ```sh
 go install github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy@latest
@@ -23,21 +23,22 @@ go install github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy@latest
 
 **`gqlhash` hashes with SHA-256 by default, where v1 used SHA-1. Every hash the
 command prints without `-hash` therefore differs from v1.** Pass `-hash sha1` to
-keep what a v1 pipeline produced:
+keep what a v1 pipeline produced, for every document but the two the next
+section names:
 
 ```sh
 echo '{foo bar}' | gqlhash             # v2: SHA-256
 echo '{foo bar}' | gqlhash -hash sha1  # what v1 printed
 ```
 
-SHA-1 is broken, and `gqlhash-proxy` refuses it for that reason — a hash that
-decides whether a document may run needs collision resistance. The two commands
-now default to the same function, so a hash built with one matches the other.
-`sha1` and `md5` are still offered for a cache key or a bucket, where a collision
-costs a cache miss rather than an execution.
+SHA-1 is broken, so `gqlhash-proxy` refuses it: a hash that decides whether a
+document may run needs collision resistance. Both commands now default to
+SHA-256, so a hash built with one matches the other. `sha1` and `md5` are still
+there for cache keys, where a collision costs a cache miss, not an execution.
 
-**A document whose string values hold an escape sequence also hashes differently
-under v2, whichever function you name. Everything else hashes the same.**
+**Two kinds of document also hash differently under v2, whichever function you
+name: one whose string values hold an escape sequence, and one that writes a
+float. Everything else hashes the same.**
 
 v1 hashed a string as it was spelled; v2 hashes the value it stands for, so
 `"\u0041"` and `"A"` now agree with each other and neither agrees with v1.
@@ -50,6 +51,26 @@ v1 hashed a string as it was spelled; v2 hashes the value it stands for, so
 { f(a: """a\"""b""") }          # different hash under v2
 ```
 
+The float change fixes a collision. v1 hashed a float as its integer part and
+stopped: everything from the `.` or the `e` on went unread, so two floats with
+the same integer part got the same hash. v2 hashes the literal as written.
+
+```graphql
+{ f(rate: 1) }                  # same hash under v1 and v2 — integers are unaffected
+{ f(rate: 1.0) }                # different hash under v2
+{ f(rate: 1.9) }                # different hash under v2, and from 1.0 — v1 had these equal
+{ f(rate: 1e300) }              # different hash under v2, and from both — v1 had all three equal
+{ f(rate: 19.7) }               # different hash under v2, but v1 already told it from 1.x
+```
+
+In v1 that let an allowlist admit documents nobody registered: an entry for
+`rate(limit: 1.0)` also admitted `1.9` and `1e300`. v2 admits only the literal
+that was registered.
+
+So the upgrade is worth making even if you stored no hash. And `-hash sha1`
+does **not** reproduce v1 for a document with a float: same function, different
+bytes fed to it.
+
 What that means where a hash was kept:
 
 - **An allowlist directory needs nothing.** `gqlhash-proxy` hashes the `.graphql`
@@ -60,7 +81,8 @@ What that means where a hash was kept:
   Rehash the documents with v2 before serving with it, or the entries stop
   matching what clients send. Rebuilding under the new default is the moment to
   leave SHA-1 behind; `-hash sha1` keeps the old entries valid where that's not
-  possible yet.
+  possible yet — but only for documents with neither an escape sequence nor a
+  float.
 
 Nothing warns about this. A hash that no longer matches reads as a document
 that isn't allowed.
@@ -76,9 +98,8 @@ hash into one that's refused:
 | `query Q($x: Int = $y) { f }` | a variable where the grammar asks for a constant, `ErrUnexpectedVariable` |
 | nesting past 128 levels | `ErrTooDeep`, see `-depth-limit` |
 
-The depth limit is new and on by default. It's past what a document written for
-an API reaches, but a generated or deeply nested one may need `-depth-limit`
-raised.
+The depth limit is new and on by default. Hand-written documents don't reach it;
+generated ones may need `-depth-limit` raised.
 
 In the proxy this shows up as a **skipped allowlist entry**, logged at startup and on reload, not as a failure to start. Read the reload output — `POST /reload` answers with `skipped.errors` naming every file left out.
 
@@ -87,15 +108,15 @@ In the proxy this shows up as a **skipped allowlist entry**, logged at startup a
 Everything v1 took still works and means the same thing. One thing it writes differs:
 
 **The hash ends with a newline.** v1 wrote the hash and nothing after it, so
-`gqlhash > hash.txt` produced a file of no lines: `read h < hash.txt` handed the hash
-over and reported failure, a `while read` over it ran no iteration, and two hashes
-appended to one file ran together. v2 writes the line, as `shasum`, `md5`,
-`git hash-object` and `openssl dgst` do.
+`gqlhash > hash.txt` had no line terminator: `read h < hash.txt` set the variable
+but returned failure, `while read` ran no iteration, and two hashes appended to
+one file ran together. v2 writes the newline, like `shasum`, `md5`,
+`git hash-object` and `openssl dgst`.
 
-`$(gqlhash …)` is unaffected — command substitution strips trailing newlines — and so is
-anything comparing the output as a string. What needs the newline added is a comparison
-of the bytes: a golden file, or `gqlhash | cmp - expected`. `-version` is a line too,
-and carries the copyright and the licence under it.
+`$(gqlhash …)` is unaffected: command substitution strips trailing newlines. So is
+any string comparison. Byte comparisons need the newline added: a golden file, or
+`gqlhash | cmp - expected`. `-version` ends with a newline too, and prints the
+copyright and licence under it.
 
 What's new:
 
@@ -148,7 +169,7 @@ if !equal { /* differ */ }
 if errors.Is(err.Err, gqlhash.ErrTooDeep) { /* ... */ }
 ```
 
-[`Position`](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Position) turns `Result.ErrOffset` into a line and a column where a message needs one — v1 carried them in the error, v2 computes them only where they're printed.
+[`Position`](https://pkg.go.dev/github.com/romshark/gqlhash/v2#Position) turns `Result.ErrOffset` into a line and a column. v1 carried them in every error; v2 computes them only where they're printed.
 
 There are five more sentinels to match on: `ErrUnexpectedVariable`, `ErrInvalidEscape`, `ErrMalformedNumber`, `ErrMalformedUTF8` and `ErrUnescapedControlChar`. Each wraps `ErrUnexpectedToken`, so code matching only that one keeps working.
 
