@@ -143,7 +143,7 @@ func TestCLIRejectsArguments(t *testing.T) {
 				"must be at least -server.read-header-timeout",
 			},
 
-			// A duration below zero, on each of the four that take one.
+			// A duration below zero, on each of the five that take one.
 			// Zero leaves a timeout off; a negative one is a value nobody meant,
 			// and accepting it would leave the timeout off just the same.
 			{
@@ -161,6 +161,13 @@ func TestCLIRejectsArguments(t *testing.T) {
 			{
 				"a negative idle timeout",
 				with("-server.idle-timeout", "-1s"), "must be 0 or more",
+			},
+			// The one where 0 doesn't mean "off" either: a shutdown waits that
+			// long for the requests in flight, so both 0 and a negative value
+			// abandon them.
+			{
+				"a negative shutdown timeout",
+				with("-server.shutdown-timeout", "-1s"), "must be 0 or more",
 			},
 
 			// The TLS files, read at startup so a proxy never binds a port it

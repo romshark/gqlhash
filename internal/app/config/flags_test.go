@@ -368,6 +368,10 @@ func TestParseProxyErrors(t *testing.T) {
 	// A negative upstream timeout would reach the write timeout derived from it.
 	f(t, 2, "-upstream.timeout must be 0 or more",
 		ok, "http://x", "-allowlist", ".", "-upstream.timeout", "-5s")
+	// A negative shutdown timeout is the one 0 doesn't leave off:
+	// both wait for nothing, so a shutdown abandons the requests it was still serving.
+	f(t, 2, "-server.shutdown-timeout must be 0 or more",
+		ok, "http://x", "-allowlist", ".", "-server.shutdown-timeout", "-1s")
 
 	// A body limit below 1 refuses every POST, an empty one included.
 	f(t, 2, "-server.max-body must be 1 or more",

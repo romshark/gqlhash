@@ -551,6 +551,11 @@ func ParseProxyFor(
 		// Checked here rather than where it's used, so it can't reach the write
 		// timeout below and take that one negative with it.
 		{"upstream.timeout", cfg.Upstream.Timeout},
+		// The one timeout 0 doesn't leave off: it's how long a shutdown waits
+		// for the requests in flight, so 0 waits for nothing and a negative one
+		// is no different. A deployment that meant "wait as long as it takes"
+		// and wrote one of those abandons the answers it was serving.
+		{"server.shutdown-timeout", cfg.Server.ShutdownTimeout},
 	} {
 		if t.value < 0 {
 			_, _ = fmt.Fprintf(stderr, "-%s must be 0 or more\n", t.name)
