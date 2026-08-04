@@ -180,8 +180,10 @@ func TestQueryParamBesideBody(t *testing.T) {
 		for _, tc := range []struct{ name, rawQuery, body string }{
 			{"another document", "query=" + url.QueryEscape(rejectedText), docAllowed},
 			{"the same document", "query=" + url.QueryEscape(allowedText), docAllowed},
-			{"beside other parameters",
-				"operationName=GetUser&query=" + url.QueryEscape(rejectedText), docAllowed},
+			{
+				"beside other parameters",
+				"operationName=GetUser&query=" + url.QueryEscape(rejectedText), docAllowed,
+			},
 			{"empty", "query=", docAllowed},
 			{"percent encoded name", "quer%79=" + url.QueryEscape(rejectedText), docAllowed},
 		} {

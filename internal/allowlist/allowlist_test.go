@@ -427,7 +427,6 @@ func TestAllowlistInvalidDocument(t *testing.T) {
 	if !list.Allowed(hashOf(t, "{ foo }")) {
 		t.Error("expected the readable document to be allowed")
 	}
-
 }
 
 // nested returns a document whose selection sets nest depth deep.

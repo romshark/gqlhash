@@ -340,12 +340,18 @@ func TestServerSentEventsChecksTheDocument(t *testing.T) {
 			status  int
 			carrier string
 		}{
-			{"a document not on the list", docRejected,
-				http.StatusForbidden, "a POST body"},
-			{"no document at all", `{}`,
-				http.StatusBadRequest, "a POST body"},
-			{"a body that is no request", `not json`,
-				http.StatusBadRequest, "a POST body"},
+			{
+				"a document not on the list", docRejected,
+				http.StatusForbidden, "a POST body",
+			},
+			{
+				"no document at all", `{}`,
+				http.StatusBadRequest, "a POST body",
+			},
+			{
+				"a body that is no request", `not json`,
+				http.StatusBadRequest, "a POST body",
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				req, err := http.NewRequest(http.MethodPost,
@@ -614,8 +620,10 @@ func TestStreamTriggerIsTheClientsAccept(t *testing.T) {
 			stream bool
 		}{
 			{"naming the media type", "text/event-stream", true},
-			{"naming it among others",
-				"application/json, text/event-stream;q=0.9", true},
+			{
+				"naming it among others",
+				"application/json, text/event-stream;q=0.9", true,
+			},
 			// A wildcard is not an ask: every browser sends one, and reading it
 			// as one would put every request on the streaming path.
 			{"a wildcard", "*/*", false},

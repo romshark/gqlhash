@@ -38,16 +38,22 @@ func TestDecisionsAreCounted(t *testing.T) {
 			{"allowed", docAllowed, http.StatusOK},
 			{"rejected", docRejected, http.StatusForbidden},
 			{"malformed", `not json`, http.StatusBadRequest},
-			{"too_large", `{"query":"` + strings.Repeat("x", 8192) + `"}`,
-				http.StatusRequestEntityTooLarge},
+			{
+				"too_large", `{"query":"` + strings.Repeat("x", 8192) + `"}`,
+				http.StatusRequestEntityTooLarge,
+			},
 			{"ambiguous", `{"query":"` + allowedText + `","query":"` +
 				rejectedText + `"}`, http.StatusBadRequest},
-			{"too_deep", `{"query":` + strconv.Quote(tooDeep) + `}`,
-				http.StatusForbidden},
+			{
+				"too_deep", `{"query":` + strconv.Quote(tooDeep) + `}`,
+				http.StatusForbidden,
+			},
 			// One past -server.max-batch, which this run sets to 2.
-			{"batch_too_large", `[{"query":"` + allowedText + `"},{"query":"` +
-				allowedText + `"},{"query":"` + allowedText + `"}]`,
-				http.StatusRequestEntityTooLarge},
+			{
+				"batch_too_large", `[{"query":"` + allowedText + `"},{"query":"` +
+					allowedText + `"},{"query":"` + allowedText + `"}]`,
+				http.StatusRequestEntityTooLarge,
+			},
 		} {
 			if code, answer := post(t, e.server, tc.body); code != tc.expect {
 				t.Fatalf("%s: expected %d; received %d: %s",

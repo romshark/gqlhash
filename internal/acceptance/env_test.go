@@ -72,8 +72,10 @@ func TestEnvRejectsBadValues(t *testing.T) {
 			// A rule between two flags holds however they were given:
 			// this one is a write timeout under -upstream.timeout,
 			// which would cut every forward short.
-			{"a combination the flags refuse",
-				"GQLHASH_PROXY_SERVER_WRITE_TIMEOUT=5s"},
+			{
+				"a combination the flags refuse",
+				"GQLHASH_PROXY_SERVER_WRITE_TIMEOUT=5s",
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				code, _, stderr := runWithEnv(t, tgt, []string{tc.env}, args...)

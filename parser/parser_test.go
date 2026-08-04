@@ -1197,7 +1197,6 @@ func TestParseIgnoreVariables(t *testing.T) {
 
 // TestParseInputTypes asserts that every input type produces the same result.
 func TestParseInputTypes(t *testing.T) {
-
 	const input = `query Q($x: [Int!]! = [1, 2]) { f(a: "s") @d { b } }`
 	expect, err := parse(parser.Options{}, input)
 	if err.Err != nil {

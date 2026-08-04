@@ -334,8 +334,10 @@ func TestParseProxyErrors(t *testing.T) {
 
 	// The proxy takes only the collision-resistant functions, though the hashing
 	// form offers all twelve.
-	for _, weak := range []string{"sha1", "md5", "crc32", "crc64", "fnv", "fnv1a",
-		"xxh64"} {
+	for _, weak := range []string{
+		"sha1", "md5", "crc32", "crc64", "fnv", "fnv1a",
+		"xxh64",
+	} {
 		f(t, 2, "unsupported hash function", ok, "http://x", "-allowlist", ".",
 			"-hash", weak)
 		if config.ParseHashFunction(weak) == 0 {

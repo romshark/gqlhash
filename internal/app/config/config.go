@@ -45,39 +45,55 @@ var hashFunctions = []struct {
 	new func() hash.Hash
 }{
 	{name: "sha2", value: HashFunctionSHA2, proxySafe: true, new: sha256.New},
-	{name: "sha3", value: HashFunctionSHA3, proxySafe: true,
-		new: func() hash.Hash { return sha3.New512() }},
-	{name: "blake2b", value: HashFunctionBLAKE2B, proxySafe: true,
+	{
+		name: "sha3", value: HashFunctionSHA3, proxySafe: true,
+		new: func() hash.Hash { return sha3.New512() },
+	},
+	{
+		name: "blake2b", value: HashFunctionBLAKE2B, proxySafe: true,
 		new: func() hash.Hash {
 			h, err := blake2b.New256(nil)
 			if err != nil {
 				panic(fmt.Errorf("initializing blake2b hasher: %w", err))
 			}
 			return h
-		}},
-	{name: "blake2s", value: HashFunctionBLAKE2S, proxySafe: true,
+		},
+	},
+	{
+		name: "blake2s", value: HashFunctionBLAKE2S, proxySafe: true,
 		new: func() hash.Hash {
 			h, err := blake2s.New256(nil)
 			if err != nil {
 				panic(fmt.Errorf("initializing blake2s hasher: %w", err))
 			}
 			return h
-		}},
-	{name: "blake3", value: HashFunctionBLAKE3, proxySafe: true,
-		new: func() hash.Hash { return blake3.New() }},
+		},
+	},
+	{
+		name: "blake3", value: HashFunctionBLAKE3, proxySafe: true,
+		new: func() hash.Hash { return blake3.New() },
+	},
 	// Broken: offered for a cache key or a bucket, refused by the proxy.
 	{name: "sha1", value: HashFunctionSHA1, new: sha1.New},
 	{name: "md5", value: HashFunctionMD5, new: md5.New},
 	// Collidable by construction, so the same again and more so.
 	{name: "fnv", value: HashFunctionFNV, new: func() hash.Hash { return fnv.New64() }},
-	{name: "fnv1a", value: HashFunctionFNV1A,
-		new: func() hash.Hash { return fnv.New64a() }},
-	{name: "xxh64", value: HashFunctionXXH64,
-		new: func() hash.Hash { return xxhash.New() }},
-	{name: "crc32", value: HashFunctionCRC32,
-		new: func() hash.Hash { return crc32.NewIEEE() }},
-	{name: "crc64", value: HashFunctionCRC64,
-		new: func() hash.Hash { return crc64.New(crc64.MakeTable(crc64.ISO)) }},
+	{
+		name: "fnv1a", value: HashFunctionFNV1A,
+		new: func() hash.Hash { return fnv.New64a() },
+	},
+	{
+		name: "xxh64", value: HashFunctionXXH64,
+		new: func() hash.Hash { return xxhash.New() },
+	},
+	{
+		name: "crc32", value: HashFunctionCRC32,
+		new: func() hash.Hash { return crc32.NewIEEE() },
+	},
+	{
+		name: "crc64", value: HashFunctionCRC64,
+		new: func() hash.Hash { return crc64.New(crc64.MakeTable(crc64.ISO)) },
+	},
 }
 
 // ignoreModes and outputFormats are the same table for the other two flags.

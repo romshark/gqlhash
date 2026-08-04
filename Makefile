@@ -34,12 +34,32 @@ race:
 .PHONY: lint
 lint:
 	@echo "== lint =="
-	@files=$$(gofmt -l .); if [ -n "$$files" ]; then \
-		echo "gofmt wants:"; echo "$$files"; exit 1; fi
 	go vet ./...
 	@if command -v golangci-lint >/dev/null; then \
 		golangci-lint run ./...; \
-	else echo "golangci-lint not installed, skipping"; fi
+	else \
+		echo "golangci-lint not installed, checking the formatting only"; \
+		files=$$(gofmt -l .); if [ -n "$$files" ]; then \
+			echo "gofmt wants:"; echo "$$files"; exit 1; fi; \
+	fi
+
+# fmt rewrites the sources the way lint wants them. The formatter is gofumpt,
+# named in .golangci.yml so that the run in lint and the one in CI report what
+# this target would rewrite. gofmt is the fallback of lint, not of this:
+# it would leave the sources in a state lint still refuses.
+.PHONY: fmt
+fmt:
+	@echo "== fmt =="
+	@if command -v golangci-lint >/dev/null; then \
+		golangci-lint fmt ./...; \
+	elif command -v gofumpt >/dev/null; then \
+		gofumpt -l -w .; \
+	else \
+		echo "install one of:"; \
+		echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"; \
+		echo "  go install mvdan.cc/gofumpt@latest"; \
+		exit 1; \
+	fi
 
 # acceptance runs the suite against the commands of this repository,
 # or against another implementation of the same contract:

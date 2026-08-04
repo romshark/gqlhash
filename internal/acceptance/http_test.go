@@ -148,11 +148,15 @@ func TestGETQueryString(t *testing.T) {
 		}{
 			// A '+' is a space, which is what net/url writes for one.
 			{"percent encoded", "query=" + encoded, http.StatusOK},
-			{"spaces as +", "query=" + strings.ReplaceAll(encoded, "%20", "+"),
-				http.StatusOK},
-			{"the document beside other parameters",
+			{
+				"spaces as +", "query=" + strings.ReplaceAll(encoded, "%20", "+"),
+				http.StatusOK,
+			},
+			{
+				"the document beside other parameters",
 				"operationName=GetUser&query=" + encoded + "&variables=%7B%7D",
-				http.StatusOK},
+				http.StatusOK,
+			},
 			// No query parameter at all is a request carrying no document.
 			{"no query string", "", http.StatusBadRequest},
 			{"another parameter", "operationName=GetUser", http.StatusBadRequest},

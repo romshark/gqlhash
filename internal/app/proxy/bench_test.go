@@ -140,8 +140,10 @@ func BenchmarkProxyEndToEnd(b *testing.B) {
 	}{
 		{"direct", upstream.URL + "/graphql", benchBody, http.StatusOK},
 		{"proxy_allowed", proxy.URL + "/graphql", benchBody, http.StatusOK},
-		{"proxy_rejected", proxy.URL + "/graphql", benchBodyRejected,
-			http.StatusForbidden},
+		{
+			"proxy_rejected", proxy.URL + "/graphql", benchBodyRejected,
+			http.StatusForbidden,
+		},
 	} {
 		b.Run(c.name, func(b *testing.B) {
 			client := &http.Client{Transport: &http.Transport{

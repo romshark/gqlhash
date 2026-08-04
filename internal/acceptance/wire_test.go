@@ -324,12 +324,18 @@ func TestRequestTrailerDoesNotChangeTheDecision(t *testing.T) {
 		for _, tc := range []struct {
 			name, request, status string
 		}{
-			{"an allowed document with a declared trailer",
-				chunked(docAllowed, true), "HTTP/1.1 200"},
-			{"an allowed document with none",
-				chunked(docAllowed, false), "HTTP/1.1 200"},
-			{"a document that isn't, with a trailer",
-				chunked(docRejected, true), "HTTP/1.1 403"},
+			{
+				"an allowed document with a declared trailer",
+				chunked(docAllowed, true), "HTTP/1.1 200",
+			},
+			{
+				"an allowed document with none",
+				chunked(docAllowed, false), "HTTP/1.1 200",
+			},
+			{
+				"a document that isn't, with a trailer",
+				chunked(docRejected, true), "HTTP/1.1 403",
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				if got := raw(t, e.address, tc.request); !strings.HasPrefix(

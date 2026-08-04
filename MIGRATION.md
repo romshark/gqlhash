@@ -21,27 +21,18 @@ go install github.com/romshark/gqlhash/v2/cmd/gqlhash-proxy@latest
 
 ## Hashes
 
-**`gqlhash` hashes with SHA-256 by default, where v1 used SHA-1. Every hash the
-command prints without `-hash` therefore differs from v1.** Pass `-hash sha1` to
-keep what a v1 pipeline produced, for every document but the two the next
-section names:
+**`gqlhash` hashes with SHA-256 by default, where v1 used SHA-1. Every hash the command prints without `-hash` therefore differs from v1.** Pass `-hash sha1` to keep what a v1 pipeline produced, for every document but the two the next section names:
 
 ```sh
 echo '{foo bar}' | gqlhash             # v2: SHA-256
 echo '{foo bar}' | gqlhash -hash sha1  # what v1 printed
 ```
 
-SHA-1 is broken, so `gqlhash-proxy` refuses it: a hash that decides whether a
-document may run needs collision resistance. Both commands now default to
-SHA-256, so a hash built with one matches the other. `sha1` and `md5` are still
-there for cache keys, where a collision costs a cache miss, not an execution.
+SHA-1 is broken, so `gqlhash-proxy` refuses it: a hash that decides whether a document may run needs collision resistance. Both commands now default to SHA-256, so a hash built with one matches the other. `sha1` and `md5` are still there for cache keys, where a collision costs a cache miss, not an execution.
 
-**Two kinds of document also hash differently under v2, whichever function you
-name: one whose string values hold an escape sequence, and one that writes a
-float. Everything else hashes the same.**
+**Two kinds of document also hash differently under v2, whichever function you name: one whose string values hold an escape sequence, and one that writes a float.** Everything else hashes the same.
 
-v1 hashed a string as it was spelled; v2 hashes the value it stands for, so
-`"\u0041"` and `"A"` now agree with each other and neither agrees with v1.
+v1 hashed a string as it was spelled; v2 hashes the value it stands for, so `"\u0041"` and `"A"` now agree with each other and neither agrees with v1.
 
 ```graphql
 { user(id: 1) { name } }        # same hash under v1 and v2
@@ -51,9 +42,7 @@ v1 hashed a string as it was spelled; v2 hashes the value it stands for, so
 { f(a: """a\"""b""") }          # different hash under v2
 ```
 
-The float change fixes a collision. v1 hashed a float as its integer part and
-stopped: everything from the `.` or the `e` on went unread, so two floats with
-the same integer part got the same hash. v2 hashes the literal as written.
+The float change fixes a collision. v1 hashed a float as its integer part and stopped: everything from the `.` or the `e` on went unread, so two floats with the same integer part got the same hash. v2 hashes the literal as written.
 
 ```graphql
 { f(rate: 1) }                  # same hash under v1 and v2 — integers are unaffected
@@ -63,34 +52,20 @@ the same integer part got the same hash. v2 hashes the literal as written.
 { f(rate: 19.7) }               # different hash under v2, but v1 already told it from 1.x
 ```
 
-In v1 that let an allowlist admit documents nobody registered: an entry for
-`rate(limit: 1.0)` also admitted `1.9` and `1e300`. v2 admits only the literal
-that was registered.
+In v1 that let an allowlist admit documents nobody registered: an entry for `rate(limit: 1.0)` also admitted `1.9` and `1e300`. v2 admits only the literal that was registered.
 
-So the upgrade is worth making even if you stored no hash. And `-hash sha1`
-does **not** reproduce v1 for a document with a float: same function, different
-bytes fed to it.
+So the upgrade is worth making even if you stored no hash. And `-hash sha1` does **not** reproduce v1 for a document with a float: same function, different bytes fed to it.
 
 What that means where a hash was kept:
 
-- **An allowlist directory needs nothing.** `gqlhash-proxy` hashes the `.graphql`
-  files itself at startup, so its entries are always built with the version
-  that's running.
-- **A stored hash needs rebuilding**: a persisted query registry, a cache key
-  written to a shared cache, a hash committed to a repository for a CI check.
-  Rehash the documents with v2 before serving with it, or the entries stop
-  matching what clients send. Rebuilding under the new default is the moment to
-  leave SHA-1 behind; `-hash sha1` keeps the old entries valid where that's not
-  possible yet — but only for documents with neither an escape sequence nor a
-  float.
+- **An allowlist directory needs nothing.** `gqlhash-proxy` hashes the `.graphql` files itself at startup, so its entries are always built with the version that's running.
+- **A stored hash needs rebuilding**: a persisted query registry, a cache key written to a shared cache, a hash committed to a repository for a CI check. Rehash the documents with v2 before serving with it, or the entries stop matching what clients send. Rebuilding under the new default is the moment to leave SHA-1 behind; `-hash sha1` keeps the old entries valid where that's not possible yet — but only for documents with neither an escape sequence nor a float.
 
-Nothing warns about this. A hash that no longer matches reads as a document
-that isn't allowed.
+Nothing warns about this. A hash that no longer matches reads as a document that isn't allowed.
 
 ## Documents v1 accepted and v2 refuses
 
-v2 checks lexical rules v1 didn't. Three cases turn a document that used to
-hash into one that's refused:
+v2 checks lexical rules v1 didn't. Three cases turn a document that used to hash into one that's refused:
 
 | document | why v2 refuses it |
 | --- | --- |
@@ -98,8 +73,7 @@ hash into one that's refused:
 | `query Q($x: Int = $y) { f }` | a variable where the grammar asks for a constant, `ErrUnexpectedVariable` |
 | nesting past 128 levels | `ErrTooDeep`, see `-depth-limit` |
 
-The depth limit is new and on by default. Hand-written documents don't reach it;
-generated ones may need `-depth-limit` raised.
+The depth limit is new and on by default. Hand-written documents don't reach it; generated ones may need `-depth-limit` raised.
 
 In the proxy this shows up as a **skipped allowlist entry**, logged at startup and on reload, not as a failure to start. Read the reload output — `POST /reload` answers with `skipped.errors` naming every file left out.
 
@@ -107,16 +81,9 @@ In the proxy this shows up as a **skipped allowlist entry**, logged at startup a
 
 Everything v1 took still works and means the same thing. One thing it writes differs:
 
-**The hash ends with a newline.** v1 wrote the hash and nothing after it, so
-`gqlhash > hash.txt` had no line terminator: `read h < hash.txt` set the variable
-but returned failure, `while read` ran no iteration, and two hashes appended to
-one file ran together. v2 writes the newline, like `shasum`, `md5`,
-`git hash-object` and `openssl dgst`.
+**The hash ends with a newline.** v1 wrote the hash and nothing after it, so `gqlhash > hash.txt` had no line terminator: `read h < hash.txt` set the variable but returned failure, `while read` ran no iteration, and two hashes appended to one file ran together. v2 writes the newline, like `shasum`, `md5`, `git hash-object` and `openssl dgst`.
 
-`$(gqlhash …)` is unaffected: command substitution strips trailing newlines. So is
-any string comparison. Byte comparisons need the newline added: a golden file, or
-`gqlhash | cmp - expected`. `-version` ends with a newline too, and prints the
-copyright and licence under it.
+`$(gqlhash …)` is unaffected: command substitution strips trailing newlines. So is any string comparison. Byte comparisons need the newline added: a golden file, or `gqlhash | cmp - expected`. `-version` ends with a newline too, and prints the copyright and licence under it.
 
 What's new:
 

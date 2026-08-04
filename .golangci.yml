@@ -1,0 +1,16 @@
+# golangci-lint runs in CI (.github/workflows/golangci-lint.yml) and from the
+# lint target of the Makefile. The linters are the defaults; what this file adds
+# is the formatter.
+version: "2"
+
+# gofumpt is gofmt plus the rules gofmt was too conservative to take. `run`
+# reports what it would rewrite the same way it reports a linter finding,
+# so a source that isn't formatted fails the build; `make fmt` does the rewriting.
+formatters:
+  enable:
+    - gofumpt
+
+issues:
+  # Every gofumpt finding reads the same, and the default keeps three of a kind,
+  # so without this a run names three files and hides the rest.
+  max-same-issues: 0

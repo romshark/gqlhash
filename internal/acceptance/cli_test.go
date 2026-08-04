@@ -95,65 +95,106 @@ func TestCLIRejectsArguments(t *testing.T) {
 
 			// What a run can't be assembled without.
 			{"no upstream", []string{"-allowlist", dir}, "-upstream.url is required"},
-			{"no allowlist", []string{"-upstream.url", "http://api:4000/graphql"},
-				"-allowlist is required"},
-			{"a relative upstream",
+			{
+				"no allowlist",
+				[]string{"-upstream.url", "http://api:4000/graphql"},
+				"-allowlist is required",
+			},
+			{
+				"a relative upstream",
 				[]string{"-upstream.url", "api/graphql", "-allowlist", dir},
-				"is no absolute URL"},
-			{"no control address", with("-control.listen", ""),
-				"-control.listen must name an address"},
+				"is no absolute URL",
+			},
+			{
+				"no control address", with("-control.listen", ""),
+				"-control.listen must name an address",
+			},
 
 			// A value outside what the flag takes.
-			{"an ignore mode nobody has", with("-ignore", "bogus"),
-				"unsupported ignore mode"},
-			{"a log level nobody has", with("-log.level", "bogus"),
-				"unsupported log level"},
-			{"a negative lifetime", with("-upstream.max-conn-lifetime", "-1s"),
-				"must be 0 or more"},
+			{
+				"an ignore mode nobody has", with("-ignore", "bogus"),
+				"unsupported ignore mode",
+			},
+			{
+				"a log level nobody has", with("-log.level", "bogus"),
+				"unsupported log level",
+			},
+			{
+				"a negative lifetime", with("-upstream.max-conn-lifetime", "-1s"),
+				"must be 0 or more",
+			},
 
 			// Relations between flags, which each value alone satisfies.
-			{"a write timeout under the upstream one",
+			{
+				"a write timeout under the upstream one",
 				with("-server.write-timeout", "5s", "-upstream.timeout", "30s"),
-				"must be above -upstream.timeout"},
-			{"fewer idle connections than per host",
+				"must be above -upstream.timeout",
+			},
+			{
+				"fewer idle connections than per host",
 				with("-upstream.max-idle-conns", "1",
 					"-upstream.max-idle-conns-per-host", "64"),
-				"-upstream.max-idle-conns must be 0 or at least"},
-			{"a read timeout under the header one",
+				"-upstream.max-idle-conns must be 0 or at least",
+			},
+			{
+				"a read timeout under the header one",
 				with("-server.read-timeout", "1s",
 					"-server.read-header-timeout", "10s"),
-				"must be at least -server.read-header-timeout"},
+				"must be at least -server.read-header-timeout",
+			},
 
 			// A duration below zero, on each of the four that take one.
 			// Zero leaves a timeout off; a negative one is a value nobody meant,
 			// and accepting it would leave the timeout off just the same.
-			{"a negative read timeout",
-				with("-server.read-timeout", "-1s"), "must be 0 or more"},
-			{"a negative read header timeout",
-				with("-server.read-header-timeout", "-1s"), "must be 0 or more"},
-			{"a negative write timeout",
-				with("-server.write-timeout", "-1s"), "must be 0 or more"},
-			{"a negative idle timeout",
-				with("-server.idle-timeout", "-1s"), "must be 0 or more"},
+			{
+				"a negative read timeout",
+				with("-server.read-timeout", "-1s"), "must be 0 or more",
+			},
+			{
+				"a negative read header timeout",
+				with("-server.read-header-timeout", "-1s"), "must be 0 or more",
+			},
+			{
+				"a negative write timeout",
+				with("-server.write-timeout", "-1s"), "must be 0 or more",
+			},
+			{
+				"a negative idle timeout",
+				with("-server.idle-timeout", "-1s"), "must be 0 or more",
+			},
 
 			// The TLS files, read at startup so a proxy never binds a port it
 			// can't serve or an upstream it can't verify.
-			{"a certificate without a key",
-				with("-server.tls.cert", certFile), "go together"},
-			{"a key without a certificate",
-				with("-server.tls.key", keyFile), "go together"},
-			{"a certificate that isn't there",
+			{
+				"a certificate without a key",
+				with("-server.tls.cert", certFile), "go together",
+			},
+			{
+				"a key without a certificate",
+				with("-server.tls.key", keyFile), "go together",
+			},
+			{
+				"a certificate that isn't there",
 				with("-server.tls.cert", filepath.Join(dir, "absent.pem"),
-					"-server.tls.key", keyFile), "-server.tls.cert"},
-			{"a certificate and a key that aren't a pair",
+					"-server.tls.key", keyFile), "-server.tls.cert",
+			},
+			{
+				"a certificate and a key that aren't a pair",
 				with("-server.tls.cert", certFile, "-server.tls.key", otherKey),
-				"-server.tls.cert"},
-			{"an upstream CA over http", with("-upstream.tls.ca", certFile),
-				"no https URL"},
-			{"an upstream CA holding no certificate",
-				[]string{"-upstream.url", "https://api:4000/graphql",
-					"-allowlist", dir, "-upstream.tls.ca", notPEM},
-				"holds no PEM certificate"},
+				"-server.tls.cert",
+			},
+			{
+				"an upstream CA over http", with("-upstream.tls.ca", certFile),
+				"no https URL",
+			},
+			{
+				"an upstream CA holding no certificate",
+				[]string{
+					"-upstream.url", "https://api:4000/graphql",
+					"-allowlist", dir, "-upstream.tls.ca", notPEM,
+				},
+				"holds no PEM certificate",
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				code, stdout, stderr := run(t, tgt, tc.args...)
@@ -240,17 +281,20 @@ func TestCLIStartFailures(t *testing.T) {
 		}{
 			{"an allowlist that isn't there", []string{
 				"-upstream.url", "http://127.0.0.1:1/graphql",
-				"-allowlist", dir + "/nope"}},
+				"-allowlist", dir + "/nope",
+			}},
 			{"a data-plane address in use", []string{
 				"-upstream.url", "http://127.0.0.1:1/graphql", "-allowlist", dir,
 				"-server.listen", held.Addr().String(),
-				"-control.listen", "127.0.0.1:0"}},
+				"-control.listen", "127.0.0.1:0",
+			}},
 			// The control server is no optional extra: a proxy that can't serve
 			// /reload and /metrics doesn't serve at all.
 			{"a control address in use", []string{
 				"-upstream.url", "http://127.0.0.1:1/graphql", "-allowlist", dir,
 				"-server.listen", "127.0.0.1:0",
-				"-control.listen", held.Addr().String()}},
+				"-control.listen", held.Addr().String(),
+			}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				code, stdout, stderr := run(t, tgt, tc.args...)

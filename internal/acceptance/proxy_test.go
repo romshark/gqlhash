@@ -635,16 +635,20 @@ func TestAmbiguousFraming(t *testing.T) {
 		length := strconv.Itoa(len(docAllowed))
 
 		for _, tc := range []struct{ name, request string }{
-			{"content-length and transfer-encoding",
+			{
+				"content-length and transfer-encoding",
 				"POST /graphql HTTP/1.1\r\nHost: x\r\n" +
 					"Content-Type: application/json\r\n" +
 					"Content-Length: " + length + "\r\n" +
-					"Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n"},
-			{"two conflicting content-length",
+					"Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+			},
+			{
+				"two conflicting content-length",
 				"POST /graphql HTTP/1.1\r\nHost: x\r\n" +
 					"Content-Type: application/json\r\n" +
 					"Content-Length: " + length + "\r\n" +
-					"Content-Length: 4\r\n\r\n" + docAllowed},
+					"Content-Length: 4\r\n\r\n" + docAllowed,
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				before := e.api.count()
@@ -748,8 +752,12 @@ func TestQueryKeyCollision(t *testing.T) {
 		// beside an allowed one is refused the same as one that isn't on the
 		// list, since what's wrong is the request naming the document twice.
 		for _, names := range [][2]string{
-			{plain, escY}, {escY, plain}, {plain, escQ}, {plain, upper},
-			{plain, plain}, {escY, escQ},
+			{plain, escY},
+			{escY, plain},
+			{plain, escQ},
+			{plain, upper},
+			{plain, plain},
+			{escY, escQ},
 		} {
 			for _, second := range []string{allowedText, rejectedText} {
 				body := `{` + names[0] + `:"` + allowedText + `",` +

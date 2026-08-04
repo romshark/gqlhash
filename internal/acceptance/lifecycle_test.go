@@ -258,8 +258,10 @@ func TestShutdownTimeoutIsHonored(t *testing.T) {
 			atMost  time.Duration
 		}{
 			{"a drain shorter than the request", "200ms", 1, 0, 2 * time.Second},
-			{"a drain longer than it", "5s", 0, 500 * time.Millisecond,
-				4 * time.Second},
+			{
+				"a drain longer than it", "5s", 0, 500 * time.Millisecond,
+				4 * time.Second,
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				entered := make(chan struct{})

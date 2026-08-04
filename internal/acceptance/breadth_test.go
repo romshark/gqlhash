@@ -32,8 +32,10 @@ func TestBatchShapes(t *testing.T) {
 			{"an array of arrays", `[[{"query":"` + allowedText + `"}]]`},
 			{"a null element", `[null]`},
 			{"an element naming no document", `[{}]`},
-			{"the document under another member",
-				`[{"variables":{"query":"` + allowedText + `"}}]`},
+			{
+				"the document under another member",
+				`[{"variables":{"query":"` + allowedText + `"}}]`,
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				code, answer := post(t, e.server, tc.body)
@@ -87,23 +89,35 @@ func TestQueryParamBesideBodyShapes(t *testing.T) {
 			expect                            int
 		}{
 			// The parameter with no value at all is still the parameter.
-			{"a valueless query parameter", "query", "application/json",
-				docAllowed, http.StatusBadRequest},
-			{"an empty query parameter", "query=", "application/json",
-				docAllowed, http.StatusBadRequest},
+			{
+				"a valueless query parameter", "query", "application/json",
+				docAllowed, http.StatusBadRequest,
+			},
+			{
+				"an empty query parameter", "query=", "application/json",
+				docAllowed, http.StatusBadRequest,
+			},
 			// `;` separates as well as `&` does, on the reading side too.
-			{"a semicolon-separated parameter", "a=1;query=" + encoded,
-				"application/json", docAllowed, http.StatusBadRequest},
+			{
+				"a semicolon-separated parameter", "a=1;query=" + encoded,
+				"application/json", docAllowed, http.StatusBadRequest,
+			},
 			// The check runs before the content type is looked at,
 			// so a body that is the document itself is refused the same way.
-			{"beside an application/graphql body", "query=" + encoded,
-				"application/graphql", allowedText, http.StatusBadRequest},
+			{
+				"beside an application/graphql body", "query=" + encoded,
+				"application/graphql", allowedText, http.StatusBadRequest,
+			},
 			// The negative control: the parameter name is case-sensitive where
 			// the JSON member is not, so this one is no collision at all.
-			{"a parameter that isn't named query", "QUERY=" + encoded,
-				"application/json", docAllowed, http.StatusOK},
-			{"another parameter entirely", "operationName=GetUser",
-				"application/json", docAllowed, http.StatusOK},
+			{
+				"a parameter that isn't named query", "QUERY=" + encoded,
+				"application/json", docAllowed, http.StatusOK,
+			},
+			{
+				"another parameter entirely", "operationName=GetUser",
+				"application/json", docAllowed, http.StatusOK,
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				req, err := http.NewRequest(http.MethodPost,
@@ -135,22 +149,32 @@ func TestJSONEscapeShapes(t *testing.T) {
 			name, body string
 			expect     int
 		}{
-			{"an escape JSON doesn't define", `{"query":"\x41"}`,
-				http.StatusBadRequest},
+			{
+				"an escape JSON doesn't define", `{"query":"\x41"}`,
+				http.StatusBadRequest,
+			},
 			{"an escaped letter", `{"query":"\q"}`, http.StatusBadRequest},
-			{"a truncated unicode escape", `{"query":"\u12"}`,
-				http.StatusBadRequest},
-			{"unicode escape digits that aren't hex", `{"query":"\uZZZZ"}`,
-				http.StatusBadRequest},
-			{"a raw control byte", "{\"query\":\"\x01\"}",
-				http.StatusBadRequest},
+			{
+				"a truncated unicode escape", `{"query":"\u12"}`,
+				http.StatusBadRequest,
+			},
+			{
+				"unicode escape digits that aren't hex", `{"query":"\uZZZZ"}`,
+				http.StatusBadRequest,
+			},
+			{
+				"a raw control byte", "{\"query\":\"\x01\"}",
+				http.StatusBadRequest,
+			},
 			// Not an escape problem: it parses, it hashes, and the hash isn't
 			// on the list.
 			{"a raw 0xFF byte", "{\"query\":\"\xff\"}", http.StatusForbidden},
 			// Lowercase hex is as valid as uppercase, and every GET in this
 			// suite is built by url.QueryEscape, which only ever writes upper.
-			{"a lowercase unicode escape", `{"query":"{}"}`,
-				http.StatusForbidden},
+			{
+				"a lowercase unicode escape", `{"query":"{}"}`,
+				http.StatusForbidden,
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				code, answer := post(t, e.server, tc.body)
@@ -1076,11 +1100,14 @@ func TestFlagsThatAreOnlyEverParsed(t *testing.T) {
 			{"the pool flags", []string{
 				"-upstream.max-idle-conns-per-host", "8",
 				"-upstream.max-idle-conns", "16",
-				"-upstream.max-conn-lifetime", "30s"}},
+				"-upstream.max-conn-lifetime", "30s",
+			}},
 			{"the log flags", []string{
-				"-log.json=false", "-log.requests", "-log.level", "debug"}},
+				"-log.json=false", "-log.requests", "-log.level", "debug",
+			}},
 			{"opaque errors and batching together", []string{
-				"-opaque-errors", "-server.max-batch", "8"}},
+				"-opaque-errors", "-server.max-batch", "8",
+			}},
 			{"trust-forwarded", []string{"-trust-forwarded"}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -1174,8 +1201,10 @@ func TestMethodsTheHTTPLayerAnswersItself(t *testing.T) {
 
 		for _, tc := range []struct{ name, request string }{
 			{"OPTIONS *", "OPTIONS * HTTP/1.1\r\nHost: x\r\n\r\n"},
-			{"CONNECT in authority form",
-				"CONNECT api.example.com:443 HTTP/1.1\r\nHost: x\r\n\r\n"},
+			{
+				"CONNECT in authority form",
+				"CONNECT api.example.com:443 HTTP/1.1\r\nHost: x\r\n\r\n",
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				status := raw(t, e.address, tc.request)

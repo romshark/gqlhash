@@ -134,7 +134,8 @@ func TestRunProxyControlAddressInUse(t *testing.T) {
 	defer func() { _ = held.Close() }()
 
 	var out, errOut strings.Builder
-	code := Run(context.Background(), "gqlhash-proxy", "dev", []string{"gqlhash-proxy",
+	code := Run(context.Background(), "gqlhash-proxy", "dev", []string{
+		"gqlhash-proxy",
 		"-server.listen", "127.0.0.1:0",
 		"-upstream.url", "http://127.0.0.1:1/graphql",
 		"-allowlist", dir,
@@ -264,7 +265,6 @@ func TestBuildWiring(t *testing.T) {
 		t.Errorf("the upstream connection settings didn't reach the transport: "+
 			"%+v", transport)
 	}
-
 }
 
 // TestNewLogger covers the flags the logger is built from.

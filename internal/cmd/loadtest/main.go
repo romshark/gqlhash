@@ -217,10 +217,14 @@ func run(duration time.Duration, threads, connections int, command string) error
 		// 500 or see the upstream failing behind an allowed request.
 		want string
 	}{
-		{"allowed, forwarded upstream",
-			filepath.Join(work, "allowed.json"), decisionAllowed},
-		{"rejected, answered by the proxy",
-			filepath.Join(work, "rejected.json"), decisionRejected},
+		{
+			"allowed, forwarded upstream",
+			filepath.Join(work, "allowed.json"), decisionAllowed,
+		},
+		{
+			"rejected, answered by the proxy",
+			filepath.Join(work, "rejected.json"), decisionRejected,
+		},
 	} {
 		fmt.Printf("\n=== %s through wrk for %s, %d connections, %d wrk threads\n",
 			c.label, window, connections, threadsFor(threads, connections))
