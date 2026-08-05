@@ -117,8 +117,9 @@ brew install librsvg imagemagick
 ./scripts/build-icons.sh
 ```
 
-This is installable metadata only. There's no service worker, and the page
-doesn't work offline.
+The page works offline after one visit. [src/sw.js](src/sw.js) is the worker;
+`pnpm build` writes it to `dist/sw.js` with the file list of that build baked
+in. `pnpm dev` has none. Test offline against `pnpm preview`.
 
 ## Deployment
 

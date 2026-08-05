@@ -1,12 +1,20 @@
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  createReadStream,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { createGzip } from "node:zlib";
 import { defineConfig, type Plugin } from "vite";
 
 /**
- * goWasmWatch rebuilds src/wasm/gqlhash.wasm when a Go source changes. Vite
- * watches the binary itself and reloads the page.
+ * goWasmWatch rebuilds src/wasm/gqlhash.wasm when a Go source changes.
+ * Vite watches the binary itself and reloads the page.
  */
 function goWasmWatch(): Plugin {
   // Everything the binary is compiled from.
@@ -75,8 +83,8 @@ function goWasmWatch(): Plugin {
  * wasmLoader puts the script that downloads the WebAssembly binary in the head.
  * It runs before the entry chunk arrives. Downloading from the bundle instead
  * leaves the splash screen with nothing to count for as long as the bundle
- * takes, which on a slow connection is most of the wait. gqlhash.ts waits on
- * the promise it leaves behind.
+ * takes, which on a slow connection is most of the wait.
+ * gqlhash.ts waits on the promise it leaves behind.
  *
  * Neither value can be hand-written into index.html: the build hashes the name,
  * and the percentage needs the unpacked size, not the gzipped Content-Length.
@@ -140,8 +148,8 @@ function fileSize(file: string): number {
 }
 
 /**
- * loaderScript downloads the binary and counts it out on the splash screen. The
- * status line is looked up each time: the head runs before it exists.
+ * loaderScript downloads the binary and counts it out on the splash screen.
+ * The status line is looked up each time: the head runs before it exists.
  */
 function loaderScript(href: string, total: number): string {
   return `
@@ -200,12 +208,64 @@ function loaderScript(href: string, total: number): string {
 }
 
 /**
+ * serviceWorker writes dist/sw.js: src/sw.js with the list of files this build
+ * produced, and a version derived from what's in them.
+ *
+ * The list can't be written by hand. Half of it is content-hashed,
+ * and the other half is whatever public/ happens to hold.
+ * The version has to follow the contents rather than the names: index.html and
+ * the icons keep their names from build to build.
+ */
+function serviceWorker(): Plugin {
+  let root = "";
+  let outDir = "";
+
+  return {
+    name: "service-worker",
+    apply: "build",
+
+    configResolved(config) {
+      root = config.root;
+      outDir = resolve(config.root, config.build.outDir);
+    },
+
+    // Last, when public/ has been copied and there is a whole site to list.
+    closeBundle() {
+      const files = builtFiles(outDir).filter((file) => file !== "sw.js");
+      const hash = createHash("sha256");
+      for (const file of files) {
+        hash.update(file);
+        hash.update(readFileSync(join(outDir, file)));
+      }
+
+      const binary = files.find((file) => file.endsWith(".wasm")) ?? "";
+      const shell = files.filter((file) => file !== binary);
+      const source = readFileSync(join(root, "src/sw.js"), "utf8")
+        .replace("__VERSION__", hash.digest("hex").slice(0, 16))
+        // "./" is the start URL, which is what a visitor to the site asks for.
+        .replace('["__SHELL__"]', JSON.stringify(["./", ...shell]))
+        .replace("__BINARY__", binary);
+      writeFileSync(join(outDir, "sw.js"), source);
+    },
+  };
+}
+
+/** builtFiles lists every file under dir, as URL paths relative to it. */
+function builtFiles(dir: string): string[] {
+  return readdirSync(dir, { recursive: true })
+    .map(String)
+    .filter((name) => statSync(join(dir, name)).isFile())
+    .map((name) => name.split(sep).join("/"))
+    .sort();
+}
+
+/**
  * wasmPreviewGzip compresses the WebAssembly binary on the preview server.
  *
  * `vite preview` gzips the script and the stylesheet but hands the binary over
- * raw — 3.3 MB against the ~950 KB a real host sends, in the one asset
- * everything waits on. Without this, preview reads seconds slower than the site
- * it stands in for.
+ * raw — 3.3 MB against the ~950 KB a real host sends,
+ * in the one asset everything waits on.
+ * Without this, preview reads seconds slower than the site it stands in for.
  *
  * Only preview. In dev the binary comes from src/ over a local round trip.
  */
@@ -249,10 +309,9 @@ export default defineConfig({
   base: "./",
   // One page, no client-side routing. Vite otherwise answers unmatched paths
   // with index.html where the static host 404s, and an audit run against the
-  // dev server reports hundreds of syntax errors in a /robots.txt that doesn't
-  // exist.
+  // dev server reports hundreds of syntax errors in a /robots.txt that doesn't exist.
   appType: "mpa",
-  plugins: [goWasmWatch(), wasmLoader(), wasmPreviewGzip()],
+  plugins: [goWasmWatch(), wasmLoader(), serviceWorker(), wasmPreviewGzip()],
   build: {
     target: "es2022",
     assetsInlineLimit: 0,

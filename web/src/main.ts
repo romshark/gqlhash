@@ -122,10 +122,33 @@ async function main(): Promise<void> {
   start(api);
 
   ui.app.hidden = false;
-  ui.splash.classList.add("splash-done");
-  ui.splash.addEventListener("transitionend", () => ui.splash.remove(), {
-    once: true,
-  });
+  if (getComputedStyle(ui.splash).opacity === "0") {
+    // Still held back, which means nothing was ever on screen to fade.
+    ui.splash.remove();
+  } else {
+    ui.splash.classList.add("splash-done");
+    ui.splash.addEventListener("transitionend", () => ui.splash.remove(), {
+      once: true,
+    });
+  }
+
+  void registerServiceWorker();
+}
+
+/**
+ * registerServiceWorker installs the offline cache. It runs once the page is
+ * up: installing means fetching the whole shell, and the load comes first.
+ * Only the build has a worker to register.
+ */
+async function registerServiceWorker(): Promise<void> {
+  if (!import.meta.env.PROD || !("serviceWorker" in navigator)) {
+    return;
+  }
+  try {
+    await navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`);
+  } catch (error) {
+    console.error("registering the service worker:", error);
+  }
 }
 
 function start(api: GQLHash): void {
