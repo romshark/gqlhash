@@ -21,12 +21,13 @@ pnpm dev
 
 | Command          | Does                                                   |
 | ---------------- | ------------------------------------------------------ |
-| `pnpm dev`       | Build the WASM binary, then serve with hot reloading    |
+| `pnpm dev`       | Build the WASM binary, then serve with hot reloading   |
 | `pnpm wasm`      | Rebuild only `src/wasm/gqlhash.wasm`                   |
 | `pnpm build`     | Build the WASM binary, typecheck and bundle to `dist/` |
+| `pnpm build:site`| Typecheck and bundle, leaving the binary as it is      |
 | `pnpm preview`   | Serve `dist/` as it will be served in production       |
 | `pnpm typecheck` | Run `tsc --noEmit`                                     |
-| `pnpm lint`      | Report formatting, lint and import-order problems       |
+| `pnpm lint`      | Report formatting, lint and import-order problems      |
 | `pnpm lint:fix`  | Fix everything above that's safely fixable             |
 | `pnpm format`    | Format only, no lint rules                             |
 | `pnpm run ci`    | What CI checks: `biome ci .` plus the typecheck        |
@@ -129,6 +130,12 @@ CDN, including a GitHub Pages project site. All asset URLs are relative
 [../.github/workflows/pages.yml](../.github/workflows/pages.yml) publishes it on
 every push to `main` touching the site or the hasher; it needs Pages enabled with
 "GitHub Actions" as the source.
+
+The deployed binary is built from the latest release tag, not from `main`. The
+page reports the version of the hasher it runs, and that has to be a version
+anyone can install. The page itself is `main`'s. The deploy fails when
+[wasm/](wasm/) has changed since the tag, because the page would then be
+calling into a binary without those changes; cut a release.
 
 The WebAssembly binary is ~3.3 MB, or ~950 KB over the wire — make sure the host
 serves `.wasm` with `Content-Encoding: gzip` or `br`. GitHub Pages does by default.

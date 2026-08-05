@@ -639,14 +639,22 @@ function letterBadge(kind: string, letter: string): HTMLElement {
 }
 
 /**
- * shortVersion trims a Go pseudo-version down to the tag and the short commit
- * hash, e.g. v1.2.6-0.20260725234538-bd527a89e550 to v1.2.6-bd527a89. Released
- * versions are returned unchanged. The footer keeps the full string as its
- * title attribute.
+ * shortVersion trims a Go pseudo-version down to the release it builds on and
+ * the short commit hash, e.g. v2.0.2-0.20260805210504-00d55deb1075 to v2.0.1+00d55deb.
+ * Go names such a version after the release it comes before,
+ * which reads as a release that was never cut. The patch is put back.
+ *
+ * Released versions are returned unchanged.
+ * The footer keeps the full string as its title attribute.
  */
 function shortVersion(version: string): string {
-  const parts = /^(v[\d.]+)-\d+\.\d{14}-([0-9a-f]{8})[0-9a-f]*(\+dirty)?$/.exec(
-    version,
-  );
-  return parts ? `${parts[1]}-${parts[2]}${parts[3] ?? ""}` : version;
+  const parts =
+    /^v(\d+)\.(\d+)\.(\d+)-0\.\d{14}-([0-9a-f]{8})[0-9a-f]*(\+dirty)?$/.exec(
+      version,
+    );
+  if (!parts) {
+    return version;
+  }
+  const previous = Number(parts[3]) - 1;
+  return `v${parts[1]}.${parts[2]}.${previous}+${parts[4]}${parts[5] ?? ""}`;
 }

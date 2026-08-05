@@ -7,7 +7,8 @@
   "scripts": {
     "wasm": "./scripts/build-wasm.sh",
     "dev": "pnpm run wasm && vite",
-    "build": "pnpm run wasm && tsc --noEmit && vite build",
+    "build": "pnpm run wasm && pnpm run build:site",
+    "build:site": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",

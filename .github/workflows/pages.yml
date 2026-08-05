@@ -34,9 +34,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          # The whole history, tags included. The playground shows the module version,
-          # which the toolchain derives from the nearest tag. A shallow clone has none,
-          # and the page then reports a version from before the last release.
+          # The whole history, tags included. The hasher is built from the last
+          # release below, which a shallow clone cannot find.
           fetch-depth: 0
 
       - name: Install Go 1.26.5
@@ -64,9 +63,35 @@ jobs:
       - name: Lint
         run: pnpm exec biome ci .
 
-      # Compiles ./wasm to WebAssembly and runs tsc and vite.
+      # The page reports the version of the hasher it runs, and that has to be a
+      # version anyone can install. main is usually some commits past the last
+      # release, so the hasher is built from the release itself. The page around
+      # it is main's.
+      - name: Build the hasher from the latest release
+        working-directory: .
+        run: |
+          tag="$(git describe --tags --abbrev=0)"
+          echo "hasher: $tag"
+          # A clone, not a worktree. The toolchain stamps the version it finds
+          # in the repository, and a worktree has none of its own.
+          git clone --quiet --branch "$tag" . ../release
+
+          # The page calls into this binary through web/wasm. If that moved
+          # since the release, the page is calling something the release does
+          # not have, and the answer is a release, not a newer binary.
+          if ! diff -r ../release/web/wasm web/wasm; then
+            echo "web/wasm has moved since $tag, cut a release" >&2
+            exit 1
+          fi
+
+          (cd ../release/web && ./scripts/build-wasm.sh)
+          mkdir -p web/src/wasm web/src/vendor
+          cp ../release/web/src/wasm/gqlhash.wasm web/src/wasm/
+          cp ../release/web/src/vendor/wasm_exec.js web/src/vendor/
+
+      # Runs tsc and vite. The hasher is already in place.
       - name: Build
-        run: pnpm run build
+        run: pnpm run build:site
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4
