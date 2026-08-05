@@ -28,16 +28,6 @@ var binaries paths
 // -proxy.bin names the targets outright and replaces them.
 var withFHTTP = true
 
-func init() {
-	flag.Var(&binaries, "proxy.bin",
-		"path to a proxy binary to run the acceptance tests against, repeatable")
-	flag.BoolVar(&withFHTTP, "proxy.fhttp", true,
-		"also run every test against gqlhash-proxy-fhttp, the experimental\n"+
-			"fasthttp build. -proxy.fhttp=false leaves it out, which halves the\n"+
-			"suite: it's not a build to deploy, and every rule it keeps is a rule\n"+
-			"gqlhash-proxy keeps too. Ignored where -proxy.bin names the targets.")
-}
-
 type paths []string
 
 func (p *paths) String() string     { return strings.Join(*p, ",") }
@@ -57,6 +47,13 @@ var commands = []string{"gqlhash-proxy", "gqlhash-proxy-fhttp"}
 const experimental = "gqlhash-proxy-fhttp"
 
 func TestMain(m *testing.M) {
+	flag.Var(&binaries, "proxy.bin",
+		"path to a proxy binary to run the acceptance tests against, repeatable")
+	flag.BoolVar(&withFHTTP, "proxy.fhttp", true,
+		"also run every test against gqlhash-proxy-fhttp, the experimental\n"+
+			"fasthttp build. -proxy.fhttp=false leaves it out, which halves the\n"+
+			"suite: it's not a build to deploy, and every rule it keeps is a rule\n"+
+			"gqlhash-proxy keeps too. Ignored where -proxy.bin names the targets.")
 	flag.Parse()
 
 	dir, err := os.MkdirTemp("", "gqlhash-acceptance")
@@ -132,7 +129,7 @@ func moduleRoot() (string, error) {
 	}
 	gomod := strings.TrimSpace(string(output))
 	if gomod == "" || gomod == os.DevNull {
-		return "", fmt.Errorf("no module to build the commands from")
+		return "", errors.New("no module to build the commands from")
 	}
 	return filepath.Dir(gomod), nil
 }
@@ -331,7 +328,7 @@ func start(t *testing.T, tgt target, args []string) (*server, *logs, error) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	return nil, out, fmt.Errorf("it didn't serve within the deadline")
+	return nil, out, errors.New("it didn't serve within the deadline")
 }
 
 // freePort is an address free at the moment it's returned,
@@ -555,9 +552,11 @@ func newEnvFor(
 	t.Helper()
 	dir := t.TempDir()
 	if keep {
-		// A shared server outlives the test that started it,
-		// and so does the directory it reads. stopShared takes both down.
+		// A shared server outlives the test that started it, and so does the
+		// directory it reads, which is why this isn't t.TempDir: that one goes
+		// when the test that made it ends. stopShared takes both down.
 		var err error
+		//nolint:usetesting
 		if dir, err = os.MkdirTemp("", "gqlhash-allowlist"); err != nil {
 			t.Fatal(err)
 		}

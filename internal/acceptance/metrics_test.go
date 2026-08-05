@@ -324,7 +324,8 @@ func TestClientHangupIsNoUpstreamError(t *testing.T) {
 			t.Fatal(err)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if _, err := http.DefaultClient.Do(req); err == nil {
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			_ = resp.Body.Close()
 			t.Fatal("expected the client's request to be given up on")
 		}
 		letGo()

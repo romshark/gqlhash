@@ -172,11 +172,11 @@ func TestParseNestingAttack(t *testing.T) {
 	}
 
 	// The minified variant is the same document and produces the same form.
-	min, errMin := parse(noLimit, readTestdata(t, "nesting-attack.min.graphql"))
+	minified, errMin := parse(noLimit, readTestdata(t, "nesting-attack.min.graphql"))
 	if errMin.Err != nil {
 		t.Fatalf("minified: unexpected error: %v", errMin)
 	}
-	if min != want {
+	if minified != want {
 		t.Error("minified variant must produce the same stream")
 	}
 	r := new(recorder)

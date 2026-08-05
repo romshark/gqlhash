@@ -323,7 +323,7 @@ func trimEmptyLinesSuffix(s string) string {
 }
 
 func containsOnlyWhiteSpace(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if !isWhiteSpace(s[i]) {
 			return false
 		}

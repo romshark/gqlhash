@@ -8,20 +8,28 @@ linters:
     - asasalint
     - asciicheck
     - bidichk
+    - bodyclose
     - canonicalheader
     - durationcheck
     - errorlint
     - fatcontext
     - gocheckcompilerdirectives
+    - gochecknoinits
     - iface
+    - intrange
     - makezero
     - mirror
     - misspell
     - nilerr
+    - nilnesserr
+    - perfsprint
     - prealloc
+    - predeclared
     - reassign
     - unconvert
+    - unparam
     - usestdlibvars
+    - usetesting
     - wastedassign
 
 # `run` reports unformatted source as a finding; `make fmt` rewrites it.

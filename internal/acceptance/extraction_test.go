@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -170,7 +171,7 @@ func TestMaxBodyBoundary(t *testing.T) {
 		}
 
 		e := newEnv(t, tgt, []string{allowedDoc},
-			"-server.max-body", fmt.Sprint(limit))
+			"-server.max-body", strconv.Itoa(limit))
 
 		// At the limit it's read, hashed and allowed.
 		if code, answer := post(t, e.server, atLimit); code != http.StatusOK {

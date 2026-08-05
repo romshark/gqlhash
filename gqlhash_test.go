@@ -685,7 +685,7 @@ func TestBenchQueryCorpus(t *testing.T) {
 				[]byte(q.Formatted), []byte(q.Minified),
 			)
 			if errCmp.Err != nil {
-				t.Errorf("unexpected error: %v", err)
+				t.Errorf("unexpected error: %v", errCmp)
 			}
 		})
 	}

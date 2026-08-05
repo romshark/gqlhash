@@ -14,7 +14,7 @@ import (
 	"github.com/romshark/gqlhash/v2/parser"
 )
 
-func writeDoc(t *testing.T, dir, name, content string) string {
+func writeDoc(t *testing.T, dir, name, content string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -23,7 +23,6 @@ func writeDoc(t *testing.T, dir, name, content string) string {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return path
 }
 
 // newAllowlist returns an allowlist and a reload of dir, so a test names the
@@ -43,13 +42,12 @@ func newAllowlist(
 // Why not chmod 000: root reads a file whatever its mode, so that test would
 // skip wherever the suite runs as root, which is any ordinary container,
 // and a skip covers nothing while looking like a pass. This one fails for root too.
-func unreadable(t *testing.T, dir, name string) string {
+func unreadable(t *testing.T, dir, name string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
 	if err := os.Symlink(filepath.Join(dir, "does-not-exist"), path); err != nil {
 		t.Fatal(err)
 	}
-	return path
 }
 
 // TestAllowlistBeforeFirstReload covers an allowlist between [allowlist.New] and
