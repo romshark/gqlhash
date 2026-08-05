@@ -1,5 +1,8 @@
 # Builds gqlhash-proxy from the repository, so the playground runs the working tree
 # rather than a release. The build context is the repository root.
+#
+# Not the image published on release. That one is ../Dockerfile.goreleaser, which
+# copies in a binary GoReleaser already built and cannot build from source.
 FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./

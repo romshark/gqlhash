@@ -5,16 +5,14 @@ version: 2
 
 before:
   hooks:
-    # Checked, not tidied: a release builds the tag as it was cut, and go mod
-    # tidy would rewrite go.mod and go.sum in the middle of doing it.
+    # Verify, not tidy: tidy would rewrite go.mod and go.sum mid-release.
     - go mod verify
 
 builds:
   - &build
     id: gqlhash
-    # Named, not defaulted. Without this every build takes the project name,
-    # so both archives carried a binary called gqlhash: the proxy one shipped the
-    # proxy under the hasher's name, which the cask then couldn't find.
+    # Without this both builds take the project name. The proxy archive would
+    # ship its binary as gqlhash and the cask couldn't find it.
     binary: gqlhash
     main: ./cmd/gqlhash
     env:
@@ -26,16 +24,16 @@ builds:
     goos: [linux, windows, darwin]
     goarch: [amd64, arm64]
 
-  # A binary of its own: most of its size is the HTTP server,
-  # the metrics client and the schema validator that gqlhash doesn't link.
+  # Its own binary: it links an HTTP server,
+  # a metrics client and a schema validator that gqlhash doesn't.
   - <<: *build
     id: gqlhash-proxy
     binary: gqlhash-proxy
     main: ./cmd/gqlhash-proxy
 
-# One archive per command, so installing the hashing command doesn't drag in the
-# proxy: the two differ by 8 MB. The name carries the OS and the arch as `uname`
-# reports them; it can't be shared, .Binary resolves per project and not per archive.
+# One archive per command. Installing gqlhash then doesn't pull in the 8 MB proxy.
+# Names use the OS and arch as `uname` spells them. The template can't be shared:
+# .Binary is the project name, not the archive's.
 archives:
   - id: gqlhash
     ids: [gqlhash]
@@ -71,26 +69,25 @@ changelog:
       - "^test:"
       - "^ci:"
 
-# One cask per command, published to the romshark/tools tap on release. It needs
-# a token with write access to that repository, as HOMEBREW_TAP_GITHUB_TOKEN.
+# One cask per command, pushed to the romshark/tools tap on release.
+# Needs HOMEBREW_TAP_GITHUB_TOKEN with write access to that repository.
 homebrew_casks:
   - name: gqlhash
     ids: [gqlhash]
     homepage: &homepage https://github.com/romshark/gqlhash
     description: Hashes GraphQL executable documents, ignoring formatting
     license: &license MIT
-    # The binaries are neither signed nor notarized, so a cask install leaves
-    # them quarantined and Gatekeeper refuses to run them.
+    # Unsigned and unnotarized. An install leaves them quarantined and Gatekeeper
+    # refuses to run them.
     hooks:
       post:
         install: |
           if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gqlhash"]
           end
-    # Not shared with the proxy: only this command was ever a formula, so only
-    # this one has an install to undo. The paragraph below it is the same in both
-    # and has to stay that way — an upgrade must not say two different things
-    # about the same release.
+    # Only gqlhash was ever a formula. Only it has one to undo.
+    # The paragraph after that must stay identical to the proxy's:
+    # an upgrade must not say two different things about the same release.
     caveats: |
       v1 shipped as a formula and this is a cask. Homebrew replaces neither with
       the other, so if `brew list --formula` still lists gqlhash, run
@@ -101,9 +98,8 @@ homebrew_casks:
       accepted are now refused. Anything holding a stored hash has to rebuild it;
       -hash sha1 keeps what v1 printed. What changed:
       https://github.com/romshark/gqlhash/blob/main/MIGRATION.md
-    # The repository, not the tap. `brew tap romshark/tools` reaches this by
-    # Homebrew's own convention, which puts the homebrew- prefix back on;
-    # GoReleaser pushes over the API and needs the name the repository has.
+    # The repository name, not the tap name: `brew tap romshark/tools` puts the
+    # homebrew- prefix back on, GoReleaser pushes over the API and needs the real one.
     repository: &tap
       owner: romshark
       name: homebrew-tools
@@ -128,3 +124,37 @@ homebrew_casks:
       -hash sha1 keeps what v1 printed. What changed:
       https://github.com/romshark/gqlhash/blob/main/MIGRATION.md
     repository: *tap
+
+# Only the proxy gets an image: it's the one command that runs as a server.
+# It ships the binary built above. The image is then what the release was tested as.
+#
+# dockers_v2 because dockers and docker_manifests are deprecated. It builds both
+# architectures and pushes the multi-arch tag in one buildx run. Nothing needs
+# emulating, the Dockerfile only copies a static binary in.
+dockers_v2:
+  - id: gqlhash-proxy
+    ids: [gqlhash-proxy]
+    dockerfile: Dockerfile.goreleaser
+    images:
+      - ghcr.io/romshark/gqlhash-proxy
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    # Empty tags are dropped. A prerelease publishes its own version and moves
+    # neither `latest` nor `2`, which is what an unpinned pull follows.
+    # No `v` prefix: .Version is the tag without it, as the archives use it.
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}{{ end }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    # image.source links the package to this repository, which is what lets the
+    # release workflow's own GITHUB_TOKEN push to it.
+    labels:
+      org.opencontainers.image.title: gqlhash-proxy
+      org.opencontainers.image.description: Serves an allowlist of GraphQL documents in front of an API
+      org.opencontainers.image.url: *homepage
+      org.opencontainers.image.source: *homepage
+      org.opencontainers.image.licenses: *license
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"

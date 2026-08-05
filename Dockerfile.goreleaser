@@ -1,0 +1,24 @@
+# The image published to ghcr.io/romshark/gqlhash-proxy on release.
+#
+# Not buildable on its own: GoReleaser makes the context, and it holds the
+# binaries it already built, one directory per platform, and no source.
+# Build the proxy from a working tree with playground/Dockerfile, which compiles it.
+#
+# The labels are in .goreleaser.yml, where the values that change per release are.
+FROM gcr.io/distroless/static-debian12:nonroot
+
+# One image per platform is built from this one file. The binary comes from the
+# directory naming the platform: linux/amd64, linux/arm64.
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/gqlhash-proxy /gqlhash-proxy
+
+# Documentation only: 8080 is the default traffic port, 9090 the control port.
+# Neither is reachable until whatever runs the container publishes it,
+# and the control port shouldn't be.
+EXPOSE 8080 9090
+
+# No default flags: -upstream.url and -allowlist are required,
+# and -control.listen has to move off 127.0.0.1 to be reachable from another
+# container. Every flag has a GQLHASH_PROXY_* variable, which is what a compose
+# file or a pod spec usually uses. See cmd/gqlhash-proxy/README.md.
+ENTRYPOINT ["/gqlhash-proxy"]

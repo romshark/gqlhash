@@ -148,6 +148,16 @@ v1 shipped `gqlhash` as a formula, which Homebrew doesn't replace with a cask.
 
 Download a compiled binary from [GitHub Releases](https://github.com/romshark/gqlhash/releases).
 
+### Container Image
+
+The `gqlhash-proxy` only, for `linux/amd64` and `linux/arm64`:
+
+```sh
+docker pull ghcr.io/romshark/gqlhash-proxy:2
+```
+
+See details at [the proxy's README](cmd/gqlhash-proxy/README.md#container-image).
+
 ### From Source
 
 ```sh

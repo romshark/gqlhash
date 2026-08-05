@@ -69,6 +69,49 @@ gqlhash-proxy -upstream.url https://api.internal/graphql -allowlist ./queries \
 
 `GQLHASH_PROXY_CONTROL_TOKEN` requires `Authorization: Bearer <token>` on `/reload`, compared in constant time. Metrics are served without it. There is no flag for the token: a process argument is readable by anyone on the host through `ps` or `/proc/<pid>/cmdline`, the environment of a process isn't.
 
+## Container Image
+
+`ghcr.io/romshark/gqlhash-proxy` carries the proxy for `linux/amd64` and `linux/arm64`. It's the binary of the release it's tagged with, on [distroless static](https://github.com/GoogleContainerTools/distroless), running as an unprivileged user with no shell and no package manager in the image.
+
+```sh
+docker run --rm \
+  -p 8080:8080 \
+  -v "$PWD/queries:/queries:ro" \
+  ghcr.io/romshark/gqlhash-proxy:2 \
+  -server.listen=:8080 \
+  -upstream.url=http://api:4000/graphql \
+  -allowlist=/queries \
+  -control.listen=:9090
+```
+
+Three tags: `2.0.1` is one release and never moves, `2` follows the latest release of that major, `latest` follows the newest release of any. Pin the exact version wherever a rebuild has to produce what the last one did. A prerelease publishes only its own version. Neither `2` nor `latest` follows one.
+
+**`-control.listen` has to be set.** It defaults to `127.0.0.1:9090`, which inside a container is that container's own loopback and reachable from nothing else. `/metrics`, `/healthz` and `/reload` answer nobody until it moves to `:9090`. At that address anything able to route to the container reaches it, which is why it stays off `-p`: publish the traffic port and leave the control port to the network the scrape and the probe come from.
+
+**The allowlist is a mount, not a layer.** The image has no documents in it. Mount the directory read-only and `POST /reload` is what changes it. Baking a layer instead ties every allowlist edit to a new image, which is the better trade where the documents ship with the clients that send them. Either way the proxy reads that directory at startup and refuses to start without it.
+
+Every flag has its `GQLHASH_PROXY_*` variable, which is usually what a compose file or a pod spec reaches for instead of an argument list:
+
+```yaml
+services:
+  proxy:
+    image: ghcr.io/romshark/gqlhash-proxy:2
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./queries:/queries:ro
+    environment:
+      GQLHASH_PROXY_UPSTREAM_URL: http://api:4000/graphql
+      GQLHASH_PROXY_ALLOWLIST: /queries
+      GQLHASH_PROXY_CONTROL_LISTEN: ":9090"
+      # Never a flag, see above: an argument list is readable through `ps`.
+      GQLHASH_PROXY_CONTROL_TOKEN: ${PROXY_CONTROL_TOKEN}
+```
+
+A liveness probe points at `/healthz` on the control port, never at the traffic port, which belongs entirely to the API. Give the pod a `terminationGracePeriodSeconds` above `-server.shutdown-timeout`. Below it the requests the proxy is draining are killed by the kill it's draining ahead of.
+
+The image runs as uid 65532 and needs no more. It writes nothing and takes `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false` and a dropped capability set as it is. It cannot bind below port 1024: `-server.listen=:80` fails, and a service port maps to `:8080` instead.
+
 ## Reloading Allowlist
 
 ```sh

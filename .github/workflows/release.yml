@@ -6,8 +6,10 @@ on:
     tags:
       - "*"
 
+# Read by default. The scan below needs nothing more, and the release job
+# widens this for itself.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # The scan a release has to pass. The daily run in govulncheck.yml catches an
@@ -19,6 +21,13 @@ jobs:
   goreleaser:
     needs: govulncheck
     runs-on: ubuntu-latest
+    permissions:
+      # Cuts the release.
+      contents: write
+      # Pushes the proxy image to ghcr.io. The image.source label in
+      # Dockerfile.goreleaser links that package to this repository, which is
+      # what this token has write access to.
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -28,6 +37,17 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: stable
+      # The arm64 image is built on an amd64 runner, which the default builder
+      # can't do. No QEMU beside it: the image runs no commands during its build,
+      # it only copies a binary in. There is nothing to emulate.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
