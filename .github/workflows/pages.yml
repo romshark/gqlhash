@@ -33,6 +33,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          # The whole history, tags included. The playground shows the module version,
+          # which the toolchain derives from the nearest tag. A shallow clone has none,
+          # and the page then reports a version from before the last release.
+          fetch-depth: 0
 
       - name: Install Go 1.26.5
         uses: actions/setup-go@v7
