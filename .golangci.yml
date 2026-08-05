@@ -1,11 +1,30 @@
-# golangci-lint runs in CI (.github/workflows/golangci-lint.yml) and from the
-# lint target of the Makefile. The linters are the defaults; what this file adds
-# is the formatter.
+# Runs in CI (.github/workflows/golangci-lint.yml) and from `make lint`.
 version: "2"
 
-# gofumpt is gofmt plus the rules gofmt was too conservative to take. `run`
-# reports what it would rewrite the same way it reports a linter finding,
-# so a source that isn't formatted fails the build; `make fmt` does the rewriting.
+# These pass clean as they stand. A linter that would need code changed to go
+# green doesn't belong here until the code is changed.
+linters:
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - canonicalheader
+    - durationcheck
+    - errorlint
+    - fatcontext
+    - gocheckcompilerdirectives
+    - iface
+    - makezero
+    - mirror
+    - misspell
+    - nilerr
+    - prealloc
+    - reassign
+    - unconvert
+    - usestdlibvars
+    - wastedassign
+
+# `run` reports unformatted source as a finding; `make fmt` rewrites it.
 formatters:
   enable:
     - gofumpt

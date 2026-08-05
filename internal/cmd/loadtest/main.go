@@ -559,7 +559,7 @@ func checkReady(target string) error {
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf(
-				"the proxy doesn't forward the allowed document (%d, %v)", code, err)
+				"the proxy doesn't forward the allowed document (%d, %w)", code, err)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

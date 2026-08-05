@@ -93,7 +93,7 @@ func TestParse(t *testing.T) {
 		// A depth beyond what these inputs reach:
 		// what the limit itself does is [TestParseDepthLimit].
 		_, err := parse(parser.Options{DepthLimit: 1000}, input)
-		if expectErr != err.Err {
+		if !errors.Is(err.Err, expectErr) {
 			t.Errorf("expected err: %v; received err: %v; input: %q",
 				expectErr, err, input)
 		}
@@ -704,7 +704,7 @@ func TestParseValueErrors(t *testing.T) {
 				`query Q($x:T@d(a:` + v + `)){f}`,
 			} {
 				_, err := parse(parser.Options{}, input)
-				if err.Err != expectErr {
+				if !errors.Is(err.Err, expectErr) {
 					t.Errorf("expected err: %v; received: %v; input: %q",
 						expectErr, err, input)
 				}
@@ -743,8 +743,8 @@ func TestParseValueErrors(t *testing.T) {
 		for _, input := range []string{
 			`{f(a:$1)}`, `{f(a:$$x)}`, `{f(a:$ )}`, `{f(a:[$!])}`,
 		} {
-			if _, err := parse(parser.Options{}, input); err.Err !=
-				parser.ErrUnexpectedToken {
+			if _, err := parse(parser.Options{}, input); !errors.Is(
+				err.Err, parser.ErrUnexpectedToken) {
 				t.Errorf("expected %v; received: %v; input: %q",
 					parser.ErrUnexpectedToken, err, input)
 			}
@@ -1033,7 +1033,7 @@ func TestHPrefInStringValue(t *testing.T) {
 		}
 		if _, err := parse(
 			parser.Options{}, s,
-		); err.Err != parser.ErrUnescapedControlChar {
+		); !errors.Is(err.Err, parser.ErrUnescapedControlChar) {
 			t.Errorf("hpref %#x must not be valid within a string value: %q; "+
 				"expected: %v; received: %v",
 				hpref, s, parser.ErrUnescapedControlChar, err)
@@ -1133,11 +1133,12 @@ func TestParseIgnoreInputs(t *testing.T) {
 		t.Error("without input values, full and structure hashes must match")
 	}
 	// An ignored value is still parsed, so it must still be valid.
-	if _, err := parse(ignore, `{ f(x: 01) }`); err.Err != parser.ErrMalformedNumber {
+	if _, err := parse(ignore, `{ f(x: 01) }`); !errors.Is(
+		err.Err, parser.ErrMalformedNumber) {
 		t.Errorf("an ignored value must still be validated; received: %v", err)
 	}
-	if _, err := parse(ignore, `query Q($x: Int = $y) { f }`); err.Err !=
-		parser.ErrUnexpectedVariable {
+	if _, err := parse(ignore, `query Q($x: Int = $y) { f }`); !errors.Is(
+		err.Err, parser.ErrUnexpectedVariable) {
 		t.Errorf("an ignored value must still be validated; received: %v", err)
 	}
 }
@@ -1235,7 +1236,7 @@ func TestParseInputTypes(t *testing.T) {
 		parser.Parse(new(recorder), parser.Options{}, []byte(nil)),
 		parser.Parse(new(recorder), parser.Options{}, []byte{}),
 	} {
-		if e.Err != parser.ErrUnexpectedEOF {
+		if !errors.Is(e.Err, parser.ErrUnexpectedEOF) {
 			t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, e)
 		}
 	}
@@ -1346,7 +1347,9 @@ func TestParseWriteError(t *testing.T) {
 		`{f(a:"` + strings.Repeat("x", 9000) + `")}`, // Outgrows the buffer.
 	} {
 		e := parser.Parse(w, parser.Options{}, input)
-		if e.Err != wantErr {
+		// Identity, not errors.Is: the writer's error reaches the caller as it
+		// is, unwrapped. That errors.Is matches it too is the next assertion.
+		if e.Err != wantErr { //nolint:errorlint
 			t.Errorf("expected %v; received: %v; input: %.32q", wantErr, e, input)
 		}
 		if !errors.Is(e.Err, wantErr) {
@@ -1366,7 +1369,8 @@ func TestParseWriteError(t *testing.T) {
 
 	// An invalid document is rejected before anything is written, so the syntax
 	// error wins over the write error.
-	if e := parser.Parse(w, parser.Options{}, `{`); e.Err != parser.ErrUnexpectedEOF {
+	if e := parser.Parse(w, parser.Options{}, `{`); !errors.Is(
+		e.Err, parser.ErrUnexpectedEOF) {
 		t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, e)
 	}
 
@@ -1400,7 +1404,7 @@ func TestParseDepthLimit(t *testing.T) {
 
 	f := func(t *testing.T, expect error, o parser.Options, input string) {
 		t.Helper()
-		if e := parser.Parse(io.Discard, o, input); e.Err != expect {
+		if e := parser.Parse(io.Discard, o, input); !errors.Is(e.Err, expect) {
 			t.Errorf("expected %v; received %v", expect, e)
 		}
 	}
@@ -1418,7 +1422,7 @@ func TestParseDepthLimit(t *testing.T) {
 
 	// The error carries the offset it gave up at, like every other one.
 	e := parser.Parse(io.Discard, parser.Options{DepthLimit: 2}, nest(3))
-	if e.Err != parser.ErrTooDeep || e.ErrOffset < 1 {
+	if !errors.Is(e.Err, parser.ErrTooDeep) || e.ErrOffset < 1 {
 		t.Errorf("expected an offset with the error; received %v", e)
 	}
 	if line, column := parser.Position(nest(3), e.ErrOffset); line != 1 || column < 1 {

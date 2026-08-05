@@ -167,7 +167,7 @@ func TestCompare(t *testing.T) {
 		t.Helper()
 		check := func(name string, received gqlhash.Result) {
 			t.Helper()
-			if expect != received.Err {
+			if !errors.Is(received.Err, expect) {
 				t.Errorf("%s: expected %v; received: %v", name, expect, received)
 			}
 		}
@@ -321,12 +321,12 @@ func TestCompare(t *testing.T) {
 
 func TestCompareErr(t *testing.T) {
 	received := compare(sha1.New(), gqlhash.Options{}, []byte(``), []byte(`{x}`))
-	if received.Err != gqlhash.ErrUnexpectedEOF {
+	if !errors.Is(received.Err, gqlhash.ErrUnexpectedEOF) {
 		t.Errorf("expected %v; received: %v", gqlhash.ErrUnexpectedEOF, received)
 	}
 
 	received = compare(sha1.New(), gqlhash.Options{}, []byte(`{x}`), []byte(``))
-	if received.Err != gqlhash.ErrUnexpectedEOF {
+	if !errors.Is(received.Err, gqlhash.ErrUnexpectedEOF) {
 		t.Errorf("expected %v; received: %v", gqlhash.ErrUnexpectedEOF, received)
 	}
 
@@ -395,7 +395,8 @@ func TestHasher(t *testing.T) {
 			for _, doc := range fuzzSeeds {
 				want, errWant := gqlhash.AppendHash(nil, sha1.New(), options, doc)
 				got, errGot := hasher.Append(nil, doc)
-				if errWant.Err != errGot.Err || errWant.ErrOffset != errGot.ErrOffset {
+				if !errors.Is(errWant.Err, errGot.Err) ||
+					errWant.ErrOffset != errGot.ErrOffset {
 					t.Fatalf("pass %d %q: expected error %v; received %v",
 						pass, doc, errWant, errGot)
 				}
@@ -416,12 +417,12 @@ func TestHasherCompare(t *testing.T) {
 		hasher := gqlhash.NewHasher[string](sha1.New(), gqlhash.Options{})
 		// Three times: the first call allocates the sum buffer, the rest reuse it.
 		for range 3 {
-			if got := hasherCompare(hasher, a, b); got.Err != expect {
+			if got := hasherCompare(hasher, a, b); !errors.Is(got.Err, expect) {
 				t.Errorf("expected %v; received %v", expect, got)
 			}
 		}
 		if got := compare(sha1.New(), gqlhash.Options{},
-			a, b); got.Err != expect {
+			a, b); !errors.Is(got.Err, expect) {
 			t.Errorf("the package function disagrees: %v", got)
 		}
 	}
@@ -468,13 +469,13 @@ func TestCompareOptions(t *testing.T) {
 		t.Helper()
 		if got := compare(
 			sha1.New(), ignore, []byte(a), []byte(b),
-		); got.Err != expect {
+		); !errors.Is(got.Err, expect) {
 			t.Errorf("expected %v; received %v", expect, got)
 		}
 		// Reused buffer must agree.
 		buf := make([]byte, 0, sha1.Size*2)
 		got := compareWithBuffer(buf, sha1.New(), ignore, []byte(a), []byte(b))
-		if got.Err != expect {
+		if !errors.Is(got.Err, expect) {
 			t.Errorf("buffered: expected %v; received %v", expect, got)
 		}
 	}

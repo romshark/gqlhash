@@ -158,7 +158,8 @@ func TestParseNestingAttack(t *testing.T) {
 
 	// The default limit rejects it, which is what the limit is for. The rest of
 	// this test is about the parser holding up where the limit allows it.
-	if e := parser.Parse(io.Discard, parser.Options{}, src); e.Err != parser.ErrTooDeep {
+	if e := parser.Parse(io.Discard, parser.Options{}, src); !errors.Is(
+		e.Err, parser.ErrTooDeep) {
 		t.Errorf("expected the default depth limit to reject it; received %v", e)
 	}
 	noLimit := parser.Options{DepthLimit: 10_000}
@@ -229,8 +230,8 @@ func TestParseNestingAttack(t *testing.T) {
 		"{f(a:" + strings.Repeat("{k:", deep),
 		"query Q($v:" + strings.Repeat("[", deep),
 	} {
-		if e := p.Parse(io.Discard, deepOptions, input); e.Err !=
-			parser.ErrUnexpectedEOF {
+		if e := p.Parse(io.Discard, deepOptions, input); !errors.Is(
+			e.Err, parser.ErrUnexpectedEOF) {
 			t.Errorf("expected %v; received: %v", parser.ErrUnexpectedEOF, e)
 		}
 	}

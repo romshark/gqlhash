@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
 	"net/url"
 	"slices"
 	"strings"
@@ -58,7 +59,7 @@ func FuzzExtractQueryParamAgainstNetURL(f *testing.F) {
 func TestExtractQueryParamDivergences(t *testing.T) {
 	f := func(t *testing.T, expect error, rawQuery string) {
 		t.Helper()
-		if _, _, err := extractQueryParam(nil, rawQuery); err != expect {
+		if _, _, err := extractQueryParam(nil, rawQuery); !errors.Is(err, expect) {
 			t.Errorf("%q: expected %v; received %v", rawQuery, expect, err)
 		}
 	}
