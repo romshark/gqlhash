@@ -4,7 +4,7 @@ A static, CDN-hostable playground for [gqlhash](../): two tabbed editors — the
 operations a client sends on the left, the
 [gqlhash-proxy](../cmd/gqlhash-proxy/README.md) allowlist directory on the right
 — and the verdict the proxy would give. There's no backend: the Go hasher is
-compiled to WebAssembly, so nothing leaves the browser. State is kept in
+compiled to WebAssembly. Nothing leaves the browser. State is kept in
 `localStorage`.
 
 ## Requirements
@@ -31,24 +31,15 @@ pnpm dev
 | `pnpm format`    | Format only, no lint rules                             |
 | `pnpm run ci`    | What CI checks: `biome ci .` plus the typecheck        |
 
-Go edits are covered by hot reloading too: the `go-wasm-watch` plugin in
-[vite.config.ts](vite.config.ts) watches [wasm/](wasm/) and the parent-module
-packages it imports, rebuilds, and reloads the page. Compile errors go to the
-terminal running `pnpm dev`.
+Go edits hot-reload too; compile errors go to the terminal running `pnpm dev`.
 
 Measure against `pnpm preview`, never `pnpm dev`. The dev server ships every
 module unbundled and unminified — about 7 MB against the build's 1.2 MB — so a
 Lighthouse run there scores around 70 where the build scores 96, all of it the
-harness. `preview` serves the real `dist/`, gzipped, including the WebAssembly
-binary, which `vite preview` alone sends raw; the `wasm-preview-gzip` plugin in
-[vite.config.ts](vite.config.ts) is what closes that last gap, and without it
-preview reads several seconds slower than the deployed site for a reason the
-deployed site doesn't have.
+harness.
 
-[Biome](https://biomejs.dev) handles formatting, linting and import sorting;
-[biome.json](biome.json) excludes the vendored files, none of which are ours to
-reformat. Go code is unaffected — `gofmt` and `go vet` from the repository root
-as usual.
+[Biome](https://biomejs.dev) handles formatting, linting and import sorting. Go
+code is unaffected — `gofmt` and `go vet` from the repository root as usual.
 
 ## Layout
 
@@ -68,12 +59,12 @@ as usual.
 
 `src/wasm/gqlhash.wasm` and `src/vendor/wasm_exec.js` are build outputs of
 [scripts/build-wasm.sh](scripts/build-wasm.sh) and aren't checked in.
-`wasm_exec.js` is copied from the Go toolchain in use, because it has to match
-the compiler that produced the binary.
+`wasm_exec.js` is copied from the Go toolchain in use. It has to match the
+compiler that produced the binary.
 
 The controls mirror the flags of `cmd/gqlhash` (`-hash`, `-format`, `-ignore`)
 and apply to both panes at once. The lists of hash functions and formats come
-from the Go side at runtime, so the page can't drift out of sync with what the
+from the Go side at runtime. The page can't drift out of sync with what the
 library supports.
 
 ## Morpheus
@@ -82,14 +73,12 @@ The frame is built from [Morpheus](https://github.com/romshark/morpheus), a web
 component UI kit, vendored rather than installed: two files in
 [src/vendor/morpheus](src/vendor/morpheus), where
 [that README](src/vendor/morpheus/README.md) records the version, the commit and
-what to copy to update. `bundle.js` is imported for its side effect from
-`main.ts`; `morpheus.css` is `@import`ed at the top of
-[src/style.css](src/style.css), so this page's rules can override it.
+what to copy to update.
 
 Two things the kit leaves to the user: the palette (`style.css` sets both the
 role tokens and the `--neo-*` layer its components read) and the icons
-(`<neo-icon>` fetches `<name>.svg` from `--neo-icon-base`, so the Lucide SVGs
-the page uses are in [public/icons](public/icons)).
+(`<neo-icon>` fetches `<name>.svg` from `--neo-icon-base`; the Lucide SVGs the
+page uses are in [public/icons](public/icons)).
 
 ## Colors
 
@@ -104,25 +93,23 @@ The two grey tokens carry a floor of their own: `--fg-muted` and `--fg-faint`
 are set to clear 4.5:1 against every surface they land on, the tightest being
 `--bg-raised` in dark and `--bg-input` in light. `--fg-faint` is the smallest
 text on the page — the option hints, the footer, the tab markers — and
-`--syn-comment` matches it, since a comment in the editor is text like any
-other.
+`--syn-comment` matches it: a comment in the editor is text like any other.
 
-[src/theme.ts](src/theme.ts) puts `dark` or `light` on `<html>` — resolving
-"follow the system" itself, since a media query can't be overruled by a choice —
-and saves the choice under `gqlhash-theme`. An inline script in
-[index.html](index.html) reads that key before first paint to avoid a white
-flash; it and `theme.ts` agree on the key and class names by hand.
+[src/theme.ts](src/theme.ts) resolves "follow the system" itself rather than
+leaving it to a media query, which a choice can't overrule. The key and class
+names it saves under are repeated by hand in the pre-paint script in
+[index.html](index.html); the two have to agree.
 
 ## Icons and the manifest
 
 `public/` holds the app icons and a
 [web app manifest](public/manifest.webmanifest): `favicon.svg` and
 `favicon.ico`, `icon.svg` with its 192/512 PNGs, a maskable pair, and
-`apple-touch-icon.png`. The three SVGs are the source of truth and draw their
-glyph as strokes, not a `#` character, so there's no font to substitute when
-they're rasterized.
+`apple-touch-icon.png`. The three SVGs are the source of truth. They draw their
+glyph as strokes rather than a `#` character, which leaves no font to substitute
+when they're rasterized.
 
-Regenerate the raster sizes after editing an SVG; the outputs are committed, so
+Regenerate the raster sizes after editing an SVG. The outputs are committed;
 neither CI nor `pnpm build` needs a rasterizer:
 
 ```sh
@@ -130,25 +117,17 @@ brew install librsvg imagemagick
 ./scripts/build-icons.sh
 ```
 
-This is installable metadata only — there's no service worker, so the page
+This is installable metadata only. There's no service worker, and the page
 doesn't work offline.
 
 ## Deployment
 
 `pnpm build` writes a self-contained `dist/` servable from any static host or
-CDN, including a GitHub Pages project site, since all asset URLs are relative
+CDN, including a GitHub Pages project site. All asset URLs are relative
 (`base: "./"` in [vite.config.ts](vite.config.ts)).
 [../.github/workflows/pages.yml](../.github/workflows/pages.yml) publishes it on
 every push to `main` touching the site or the hasher; it needs Pages enabled with
 "GitHub Actions" as the source.
 
 The WebAssembly binary is ~3.3 MB, or ~950 KB over the wire — make sure the host
-serves `.wasm` with `Content-Encoding: gzip` or `br`. GitHub Pages does by
-default.
-
-It's also the last link of a chain — document, then entry chunk, then the fetch
-the chunk makes — so the `wasm-preload` plugin in
-[vite.config.ts](vite.config.ts) puts a `<link rel="preload">` for it in the
-head, and it downloads alongside the script instead of after it. The plugin
-emits the link rather than `index.html` carrying it, because the build
-content-hashes the name.
+serves `.wasm` with `Content-Encoding: gzip` or `br`. GitHub Pages does by default.

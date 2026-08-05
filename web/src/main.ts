@@ -109,11 +109,7 @@ void main();
 async function main(): Promise<void> {
   let api: GQLHash;
   try {
-    api = await load((loaded, total) => {
-      ui.splashStatus.textContent = total
-        ? `Loading WebAssembly… ${Math.round((loaded / total) * 100)}%`
-        : `Loading WebAssembly… ${formatBytes(loaded)}`;
-    });
+    api = await load();
   } catch (error) {
     ui.splash.classList.add("splash-failed");
     ui.splashStatus.textContent = `Failed to load: ${
@@ -617,10 +613,6 @@ function letterBadge(kind: string, letter: string): HTMLElement {
   spelled.textContent = ` ${kind}`;
   element.append(spelled);
   return element;
-}
-
-function formatBytes(bytes: number): string {
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 /**

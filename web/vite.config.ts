@@ -1,17 +1,15 @@
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createGzip } from "node:zlib";
 import { defineConfig, type Plugin } from "vite";
 
 /**
- * goWasmWatch rebuilds src/wasm/gqlhash.wasm whenever a Go source it's built
- * from changes. Vite already watches the resulting binary, so the page reloads
- * on its own once the build finishes.
+ * goWasmWatch rebuilds src/wasm/gqlhash.wasm when a Go source changes. Vite
+ * watches the binary itself and reloads the page.
  */
 function goWasmWatch(): Plugin {
-  // Everything the wasm binary is compiled from: its own entry point plus the
-  // packages of the parent module it imports.
+  // Everything the binary is compiled from.
   const sources = ["./wasm/*.go", "../*.go", "../parser/*.go"];
 
   return {
@@ -47,8 +45,6 @@ function goWasmWatch(): Plugin {
           if (code === 0) {
             server.config.logger.info("go-wasm-watch: rebuilt gqlhash.wasm");
           } else {
-            // Report the compile error instead of leaving a stale binary in
-            // place with no explanation.
             server.config.logger.error(
               `go-wasm-watch: build failed\n${stderr.trim()}`,
             );
@@ -76,27 +72,30 @@ function goWasmWatch(): Plugin {
 }
 
 /**
- * wasmPreload puts a preload hint for the WebAssembly binary in the head.
+ * wasmLoader puts the script that downloads the WebAssembly binary in the head.
+ * It runs before the entry chunk arrives. Downloading from the bundle instead
+ * leaves the splash screen with nothing to count for as long as the bundle
+ * takes, which on a slow connection is most of the wait. gqlhash.ts waits on
+ * the promise it leaves behind.
  *
- * Without it the binary is at the end of a chain: the browser has to fetch the
- * document, then the entry chunk, then parse and run it before the fetch in
- * gqlhash.ts is even issued — and the binary is by far the largest thing the
- * page loads, so nothing real can paint until it lands. The hint starts it
- * alongside the script instead of after it.
- *
- * The name can't be written into index.html by hand: the build content-hashes
- * it. The link is emitted here instead, with whichever URL the build produced.
+ * Neither value can be hand-written into index.html: the build hashes the name,
+ * and the percentage needs the unpacked size, not the gzipped Content-Length.
  */
-function wasmPreload(): Plugin {
-  // The URL of the binary as it will be served. Only known once the bundle is
-  // written, which is after the HTML is transformed, so it's collected from
-  // the module graph on the way past.
+function wasmLoader(): Plugin {
+  // Where the binary is served from and its unpacked size, both known only
+  // once the bundle is written.
   let href = "";
+  let size = 0;
+  let root = "";
 
   return {
-    name: "wasm-preload",
+    name: "wasm-loader",
 
-    // In dev nothing is hashed and the file is served from its source path.
+    configResolved(config) {
+      root = config.root;
+    },
+
+    // In dev the file is served unhashed from src/.
     configureServer() {
       href = "/src/wasm/gqlhash.wasm";
     },
@@ -105,31 +104,25 @@ function wasmPreload(): Plugin {
       for (const [name, output] of Object.entries(bundle)) {
         if (output.type === "asset" && name.endsWith(".wasm")) {
           href = `./${name}`;
+          size = output.source.length;
         }
       }
     },
 
     transformIndexHtml: {
-      // After the bundle is generated, so the hashed name is known.
+      // After the bundle, when the hashed name is known.
       order: "post",
       handler() {
         if (!href) {
           return [];
         }
+        // Measured here rather than at startup: in dev the watcher rebuilds it.
+        const total = size || fileSize(join(root, "src/wasm/gqlhash.wasm"));
         return [
           {
-            tag: "link",
+            tag: "script",
             injectTo: "head",
-            attrs: {
-              rel: "preload",
-              href,
-              as: "fetch",
-              type: "application/wasm",
-              // Matches the mode of the plain fetch() in gqlhash.ts,
-              // so the response is taken from the preload cache rather than
-              // fetched a second time.
-              crossorigin: "anonymous",
-            },
+            children: loaderScript(href, total),
           },
         ];
       },
@@ -137,18 +130,84 @@ function wasmPreload(): Plugin {
   };
 }
 
+/** fileSize returns the size of a file in bytes, or 0 if it can't be read. */
+function fileSize(file: string): number {
+  try {
+    return statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * loaderScript downloads the binary and counts it out on the splash screen. The
+ * status line is looked up each time: the head runs before it exists.
+ */
+function loaderScript(href: string, total: number): string {
+  return `
+(() => {
+  const url = ${JSON.stringify(href)};
+  const total = ${total};
+
+  const show = (loaded) => {
+    const status = document.getElementById("splash-status");
+    if (status) {
+      status.textContent = total
+        ? "Loading WebAssembly… " + Math.round((loaded / total) * 100) + "%"
+        : "Loading WebAssembly… " + (loaded / 1048576).toFixed(1) + " MB";
+    }
+  };
+
+  window.gqlhashWasm = (async () => {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(
+        "downloading " + url + ": " + response.status + " " + response.statusText,
+      );
+    }
+    if (!response.body) {
+      return response.arrayBuffer();
+    }
+
+    const reader = response.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+    show(0);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      chunks.push(value);
+      loaded += value.byteLength;
+      show(loaded);
+    }
+
+    const bytes = new Uint8Array(loaded);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes.buffer;
+  })();
+
+  // Nothing awaits this until the bundle runs, too late to count as handled.
+  // It still rejects there.
+  window.gqlhashWasm.catch(() => {});
+})();
+`;
+}
+
 /**
  * wasmPreviewGzip compresses the WebAssembly binary on the preview server.
  *
- * `vite preview` gzips the script and the stylesheet but hands the binary over raw,
- * and the binary is 3.3 MB against the ~950 KB a real host sends — three
- * quarters of the page's weight, in the one asset everything waits on.
- * Which makes `pnpm preview` a poor stand-in for production precisely where it's
- * being relied on as one: a Lighthouse run against it reads several seconds
- * slower than the deployed site, for a reason that isn't in the deployed site.
+ * `vite preview` gzips the script and the stylesheet but hands the binary over
+ * raw — 3.3 MB against the ~950 KB a real host sends, in the one asset
+ * everything waits on. Without this, preview reads seconds slower than the site
+ * it stands in for.
  *
- * Only preview. The dev server serves the binary out of src/, where it's the
- * build's own output and the round trip is local anyway.
+ * Only preview. In dev the binary comes from src/ over a local round trip.
  */
 function wasmPreviewGzip(): Plugin {
   let outDir = "";
@@ -169,8 +228,7 @@ function wasmPreviewGzip(): Plugin {
           return;
         }
 
-        // Nothing outside the built directory: the name is decoded,
-        // then resolved, and has to still be under it.
+        // Nothing outside the built directory.
         const file = resolve(join(outDir, decodeURIComponent(path)));
         if (!file.startsWith(outDir) || !existsSync(file)) {
           next();
@@ -187,18 +245,14 @@ function wasmPreviewGzip(): Plugin {
 }
 
 export default defineConfig({
-  // Relative asset URLs so the build can be served from any path,
-  // which is what GitHub Pages project sites (/<repo>/) need.
+  // Relative asset URLs: GitHub Pages project sites serve from /<repo>/.
   base: "./",
-  // One page, no client-side routing. Vite's default is to answer any
-  // unmatched path with index.html, which the static host this is deployed to
-  // does not: it 404s. The difference is not cosmetic — an audit run against
-  // the dev or preview server fetches /robots.txt, is handed the page instead
-  // of a 404, and reports several hundred syntax errors in a file that doesn't exist.
-  // Serving misses as misses is what makes `pnpm preview` the promise it makes,
-  // which is dist/ as production will serve it.
+  // One page, no client-side routing. Vite otherwise answers unmatched paths
+  // with index.html where the static host 404s, and an audit run against the
+  // dev server reports hundreds of syntax errors in a /robots.txt that doesn't
+  // exist.
   appType: "mpa",
-  plugins: [goWasmWatch(), wasmPreload(), wasmPreviewGzip()],
+  plugins: [goWasmWatch(), wasmLoader(), wasmPreviewGzip()],
   build: {
     target: "es2022",
     assetsInlineLimit: 0,
