@@ -17,6 +17,17 @@ It's shipped as:
 
 Generating a gqlhash is [faster](#performance) than parsing a document into an AST and comparing the ASTs.
 
+The hash is a fingerprint of a document: it groups equivalent operations in analytics and serves as a cache key. See [use cases](#use-cases).
+
+> [!WARNING]
+> You probably shouldn't use the proxy if your stack already supports [trusted
+> documents](https://graphql.org/learn/security/#trusted-documents). Taking an ID and
+> looking it up costs less than hashing a document, however little that costs.
+> The proxy is for the stacks that don't support them. It requires nothing of the client
+> or the API and enforces an allowlist over ordinary GraphQL traffic. Trusted documents
+> are likely better on every other axis: bandwidth, CPU per request, etc.
+
+
 > [!IMPORTANT]
 > See [MIGRATION.md](MIGRATION.md) for migrating from v1 to the new v2.
 
